@@ -2,6 +2,19 @@
 
 A Go-based proxy server that relays requests to a Subsonic API server with configurable endpoint hooks for monitoring and interception. Includes SQLite3 database functionality for tracking played songs and building transition probability analysis.
 
+## Architecture
+
+This application uses a modular architecture with the following components:
+
+- **`config/`**: Configuration management with environment variable support
+- **`models/`**: Data structures and type definitions
+- **`database/`**: SQLite3 database operations and schema management
+- **`handlers/`**: HTTP request handlers for different Subsonic API endpoints
+- **`server/`**: Main proxy server logic and lifecycle management
+- **`credentials/`**: Authentication and credential validation
+- **`shuffle/`**: Weighted song shuffling algorithm
+- **`main.go`**: Entry point that wires all modules together
+
 ## Features
 
 - **Reverse Proxy**: Forwards all requests to upstream Subsonic server
@@ -199,6 +212,33 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=admin&p=admin&c=subso
 
 ## Development
 
+### Project Structure
+
+```
+.
+├── main.go              # Application entry point
+├── config/              # Configuration management
+│   └── config.go
+├── models/              # Data structures and types
+│   └── models.go
+├── database/            # Database operations
+│   └── database.go
+├── handlers/            # HTTP request handlers
+│   └── handlers.go
+├── server/              # Main server logic
+│   └── server.go
+├── credentials/         # Authentication management
+│   └── credentials.go
+├── shuffle/             # Weighted shuffling algorithm
+│   └── shuffle.go
+├── go.mod               # Go module definition
+├── go.sum               # Go module checksums
+├── CLAUDE.md            # Development guidance
+└── README.md            # This file
+```
+
+### Building and Testing
+
 ```bash
 # Install dependencies
 go mod tidy
@@ -206,9 +246,25 @@ go mod tidy
 # Run tests
 go test ./...
 
-# Build
+# Build the application
 go build -o subsoxy
+
+# Clean up build artifacts
+rm subsoxy
 ```
+
+### Module Dependencies
+
+Each module has clearly defined dependencies:
+
+- `config/` → No internal dependencies
+- `models/` → No internal dependencies  
+- `database/` → `models/`
+- `credentials/` → No internal dependencies
+- `shuffle/` → `models/`, `database/`
+- `handlers/` → `shuffle/`
+- `server/` → All modules
+- `main.go` → `config/`, `server/`
 
 ## License
 
