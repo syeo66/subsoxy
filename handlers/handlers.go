@@ -7,6 +7,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	
+	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
@@ -26,8 +27,24 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	sizeStr := r.URL.Query().Get("size")
 	size := 50
 	if sizeStr != "" {
-		if parsedSize, err := strconv.Atoi(sizeStr); err == nil && parsedSize > 0 {
-			size = parsedSize
+		if parsedSize, err := strconv.Atoi(sizeStr); err == nil {
+			if parsedSize > 10000 { // Prevent extremely large requests
+				validationErr := errors.ErrValidationFailed.WithContext("field", "size").
+					WithContext("value", parsedSize).
+					WithContext("max_allowed", 10000)
+				h.logger.WithError(validationErr).Warn("Size parameter too large")
+				http.Error(w, "Size parameter too large (max: 10000)", http.StatusBadRequest)
+				return true
+			}
+			if parsedSize > 0 { // Only use valid positive sizes, otherwise keep default
+				size = parsedSize
+			}
+		} else {
+			validationErr := errors.ErrInvalidInput.WithContext("field", "size").
+				WithContext("value", sizeStr)
+			h.logger.WithError(validationErr).Warn("Invalid size parameter")
+			http.Error(w, "Invalid size parameter", http.StatusBadRequest)
+			return true
 		}
 	}
 	
@@ -50,7 +67,10 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.logger.WithError(err).Error("Failed to encode shuffle response")
+		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
+			WithContext("size", size).
+			WithContext("song_count", len(songs))
+		h.logger.WithError(encodeErr).Error("Failed to encode shuffle response")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
 	}
@@ -77,6 +97,10 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 	songID := r.URL.Query().Get("id")
 	if songID != "" {
 		recordFunc(songID, "start", nil)
+		h.logger.WithField("song_id", songID).Debug("Recorded stream start event")
+	} else {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
+			Warn("Stream request missing song ID")
 	}
 	return false
 }
@@ -84,13 +108,26 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string), setLastPlayed func(string)) bool {
 	songID := r.URL.Query().Get("id")
 	submission := r.URL.Query().Get("submission")
-	if songID != "" {
-		if submission == "true" {
-			recordFunc(songID, "play", nil)
-			setLastPlayed(songID)
-		} else {
-			recordFunc(songID, "skip", nil)
+	
+	if songID == "" {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
+			Warn("Scrobble request missing song ID")
+		return false
+	}
+	
+	if submission == "true" {
+		recordFunc(songID, "play", nil)
+		setLastPlayed(songID)
+		h.logger.WithField("song_id", songID).Debug("Recorded play event")
+	} else {
+		// Treat missing or non-"true" submission as skip
+		recordFunc(songID, "skip", nil)
+		h.logger.WithField("song_id", songID).Debug("Recorded skip event")
+		
+		if submission == "" {
+			h.logger.WithField("song_id", songID).Debug("Scrobble request missing submission parameter, treating as skip")
 		}
 	}
+	
 	return false
 }

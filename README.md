@@ -6,26 +6,29 @@ A Go-based proxy server that relays requests to a Subsonic API server with confi
 
 This application uses a modular architecture with the following components:
 
-- **`config/`**: Configuration management with environment variable support
+- **`config/`**: Configuration management with comprehensive validation and environment variable support
 - **`models/`**: Data structures and type definitions
-- **`database/`**: SQLite3 database operations and schema management
-- **`handlers/`**: HTTP request handlers for different Subsonic API endpoints
-- **`server/`**: Main proxy server logic and lifecycle management
-- **`credentials/`**: Authentication and credential validation
-- **`shuffle/`**: Weighted song shuffling algorithm
+- **`database/`**: SQLite3 database operations with structured error handling and schema management
+- **`handlers/`**: HTTP request handlers for different Subsonic API endpoints with input validation
+- **`server/`**: Main proxy server logic and lifecycle management with error recovery
+- **`credentials/`**: Secure authentication and credential validation with timeout protection
+- **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning
+- **`errors/`**: Structured error handling with categorization and context
 - **`main.go`**: Entry point that wires all modules together
 
 ## Features
 
-- **Reverse Proxy**: Forwards all requests to upstream Subsonic server
-- **Hook System**: Intercept and process requests at any endpoint
-- **Credential Management**: Secure credential handling with dynamic validation
-- **Song Tracking**: SQLite3 database tracks played songs with play/skip statistics
-- **Transition Probability Analysis**: Builds transition probabilities between songs
-- **Weighted Shuffle**: Intelligent song shuffling based on play history and preferences
-- **Automatic Sync**: Fetches and updates song library from Subsonic API
-- **Logging**: Structured logging with configurable levels
-- **Configuration**: Command-line flags and environment variables for easy setup
+- **Reverse Proxy**: Forwards all requests to upstream Subsonic server with health monitoring
+- **Hook System**: Intercept and process requests at any endpoint with comprehensive error handling
+- **Credential Management**: Secure credential handling with dynamic validation, timeout protection, and thread-safe storage
+- **Song Tracking**: SQLite3 database tracks played songs with play/skip statistics and comprehensive validation
+- **Transition Probability Analysis**: Builds transition probabilities between songs for intelligent recommendations
+- **Weighted Shuffle**: Intelligent song shuffling based on play history, preferences, and transition probabilities
+- **Automatic Sync**: Fetches and updates song library from Subsonic API with error recovery and authentication
+- **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
+- **Input Validation**: Thorough validation of all configuration parameters and API inputs
+- **Logging**: Structured logging with configurable levels and error context
+- **Configuration**: Command-line flags and environment variables with validation and helpful error messages
 
 ## Installation
 
@@ -41,19 +44,29 @@ go build -o subsoxy
 
 ### Configuration
 
-Configuration can be set via command-line flags or environment variables. Command-line flags take precedence over environment variables.
+Configuration can be set via command-line flags or environment variables. Command-line flags take precedence over environment variables. All configuration parameters are validated at startup with helpful error messages.
 
 #### Command-line flags
-- `-port string`: Proxy server port (default: 8080)
-- `-upstream string`: Upstream Subsonic server URL (default: http://localhost:4533)
+- `-port string`: Proxy server port, must be 1-65535 (default: 8080)
+- `-upstream string`: Upstream Subsonic server URL, must be valid HTTP/HTTPS URL (default: http://localhost:4533)
 - `-log-level string`: Log level - debug, info, warn, error (default: info)
-- `-db-path string`: SQLite database file path (default: subsoxy.db)
+- `-db-path string`: SQLite database file path, directories will be created if needed (default: subsoxy.db)
 
 #### Environment variables
-- `PORT`: Proxy server port
-- `UPSTREAM_URL`: Upstream Subsonic server URL
+- `PORT`: Proxy server port (1-65535)
+- `UPSTREAM_URL`: Upstream Subsonic server URL (HTTP/HTTPS)
 - `LOG_LEVEL`: Log level (debug, info, warn, error)
 - `DB_PATH`: SQLite database file path
+
+#### Configuration Validation
+
+The application validates all configuration parameters at startup:
+- **Port**: Must be a valid number between 1 and 65535
+- **Upstream URL**: Must be a valid HTTP or HTTPS URL with a host
+- **Log Level**: Must be one of: debug, info, warn, error (case-insensitive)
+- **Database Path**: Parent directories will be created automatically if they don't exist
+
+If any configuration is invalid, the application will exit with a detailed error message explaining what needs to be fixed.
 
 ### Examples
 
@@ -134,6 +147,57 @@ curl "http://localhost:8080/rest/ping?u=myuser&p=mypass&c=myclient&f=json"
 ```
 
 The proxy transparently forwards all requests to the upstream server while maintaining valid credentials for background operations.
+
+## Error Handling
+
+The application implements comprehensive structured error handling with the following features:
+
+### Error Categories
+
+Errors are categorized for better debugging and monitoring:
+
+- **`config`**: Configuration validation errors (invalid ports, URLs, etc.)
+- **`database`**: Database connection, query, and transaction errors
+- **`credentials`**: Authentication and credential validation errors
+- **`server`**: Server startup, shutdown, and proxy errors
+- **`network`**: Upstream server connectivity and timeout errors
+- **`validation`**: Input validation and parameter errors
+
+### Error Context
+
+Each error includes contextual information for better debugging:
+
+```json
+{
+  "category": "config",
+  "code": "INVALID_PORT", 
+  "message": "port must be a number",
+  "context": {
+    "port": "abc",
+    "range": "1-65535"
+  }
+}
+```
+
+### Error Recovery
+
+The application implements graceful error recovery:
+
+- **Configuration errors**: Application exits with helpful error messages
+- **Database errors**: Operations are retried or gracefully degraded
+- **Network errors**: Automatic retry with exponential backoff
+- **Credential errors**: Invalid credentials are automatically cleaned up
+- **Input validation**: Invalid requests return appropriate HTTP error codes
+
+### Logging
+
+All errors are logged with structured context using logrus:
+
+```bash
+time="2023-12-01T10:30:00Z" level=error msg="Database connection failed" 
+  error="[database:CONNECTION_FAILED] failed to open database: /path/to/db.db" 
+  path="/path/to/db.db"
+```
 
 ## Database Features
 
@@ -217,20 +281,38 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=admin&p=admin&c=subso
 ```
 .
 ├── main.go              # Application entry point
-├── config/              # Configuration management
-│   └── config.go
+├── config/              # Configuration management with validation
+│   ├── config.go        # Configuration struct and validation logic
+│   ├── config_test.go   # Configuration tests
+│   └── README.md        # Configuration documentation
 ├── models/              # Data structures and types
-│   └── models.go
-├── database/            # Database operations
-│   └── database.go
-├── handlers/            # HTTP request handlers
-│   └── handlers.go
-├── server/              # Main server logic
-│   └── server.go
-├── credentials/         # Authentication management
-│   └── credentials.go
+│   ├── models.go        # Core data models
+│   ├── models_test.go   # Model tests
+│   └── README.md        # Models documentation
+├── database/            # Database operations with error handling
+│   ├── database.go      # Database interface and operations
+│   ├── database_test.go # Database tests
+│   └── README.md        # Database documentation
+├── handlers/            # HTTP request handlers with validation
+│   ├── handlers.go      # HTTP endpoint handlers
+│   ├── handlers_test.go # Handler tests
+│   └── README.md        # Handlers documentation
+├── server/              # Main server logic with error recovery
+│   ├── server.go        # Proxy server implementation
+│   ├── server_test.go   # Server tests
+│   └── README.md        # Server documentation
+├── credentials/         # Authentication management with timeout protection
+│   ├── credentials.go   # Credential validation and storage
+│   ├── credentials_test.go # Credential tests
+│   └── README.md        # Credentials documentation
 ├── shuffle/             # Weighted shuffling algorithm
-│   └── shuffle.go
+│   ├── shuffle.go       # Song shuffling logic
+│   ├── shuffle_test.go  # Shuffle tests
+│   └── README.md        # Shuffle documentation
+├── errors/              # Structured error handling
+│   ├── errors.go        # Error types and utilities
+│   ├── errors_test.go   # Error handling tests
+│   └── README.md        # Error handling documentation
 ├── go.mod               # Go module definition
 ├── go.sum               # Go module checksums
 ├── CLAUDE.md            # Development guidance
@@ -257,14 +339,17 @@ rm subsoxy
 
 Each module has clearly defined dependencies:
 
-- `config/` → No internal dependencies
-- `models/` → No internal dependencies  
-- `database/` → `models/`
-- `credentials/` → No internal dependencies
-- `shuffle/` → `models/`, `database/`
-- `handlers/` → `shuffle/`
-- `server/` → All modules
-- `main.go` → `config/`, `server/`
+- `errors/` → No internal dependencies (foundational error handling)
+- `config/` → `errors/` (for configuration validation errors)
+- `models/` → No internal dependencies (pure data structures)
+- `database/` → `errors/`, `models/` (database operations with structured errors)
+- `credentials/` → `errors/` (credential validation with structured errors)
+- `shuffle/` → `models/`, `database/` (song shuffling algorithms)
+- `handlers/` → `errors/`, `shuffle/` (HTTP handlers with validation)
+- `server/` → All modules (main orchestration layer)
+- `main.go` → `config/`, `server/` (application entry point)
+
+The `errors/` package provides the foundation for structured error handling throughout the application, while `models/` defines core data structures used across modules.
 
 ## License
 

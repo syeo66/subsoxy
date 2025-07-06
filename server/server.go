@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	
 	"github.com/syeo66/subsoxy/config"
+	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/models"
 	"github.com/syeo66/subsoxy/database"
 	"github.com/syeo66/subsoxy/credentials"
@@ -40,12 +41,14 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	level, err := logrus.ParseLevel(cfg.LogLevel)
 	if err != nil {
 		level = logrus.InfoLevel
+		logger.WithError(err).Warn("Invalid log level, defaulting to info")
 	}
 	logger.SetLevel(level)
 
 	upstreamURL, err := url.Parse(cfg.UpstreamURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid upstream URL: %w", err)
+		return nil, errors.Wrap(err, errors.CategoryServer, "PROXY_SETUP_FAILED", "invalid upstream URL").
+			WithContext("upstream_url", cfg.UpstreamURL)
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
@@ -59,7 +62,8 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 
 	db, err := database.New(cfg.DatabasePath, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize database: %w", err)
+		return nil, errors.Wrap(err, errors.CategoryServer, "INITIALIZATION_FAILED", "failed to initialize database").
+			WithContext("database_path", cfg.DatabasePath)
 	}
 
 	credManager := credentials.New(logger, cfg.UpstreamURL)
@@ -100,7 +104,11 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		username := r.URL.Query().Get("u")
 		password := r.URL.Query().Get("p")
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
-			go ps.credentials.ValidateAndStore(username, password)
+			go func() {
+				if err := ps.credentials.ValidateAndStore(username, password); err != nil {
+					ps.logger.WithError(err).WithField("username", username).Debug("Failed to validate credentials")
+				}
+			}()
 		}
 	}
 
@@ -120,6 +128,10 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ps *ProxyServer) Start() error {
+	if ps.server != nil {
+		return errors.ErrServerStart.WithContext("reason", "server already started")
+	}
+
 	router := mux.NewRouter()
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
@@ -161,7 +173,7 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	if ps.server != nil {
 		if err := ps.server.Shutdown(ctx); err != nil {
 			ps.logger.WithError(err).Error("Failed to shutdown HTTP server")
-			return err
+			return errors.Wrap(err, errors.CategoryServer, "SHUTDOWN_FAILED", "failed to shutdown HTTP server")
 		}
 	}
 	
@@ -191,7 +203,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 	
 	username, password := ps.credentials.GetValid()
 	if username == "" || password == "" {
-		ps.logger.Warn("No valid credentials available for song syncing")
+		ps.logger.WithError(errors.ErrNoValidCredentials).Warn("No valid credentials available for song syncing")
 		return
 	}
 	
@@ -200,19 +212,34 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 	
 	resp, err := http.Get(url)
 	if err != nil {
-		ps.logger.WithError(err).Error("Failed to fetch songs from Subsonic API")
+		networkErr := errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch songs from Subsonic API").
+			WithContext("url", ps.config.UpstreamURL).
+			WithContext("username", username)
+		ps.logger.WithError(networkErr).Error("Failed to fetch songs from Subsonic API")
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		httpErr := errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode)).
+			WithContext("status_code", resp.StatusCode).
+			WithContext("url", ps.config.UpstreamURL)
+		ps.logger.WithError(httpErr).Error("Upstream server returned non-200 status")
+		return
+	}
+
 	var subsonicResp models.SubsonicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&subsonicResp); err != nil {
-		ps.logger.WithError(err).Error("Failed to decode Subsonic response")
+		decodeErr := errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode Subsonic response").
+			WithContext("url", ps.config.UpstreamURL)
+		ps.logger.WithError(decodeErr).Error("Failed to decode Subsonic response")
 		return
 	}
 
 	if subsonicResp.SubsonicResponse.Status != "ok" {
-		ps.logger.Error("Subsonic API returned error status - possibly authentication failed")
+		authErr := errors.ErrUpstreamAuth.WithContext("status", subsonicResp.SubsonicResponse.Status).
+			WithContext("username", username)
+		ps.logger.WithError(authErr).Error("Subsonic API returned error status - possibly authentication failed")
 		ps.credentials.ClearInvalid()
 		return
 	}

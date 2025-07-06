@@ -1,15 +1,16 @@
 # Database Module
 
-The database module handles all SQLite3 database operations for song tracking and transition analysis.
+The database module handles all SQLite3 database operations for song tracking and transition analysis with comprehensive error handling and validation.
 
 ## Overview
 
 This module provides:
-- Database initialization and schema creation
-- Song storage and retrieval
-- Play event recording
-- Transition probability tracking
-- Thread-safe database operations
+- Database initialization and schema creation with error recovery
+- Song storage and retrieval with input validation
+- Play event recording with structured error handling
+- Transition probability tracking with graceful degradation
+- Thread-safe database operations with transaction management
+- Comprehensive error context for debugging
 
 ## Database Schema
 
@@ -97,9 +98,27 @@ prob, err := db.GetTransitionProbability("song1", "song2")
 - Prepared statements for efficiency
 
 ### Error Handling
-- Graceful handling of database errors
-- Detailed logging of failed operations
-- Continuation of processing on individual record failures
+- Structured errors with categorization and context using the `errors` package
+- Input validation with descriptive error messages
+- Graceful degradation for missing records vs. actual errors
+- Detailed logging of failed operations with context
+- Transaction rollback and retry logic
+- Connection failure handling with helpful diagnostics
+
+#### Error Examples
+```go
+// Connection error with context
+[database:CONNECTION_FAILED] failed to open database
+Context: {"path": "/invalid/path/db.sqlite"}
+
+// Query error with query context
+[database:QUERY_FAILED] failed to record play event
+Context: {"song_id": "123", "event_type": "play"}
+
+// Validation error
+[validation:MISSING_PARAMETER] missing required parameter
+Context: {"field": "songID"}
+```
 
 ### Performance Optimization
 - Indexes on frequently queried columns

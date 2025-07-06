@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -152,19 +153,14 @@ func TestHandleShuffle(t *testing.T) {
 			t.Error("HandleShuffle should return true (handled)")
 		}
 		
-		// Should use default size of 50, but only return 3 songs (all available)
-		var response map[string]interface{}
-		err := json.NewDecoder(w.Body).Decode(&response)
-		if err != nil {
-			t.Errorf("Failed to decode response: %v", err)
+		// Should return HTTP 400 error for invalid size parameter
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
 		}
 		
-		subsonicResp := response["subsonic-response"].(map[string]interface{})
-		songs := subsonicResp["songs"].(map[string]interface{})
-		songList := songs["song"].([]interface{})
-		
-		if len(songList) != 3 {
-			t.Errorf("Expected 3 songs with invalid size, got %d", len(songList))
+		body := w.Body.String()
+		if !strings.Contains(body, "Invalid size parameter") {
+			t.Errorf("Expected error message about invalid size parameter, got: %s", body)
 		}
 	})
 	

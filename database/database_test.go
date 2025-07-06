@@ -599,10 +599,10 @@ func TestGetTransitionProbability(t *testing.T) {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
-	// Test getting probability for non-existent transition (should return 0.5 and error)
+	// Test getting probability for non-existent transition (should return 0.5 and no error)
 	prob, err := db.GetTransitionProbability("1", "2")
-	if err == nil {
-		t.Error("Expected error for non-existent transition")
+	if err != nil {
+		t.Errorf("Unexpected error for non-existent transition: %v", err)
 	}
 	if prob != 0.5 {
 		t.Errorf("Expected default probability 0.5, got %f", prob)
@@ -636,12 +636,21 @@ func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 	}
 	defer db.Close()
 	
-	// Test getting probability for non-existent songs
+	// Test getting probability for non-existent songs (should return 0.5 and no error)
 	prob, err := db.GetTransitionProbability("nonexistent1", "nonexistent2")
-	if err == nil {
-		t.Error("Expected error for non-existent transition")
+	if err != nil {
+		t.Errorf("Unexpected error for non-existent transition: %v", err)
 	}
 	if prob != 0.5 {
 		t.Errorf("Expected default probability 0.5, got %f", prob)
+	}
+
+	// Test getting probability with empty strings (should return error)
+	prob, err = db.GetTransitionProbability("", "")
+	if err == nil {
+		t.Error("Expected error for empty song IDs")
+	}
+	if prob != 0.5 {
+		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
 	}
 }

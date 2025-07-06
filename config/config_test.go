@@ -120,3 +120,81 @@ func TestConfigStruct(t *testing.T) {
 		t.Errorf("DatabasePath = %s, want %s", config.DatabasePath, "subsoxy.db")
 	}
 }
+
+func TestConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{
+			name: "Valid config",
+			config: &Config{
+				ProxyPort:    "8080",
+				UpstreamURL:  "http://localhost:4533",
+				LogLevel:     "info",
+				DatabasePath: "test.db",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid port - non-numeric",
+			config: &Config{
+				ProxyPort:    "abc",
+				UpstreamURL:  "http://localhost:4533",
+				LogLevel:     "info",
+				DatabasePath: "test.db",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid port - out of range",
+			config: &Config{
+				ProxyPort:    "70000",
+				UpstreamURL:  "http://localhost:4533",
+				LogLevel:     "info",
+				DatabasePath: "test.db",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid upstream URL",
+			config: &Config{
+				ProxyPort:    "8080",
+				UpstreamURL:  "not-a-url",
+				LogLevel:     "info",
+				DatabasePath: "test.db",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid log level",
+			config: &Config{
+				ProxyPort:    "8080",
+				UpstreamURL:  "http://localhost:4533",
+				LogLevel:     "invalid",
+				DatabasePath: "test.db",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Empty database path",
+			config: &Config{
+				ProxyPort:    "8080",
+				UpstreamURL:  "http://localhost:4533",
+				LogLevel:     "info",
+				DatabasePath: "",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

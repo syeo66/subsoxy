@@ -14,7 +14,11 @@ import (
 )
 
 func main() {
-	cfg := config.New()
+	cfg, err := config.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create config: %v\n", err)
+		os.Exit(1)
+	}
 	
 	proxyServer, err := server.New(cfg)
 	if err != nil {
