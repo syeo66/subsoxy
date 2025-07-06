@@ -2,8 +2,8 @@ package credentials
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -45,14 +45,27 @@ func (cm *Manager) ValidateAndStore(username, password string) {
 }
 
 func (cm *Manager) validate(username, password string) bool {
-	url := fmt.Sprintf("%s/rest/ping?u=%s&p=%s&v=1.15.0&c=subsoxy&f=json", 
-		cm.upstreamURL, username, password)
+	// Construct URL with proper encoding to prevent credential exposure in logs
+	baseURL, err := url.Parse(cm.upstreamURL + "/rest/ping")
+	if err != nil {
+		cm.logger.WithError(err).WithField("username", username).Error("Failed to parse upstream URL")
+		return false
+	}
+	
+	// Use URL query parameters to safely encode credentials
+	params := url.Values{}
+	params.Add("u", username)
+	params.Add("p", password)
+	params.Add("v", "1.15.0")
+	params.Add("c", "subsoxy")
+	params.Add("f", "json")
+	baseURL.RawQuery = params.Encode()
 	
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 	
-	resp, err := client.Get(url)
+	resp, err := client.Get(baseURL.String())
 	if err != nil {
 		cm.logger.WithError(err).WithField("username", username).Error("Failed to validate credentials")
 		return false

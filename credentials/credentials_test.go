@@ -302,7 +302,7 @@ func TestValidateURLFormat(t *testing.T) {
 	// Test URL format
 	manager.ValidateAndStore("testuser", "testpass")
 	
-	expectedURL := "/rest/ping?u=testuser&p=testpass&v=1.15.0&c=subsoxy&f=json"
+	expectedURL := "/rest/ping?c=subsoxy&f=json&p=testpass&u=testuser&v=1.15.0"
 	if capturedURL != expectedURL {
 		t.Errorf("Expected URL %s, got %s", expectedURL, capturedURL)
 	}
