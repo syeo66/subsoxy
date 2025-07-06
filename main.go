@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,7 +18,8 @@ func main() {
 	
 	proxyServer, err := server.New(cfg)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Failed to create proxy server: %v\n", err)
+		os.Exit(1)
 	}
 
 	handlers := proxyServer.GetHandlers()
@@ -43,7 +45,8 @@ func main() {
 	})
 
 	if err := proxyServer.Start(); err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Failed to start proxy server: %v\n", err)
+		os.Exit(1)
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -55,6 +58,7 @@ func main() {
 	defer cancel()
 	
 	if err := proxyServer.Shutdown(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to shutdown proxy server gracefully: %v\n", err)
 		os.Exit(1)
 	}
 }
