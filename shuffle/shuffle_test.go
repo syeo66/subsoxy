@@ -34,8 +34,11 @@ func TestNew(t *testing.T) {
 	if service.logger != logger {
 		t.Error("Logger should be set correctly")
 	}
-	if service.lastPlayed != nil {
-		t.Error("LastPlayed should be nil initially")
+	if service.lastPlayed == nil {
+		t.Error("LastPlayed map should be initialized")
+	}
+	if len(service.lastPlayed) != 0 {
+		t.Error("LastPlayed map should be empty initially")
 	}
 }
 
@@ -60,13 +63,13 @@ func TestSetLastPlayed(t *testing.T) {
 		Artist: "Test Artist",
 	}
 	
-	service.SetLastPlayed(song)
+	service.SetLastPlayed("testuser", song)
 	
-	if service.lastPlayed == nil {
+	if service.lastPlayed["testuser"] == nil {
 		t.Error("LastPlayed should not be nil after setting")
 	}
-	if service.lastPlayed.ID != "123" {
-		t.Errorf("Expected last played ID '123', got '%s'", service.lastPlayed.ID)
+	if service.lastPlayed["testuser"].ID != "123" {
+		t.Errorf("Expected last played ID '123', got '%s'", service.lastPlayed["testuser"].ID)
 	}
 }
 
@@ -241,7 +244,7 @@ func TestCalculateTransitionWeight(t *testing.T) {
 	service := New(db, logger)
 	
 	// Test with no last played song
-	weight := service.calculateTransitionWeight("123")
+	weight := service.calculateTransitionWeight("testuser", "123")
 	if weight != 1.0 {
 		t.Errorf("Expected weight 1.0 when no last played song, got %.2f", weight)
 	}
@@ -252,28 +255,28 @@ func TestCalculateTransitionWeight(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Set last played song
-	service.SetLastPlayed(&songs[0])
+	service.SetLastPlayed("testuser", &songs[0])
 	
 	// Test with no transition data (should return 1.0)
-	weight = service.calculateTransitionWeight("2")
+	weight = service.calculateTransitionWeight("testuser", "2")
 	if weight != 1.0 {
 		t.Errorf("Expected weight 1.0 when no transition data, got %.2f", weight)
 	}
 	
 	// Record a transition
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
 	// Test with transition data
-	weight = service.calculateTransitionWeight("2")
+	weight = service.calculateTransitionWeight("testuser", "2")
 	expected := 0.5 + 1.0 // 0.5 base + 1.0 probability
 	if weight != expected {
 		t.Errorf("Expected weight %.2f with transition data, got %.2f", expected, weight)
@@ -306,7 +309,7 @@ func TestCalculateSongWeight(t *testing.T) {
 		SkipCount:  0,
 	}
 	
-	weight := service.calculateSongWeight(song)
+	weight := service.calculateSongWeight("testuser", song)
 	
 	// Never played song with no history should get:
 	// baseWeight(1.0) * timeWeight(2.0) * playSkipWeight(1.5) * transitionWeight(1.0) = 3.0
@@ -332,7 +335,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	service := New(db, logger)
 	
 	// Test with empty database
-	songs, err := service.GetWeightedShuffledSongs(10)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 10)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -349,13 +352,13 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 		{ID: "5", Title: "Song 5", Artist: "Artist", Album: "Album", Duration: 220},
 	}
 	
-	err = db.StoreSongs(testSongs)
+	err = db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Test requesting more songs than available
-	songs, err = service.GetWeightedShuffledSongs(10)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 10)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -364,7 +367,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	}
 	
 	// Test requesting fewer songs than available
-	songs, err = service.GetWeightedShuffledSongs(3)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 3)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -404,24 +407,24 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 200},
 	}
 	
-	err = db.StoreSongs(testSongs)
+	err = db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Add some play history to make weights different
-	err = db.RecordPlayEvent("1", "play", nil)
+	err = db.RecordPlayEvent("testuser", "1", "play", nil)
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
 	}
 	
-	err = db.RecordPlayEvent("2", "skip", nil)
+	err = db.RecordPlayEvent("testuser", "2", "skip", nil)
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
 	
 	// Test that songs are returned (we can't easily test randomness, but we can verify functionality)
-	songs, err := service.GetWeightedShuffledSongs(2)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 2)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -452,27 +455,27 @@ func TestGetWeightedShuffledSongsWithTransitions(t *testing.T) {
 		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 200},
 	}
 	
-	err = db.StoreSongs(testSongs)
+	err = db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Set last played song
-	service.SetLastPlayed(&testSongs[0])
+	service.SetLastPlayed("testuser", &testSongs[0])
 	
 	// Record transitions
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
-	err = db.RecordTransition("1", "3", "skip")
+	err = db.RecordTransition("testuser", "1", "3", "skip")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
 	// Test that songs are returned with transition weighting
-	songs, err := service.GetWeightedShuffledSongs(2)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 2)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -503,14 +506,14 @@ func TestGetWeightedShuffledSongsConsistency(t *testing.T) {
 		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 200},
 	}
 	
-	err = db.StoreSongs(testSongs)
+	err = db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Test multiple calls return valid results
 	for i := 0; i < 10; i++ {
-		songs, err := service.GetWeightedShuffledSongs(2)
+		songs, err := service.GetWeightedShuffledSongs("testuser", 2)
 		if err != nil {
 			t.Errorf("Failed to get shuffled songs on iteration %d: %v", i, err)
 		}
@@ -545,7 +548,7 @@ func TestEdgeCases(t *testing.T) {
 	service := New(db, logger)
 	
 	// Test requesting 0 songs
-	songs, err := service.GetWeightedShuffledSongs(0)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 0)
 	if err != nil {
 		t.Errorf("Failed to get 0 shuffled songs: %v", err)
 	}
@@ -554,7 +557,7 @@ func TestEdgeCases(t *testing.T) {
 	}
 	
 	// Test requesting large number of songs (should not panic)
-	songs, err = service.GetWeightedShuffledSongs(1000000)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 1000000)
 	if err != nil {
 		t.Errorf("Failed to get large number of shuffled songs: %v", err)
 	}

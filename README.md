@@ -1,6 +1,6 @@
 # Subsonic API Proxy Server
 
-A Go-based proxy server that relays requests to a Subsonic API server with configurable endpoint hooks for monitoring and interception. Includes SQLite3 database functionality for tracking played songs and building transition probability analysis.
+A Go-based proxy server that relays requests to a Subsonic API server with configurable endpoint hooks for monitoring and interception. Includes SQLite3 database functionality for tracking played songs and building transition probability analysis with **complete multi-tenancy support** for isolated user data and personalized recommendations.
 
 ## Architecture
 
@@ -19,18 +19,68 @@ This application uses a modular architecture with the following components:
 ## Features
 
 - **Reverse Proxy**: Forwards all requests to upstream Subsonic server with health monitoring
+- **Multi-Tenancy ✅**: Complete user data isolation with per-user song libraries, play history, and personalized recommendations
 - **Hook System**: Intercept and process requests at any endpoint with comprehensive error handling
 - **Credential Management**: Secure credential handling with AES-256-GCM encryption, dynamic validation, timeout protection, and thread-safe storage
-- **Song Tracking**: SQLite3 database tracks played songs with play/skip statistics and comprehensive validation
+- **User-Specific Song Tracking**: SQLite3 database tracks played songs with play/skip statistics per user with comprehensive validation
 - **Database Connection Pooling**: Advanced connection pool management with health monitoring for optimal performance
-- **Transition Probability Analysis**: Builds transition probabilities between songs for intelligent recommendations
-- **Weighted Shuffle**: Intelligent song shuffling based on play history, preferences, and transition probabilities
-- **Automatic Sync**: Fetches and updates song library from Subsonic API with error recovery and authentication
+- **Per-User Transition Analysis**: Builds transition probabilities between songs for personalized intelligent recommendations
+- **Personalized Weighted Shuffle**: Intelligent song shuffling based on individual user play history, preferences, and transition probabilities
+- **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and authentication
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
-- **Input Validation & Security**: Comprehensive input validation, sanitization, and log injection prevention
+- **Input Validation & Security**: Comprehensive input validation, sanitization, user context validation, and log injection prevention
 - **Logging**: Structured logging with configurable levels and error context
 - **Configuration**: Command-line flags and environment variables with validation and helpful error messages
+
+## Multi-Tenancy ✅ **NEW**
+
+The proxy implements **complete multi-tenancy** with full user data isolation at the database level. Each user has their own isolated music library, play history, and statistics.
+
+### Key Benefits
+
+- **Complete User Isolation**: Each user has their own isolated song collection, play events, and transition data
+- **Personalized Recommendations**: Individual users receive song recommendations based on their personal listening history
+- **Scalable Architecture**: Supports unlimited users with optimal performance through user-specific database indexes
+- **Security Compliance**: Full data isolation meets privacy requirements with no data bleeding between users
+- **Individual Preferences**: Each user's play/skip behavior is tracked independently for personalized experiences
+
+### Multi-Tenant Database Schema
+
+- **`songs`**: Primary key `(id, user_id)` ensures each song is isolated per user
+- **`play_events`**: Includes `user_id` column for per-user event tracking
+- **`song_transitions`**: Primary key `(user_id, from_song_id, to_song_id)` for isolated transition data
+- **Performance Indexes**: User-specific indexes on all tables for optimal query performance
+
+### API Usage
+
+All Subsonic API endpoints require user context via the `u` parameter:
+
+```bash
+# User-specific song shuffle - each user gets personalized recommendations
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&size=50"
+curl "http://localhost:8080/rest/getRandomSongs?u=bob&p=password&size=50"
+
+# User-specific stream tracking - events recorded per user
+curl "http://localhost:8080/rest/stream?u=alice&p=password&id=song123"
+
+# User-specific play/skip recording - statistics tracked per user
+curl "http://localhost:8080/rest/scrobble?u=alice&p=password&id=song123&submission=true"
+```
+
+### Migration & Compatibility
+
+- **Automatic Migration**: Seamless upgrade from single-tenant to multi-tenant schema
+- **Zero Downtime**: Migration runs automatically on server startup
+- **Data Backup**: Existing data is backed up before migration
+- **Backward Compatibility**: Handles existing installations gracefully
+
+### Security & Validation
+
+- **Required User Parameter**: All endpoints validate the presence of `u` parameter
+- **Input Sanitization**: User IDs are sanitized to prevent log injection attacks
+- **Error Handling**: Clear error messages for missing or invalid user parameters
+- **User Context Enforcement**: All database operations strictly filter by user ID
 
 ## Security
 
@@ -410,76 +460,104 @@ export DB_CONN_MAX_LIFETIME=45m
 ./subsoxy
 ```
 
-### Database Schema
+### Multi-Tenant Database Schema ✅ **UPDATED**
 
-#### songs
-- `id` (TEXT PRIMARY KEY): Unique song identifier
+#### songs (Multi-Tenant)
+- `id` (TEXT): Unique song identifier within user context
+- `user_id` (TEXT): User identifier for data isolation
 - `title` (TEXT): Song title
 - `artist` (TEXT): Artist name
 - `album` (TEXT): Album name
 - `duration` (INTEGER): Song duration in seconds
-- `last_played` (DATETIME): Last time the song was played
-- `play_count` (INTEGER): Number of times the song was played
-- `skip_count` (INTEGER): Number of times the song was skipped
+- `last_played` (DATETIME): Last time the song was played by this user
+- `play_count` (INTEGER): Number of times the song was played by this user
+- `skip_count` (INTEGER): Number of times the song was skipped by this user
+- **PRIMARY KEY**: `(id, user_id)` for per-user song isolation
 
-#### play_events
+#### play_events (Multi-Tenant)
 - `id` (INTEGER PRIMARY KEY): Auto-incrementing event ID
-- `song_id` (TEXT): Reference to the song
+- `user_id` (TEXT): User identifier for data isolation
+- `song_id` (TEXT): Reference to the song within user context
 - `event_type` (TEXT): Type of event (start, play, skip)
 - `timestamp` (DATETIME): When the event occurred
-- `previous_song` (TEXT): ID of the previously played song (for transition tracking)
+- `previous_song` (TEXT): ID of the previously played song by this user (for transition tracking)
 
-#### song_transitions
-- `from_song_id` (TEXT): ID of the song that was playing before
-- `to_song_id` (TEXT): ID of the song that started playing
-- `play_count` (INTEGER): Number of times this transition resulted in a play
-- `skip_count` (INTEGER): Number of times this transition resulted in a skip
-- `probability` (REAL): Calculated probability of playing (vs skipping) this transition
+#### song_transitions (Multi-Tenant)
+- `user_id` (TEXT): User identifier for data isolation
+- `from_song_id` (TEXT): ID of the song that was playing before (within user context)
+- `to_song_id` (TEXT): ID of the song that started playing (within user context)
+- `play_count` (INTEGER): Number of times this transition resulted in a play for this user
+- `skip_count` (INTEGER): Number of times this transition resulted in a skip for this user
+- `probability` (REAL): Calculated probability of playing (vs skipping) this transition for this user
+- **PRIMARY KEY**: `(user_id, from_song_id, to_song_id)` for per-user transition isolation
 
-### Features
+#### Performance Indexes
+- `idx_songs_user_id`: Optimizes user-specific song queries
+- `idx_play_events_user_id`: Optimizes user-specific event queries  
+- `idx_song_transitions_user_id`: Optimizes user-specific transition queries
 
-- **Credential Management**: Automatically captures and validates user credentials from client requests
-- **Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials
-- **Play Tracking**: Records when songs are started, played completely, or skipped
-- **Transition Probability Analysis**: Builds transition probabilities between songs
-- **Historical Data**: Maintains complete event history for analysis
+### Multi-Tenant Features ✅ **UPDATED**
 
-### Data Collection
+- **Per-User Credential Management**: Automatically captures and validates user credentials from client requests with user isolation
+- **User-Isolated Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials, stored per user
+- **Per-User Play Tracking**: Records when songs are started, played completely, or skipped with complete user isolation
+- **User-Specific Transition Probability Analysis**: Builds transition probabilities between songs for each user independently
+- **Isolated Historical Data**: Maintains complete event history for analysis per user
 
-The system automatically tracks:
-- User credentials from client requests and validates them against the upstream server
-- When a song starts playing (`/rest/stream` endpoint)
-- When a song is marked as played or skipped (`/rest/scrobble` endpoint)
-- Transitions between songs for building recommendation data
+### Multi-Tenant Data Collection
 
-## Weighted Shuffle Feature
+The system automatically tracks per user:
+- User credentials from client requests and validates them against the upstream server with user context
+- When a song starts playing (`/rest/stream` endpoint) - recorded with user ID
+- When a song is marked as played or skipped (`/rest/scrobble` endpoint) - tracked per user
+- Transitions between songs for building personalized recommendation data per user
 
-The `/rest/getRandomSongs` endpoint provides intelligent song shuffling using a weighted algorithm that considers multiple factors to provide better music recommendations.
+### User Isolation Benefits
 
-### How It Works
+- **Complete Data Separation**: Each user's data is completely isolated from other users
+- **Personalized Analytics**: Statistics and probabilities calculated independently per user
+- **Individual Learning**: Each user's preferences learned and applied separately
+- **Privacy Compliance**: No data bleeding between users ensures privacy requirements are met
 
-The shuffle algorithm calculates a weight for each song based on:
+## Weighted Shuffle Feature ✅ **UPDATED FOR MULTI-TENANCY**
 
-1. **Time Decay**: Songs played recently (within 30 days) receive lower weights to encourage variety
-2. **Play/Skip Ratio**: Songs with better play-to-skip ratios are more likely to be selected
-3. **Transition Probabilities**: Uses transition data to prefer songs that historically follow well from the last played song
+The `/rest/getRandomSongs` endpoint provides intelligent song shuffling using a **per-user weighted algorithm** that considers multiple factors to provide personalized music recommendations for each user.
 
-### Usage
+### How Multi-Tenant Shuffling Works
+
+The shuffle algorithm calculates a weight for each song **per user** based on:
+
+1. **User-Specific Time Decay**: Songs played recently by the user (within 30 days) receive lower weights to encourage variety
+2. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
+3. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
+
+### Multi-Tenant Usage
 
 ```bash
-# Get 50 weighted-shuffled songs (default)
-curl "http://localhost:8080/rest/getRandomSongs?u=admin&p=admin&c=subsoxy&f=json"
+# Get 50 user-specific weighted-shuffled songs (REQUIRED user parameter)
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy&f=json"
 
-# Get 100 weighted-shuffled songs
-curl "http://localhost:8080/rest/getRandomSongs?size=100&u=admin&p=admin&c=subsoxy&f=json"
+# Different user gets different personalized recommendations
+curl "http://localhost:8080/rest/getRandomSongs?u=bob&p=password&c=subsoxy&f=json"
+
+# Get 100 user-specific weighted-shuffled songs
+curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=subsoxy&f=json"
 ```
 
-### Benefits
+### Multi-Tenancy Benefits
 
-- **Reduces repetition**: Recently played songs are less likely to appear
-- **Learns preferences**: Songs you tend to play (vs skip) are weighted higher
-- **Context-aware**: Considers what song was played previously for smoother transitions
-- **Balances discovery**: New and unplayed songs get a boost to encourage exploration
+- **Personalized Recommendations**: Each user gets recommendations based on their individual listening history
+- **User-Specific Repetition Reduction**: Recently played songs by each user are less likely to appear in their shuffle
+- **Individual Preference Learning**: Songs each user tends to play (vs skip) are weighted higher for that user only
+- **Per-User Context Awareness**: Considers what song was played previously by each user for smoother transitions
+- **Individual Discovery**: New and unplayed songs get a boost per user to encourage personalized exploration
+- **Complete Isolation**: User recommendations don't affect each other's shuffle algorithms
+
+### Error Handling
+
+- **Missing User Parameter**: Returns HTTP 400 with "Missing user parameter" error
+- **Invalid Parameters**: Proper validation with descriptive error messages
+- **User Context Validation**: All requests validated for user context before processing
 
 ## Development
 

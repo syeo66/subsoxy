@@ -59,6 +59,15 @@ func ValidateSongID(songID string) error {
 }
 
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	// Extract user ID from request
+	userID := r.URL.Query().Get("u")
+	if userID == "" {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
+			Warn("Shuffle request missing user ID")
+		http.Error(w, "Missing user parameter", http.StatusBadRequest)
+		return true
+	}
+
 	sizeStr := r.URL.Query().Get("size")
 	size := 50
 	if sizeStr != "" {
@@ -83,9 +92,9 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		}
 	}
 	
-	songs, err := h.shuffle.GetWeightedShuffledSongs(size)
+	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to get weighted shuffled songs")
+		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
 	}
@@ -104,7 +113,8 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
 			WithContext("size", size).
-			WithContext("song_count", len(songs))
+			WithContext("song_count", len(songs)).
+			WithContext("userID", userID)
 		h.logger.WithError(encodeErr).Error("Failed to encode shuffle response")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
@@ -113,6 +123,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	h.logger.WithFields(logrus.Fields{
 		"size": size,
 		"returned": len(songs),
+		"userID": SanitizeForLogging(userID),
 	}).Info("Served weighted shuffle request")
 	
 	return true
@@ -128,15 +139,26 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 	return false
 }
 
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string)) bool {
+	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
+	
+	if userID == "" {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
+			Warn("Stream request missing user ID")
+		return false
+	}
+	
 	if songID != "" {
 		if err := ValidateSongID(songID); err != nil {
 			h.logger.WithError(err).Warn("Invalid song ID in stream request")
 			return false
 		}
-		recordFunc(songID, "start", nil)
-		h.logger.WithField("song_id", SanitizeForLogging(songID)).Debug("Recorded stream start event")
+		recordFunc(userID, songID, "start", nil)
+		h.logger.WithFields(logrus.Fields{
+			"song_id": SanitizeForLogging(songID),
+			"user_id": SanitizeForLogging(userID),
+		}).Debug("Recorded stream start event")
 	} else {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Stream request missing song ID")
@@ -144,9 +166,16 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 	return false
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string), setLastPlayed func(string)) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string)) bool {
+	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 	submission := r.URL.Query().Get("submission")
+	
+	if userID == "" {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
+			Warn("Scrobble request missing user ID")
+		return false
+	}
 	
 	if songID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
@@ -160,18 +189,28 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 	}
 	
 	sanitizedSongID := SanitizeForLogging(songID)
+	sanitizedUserID := SanitizeForLogging(userID)
 	
 	if submission == "true" {
-		recordFunc(songID, "play", nil)
-		setLastPlayed(songID)
-		h.logger.WithField("song_id", sanitizedSongID).Debug("Recorded play event")
+		recordFunc(userID, songID, "play", nil)
+		setLastPlayed(userID, songID)
+		h.logger.WithFields(logrus.Fields{
+			"song_id": sanitizedSongID,
+			"user_id": sanitizedUserID,
+		}).Debug("Recorded play event")
 	} else {
 		// Treat missing or non-"true" submission as skip
-		recordFunc(songID, "skip", nil)
-		h.logger.WithField("song_id", sanitizedSongID).Debug("Recorded skip event")
+		recordFunc(userID, songID, "skip", nil)
+		h.logger.WithFields(logrus.Fields{
+			"song_id": sanitizedSongID,
+			"user_id": sanitizedUserID,
+		}).Debug("Recorded skip event")
 		
 		if submission == "" {
-			h.logger.WithField("song_id", sanitizedSongID).Debug("Scrobble request missing submission parameter, treating as skip")
+			h.logger.WithFields(logrus.Fields{
+				"song_id": sanitizedSongID,
+				"user_id": sanitizedUserID,
+			}).Debug("Scrobble request missing submission parameter, treating as skip")
 		}
 	}
 	

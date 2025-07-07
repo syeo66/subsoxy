@@ -1,6 +1,6 @@
 # Handlers Module
 
-The handlers module provides HTTP request handlers for different Subsonic API endpoints with business logic implementation.
+The handlers module provides HTTP request handlers for different Subsonic API endpoints with **multi-tenant support** and business logic implementation.
 
 ## Overview
 

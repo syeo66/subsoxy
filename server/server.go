@@ -369,27 +369,28 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 		return
 	}
 
-	if err := ps.db.StoreSongs(subsonicResp.SubsonicResponse.Songs.Song); err != nil {
-		ps.logger.WithError(err).Error("Failed to store songs")
+	if err := ps.db.StoreSongs(username, subsonicResp.SubsonicResponse.Songs.Song); err != nil {
+		ps.logger.WithError(err).WithField("userID", sanitizeUsername(username)).Error("Failed to store songs")
 		return
 	}
 
 	ps.logger.WithField("count", len(subsonicResp.SubsonicResponse.Songs.Song)).Info("Successfully synced songs")
 }
 
-func (ps *ProxyServer) RecordPlayEvent(songID, eventType string, previousSong *string) {
-	if err := ps.db.RecordPlayEvent(songID, eventType, previousSong); err != nil {
-		ps.logger.WithError(err).Error("Failed to record play event")
+func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {
+	if err := ps.db.RecordPlayEvent(userID, songID, eventType, previousSong); err != nil {
+		ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record play event")
 		return
 	}
 
 	if previousSong != nil {
-		if err := ps.db.RecordTransition(*previousSong, songID, eventType); err != nil {
-			ps.logger.WithError(err).Error("Failed to record transition")
+		if err := ps.db.RecordTransition(userID, *previousSong, songID, eventType); err != nil {
+			ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record transition")
 		}
 	}
 
-	// Sanitize song IDs for logging
+	// Sanitize inputs for logging
+	sanitizedUserID := sanitizeUsername(userID)
 	sanitizedSongID := sanitizeForLogging(songID)
 	var sanitizedPreviousSong *string
 	if previousSong != nil {
@@ -398,15 +399,16 @@ func (ps *ProxyServer) RecordPlayEvent(songID, eventType string, previousSong *s
 	}
 
 	ps.logger.WithFields(logrus.Fields{
+		"userID":       sanitizedUserID,
 		"songId":       sanitizedSongID,
 		"eventType":    eventType,
 		"previousSong": sanitizedPreviousSong,
 	}).Debug("Recorded play event")
 }
 
-func (ps *ProxyServer) SetLastPlayed(songID string) {
+func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
 	song := &models.Song{ID: songID}
-	ps.shuffle.SetLastPlayed(song)
+	ps.shuffle.SetLastPlayed(userID, song)
 }
 
 func (ps *ProxyServer) GetHandlers() *handlers.Handler {

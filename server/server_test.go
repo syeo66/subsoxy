@@ -349,13 +349,13 @@ func TestRecordPlayEvent(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = server.db.StoreSongs(testSongs)
+	err = server.db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Fatalf("Failed to store test songs: %v", err)
 	}
 	
 	t.Run("Record play event without previous song", func(t *testing.T) {
-		server.RecordPlayEvent("1", "play", nil)
+		server.RecordPlayEvent("testuser", "1", "play", nil)
 		
 		// Verify event was recorded (can't easily verify without exposing internals)
 		// The method should not panic or return errors
@@ -363,13 +363,13 @@ func TestRecordPlayEvent(t *testing.T) {
 	
 	t.Run("Record play event with previous song", func(t *testing.T) {
 		previousSong := "1"
-		server.RecordPlayEvent("2", "play", &previousSong)
+		server.RecordPlayEvent("testuser", "2", "play", &previousSong)
 		
 		// Should record both play event and transition
 	})
 	
 	t.Run("Record skip event", func(t *testing.T) {
-		server.RecordPlayEvent("1", "skip", nil)
+		server.RecordPlayEvent("testuser", "1", "skip", nil)
 		
 		// Should record skip event
 	})
@@ -390,7 +390,7 @@ func TestSetLastPlayed(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 	
-	server.SetLastPlayed("123")
+	server.SetLastPlayed("testuser", "123")
 	
 	// Should set last played song in shuffle service
 	// We can't easily verify this without exposing internals
@@ -642,8 +642,8 @@ func TestErrorHandling(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	
 	// Test that methods handle errors gracefully
-	server.RecordPlayEvent("nonexistent", "play", nil)
-	server.SetLastPlayed("nonexistent")
+	server.RecordPlayEvent("testuser", "nonexistent", "play", nil)
+	server.SetLastPlayed("testuser", "nonexistent")
 	
 	// Should not panic
 }

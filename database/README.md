@@ -1,60 +1,72 @@
 # Database Module
 
-The database module handles all SQLite3 database operations for song tracking and transition analysis with comprehensive error handling, validation, and advanced connection pooling.
+The database module handles all SQLite3 database operations for song tracking and transition analysis with **complete multi-tenancy support**, comprehensive error handling, validation, and advanced connection pooling.
 
 ## Overview
 
 This module provides:
-- Database initialization and schema creation with error recovery
+- **Multi-tenant database initialization** and schema creation with automatic migration
 - Advanced connection pooling with health monitoring and statistics
-- Song storage and retrieval with input validation
-- Play event recording with structured error handling
-- Transition probability tracking with graceful degradation
-- Thread-safe database operations with transaction management
-- Comprehensive error context for debugging
+- **User-isolated song storage** and retrieval with comprehensive input validation
+- **Per-user play event recording** with structured error handling
+- **User-specific transition probability tracking** with graceful degradation
+- Thread-safe database operations with transaction management and user context
+- **User ID validation** and sanitization for security
+- Comprehensive error context for debugging with user information
 - Real-time connection pool performance monitoring
 
-## Database Schema
+## Multi-Tenant Database Schema ✅ **UPDATED**
 
-### songs
+### songs (Multi-Tenant)
 ```sql
 CREATE TABLE songs (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     title TEXT NOT NULL,
     artist TEXT NOT NULL,
     album TEXT NOT NULL,
     duration INTEGER NOT NULL,
     last_played DATETIME,
     play_count INTEGER DEFAULT 0,
-    skip_count INTEGER DEFAULT 0
+    skip_count INTEGER DEFAULT 0,
+    PRIMARY KEY (id, user_id)
 );
 ```
 
-### play_events
+### play_events (Multi-Tenant)
 ```sql
 CREATE TABLE play_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
     song_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
     timestamp DATETIME NOT NULL,
     previous_song TEXT,
-    FOREIGN KEY (song_id) REFERENCES songs(id),
-    FOREIGN KEY (previous_song) REFERENCES songs(id)
+    FOREIGN KEY (song_id, user_id) REFERENCES songs(id, user_id),
+    FOREIGN KEY (previous_song, user_id) REFERENCES songs(id, user_id)
 );
 ```
 
-### song_transitions
+### song_transitions (Multi-Tenant)
 ```sql
 CREATE TABLE song_transitions (
+    user_id TEXT NOT NULL,
     from_song_id TEXT NOT NULL,
     to_song_id TEXT NOT NULL,
     play_count INTEGER DEFAULT 0,
     skip_count INTEGER DEFAULT 0,
     probability REAL DEFAULT 0.0,
-    PRIMARY KEY (from_song_id, to_song_id),
-    FOREIGN KEY (from_song_id) REFERENCES songs(id),
-    FOREIGN KEY (to_song_id) REFERENCES songs(id)
+    PRIMARY KEY (user_id, from_song_id, to_song_id),
+    FOREIGN KEY (from_song_id, user_id) REFERENCES songs(id, user_id),
+    FOREIGN KEY (to_song_id, user_id) REFERENCES songs(id, user_id)
 );
+```
+
+### Performance Indexes
+```sql
+CREATE INDEX idx_songs_user_id ON songs(user_id);
+CREATE INDEX idx_play_events_user_id ON play_events(user_id);
+CREATE INDEX idx_song_transitions_user_id ON song_transitions(user_id);
 ```
 
 ## API
@@ -92,26 +104,35 @@ if err != nil {
 defer db.Close()
 ```
 
-### Song Operations
+### Multi-Tenant Song Operations ✅ **UPDATED**
 ```go
-// Store multiple songs (bulk insert with transaction)
+// Store multiple songs for a specific user (bulk insert with transaction)
+userID := "alice"
 songs := []models.Song{...}
-err := db.StoreSongs(songs)
+err := db.StoreSongs(userID, songs)
 
-// Get all songs
-songs, err := db.GetAllSongs()
+// Get all songs for a specific user
+userID := "alice"
+songs, err := db.GetAllSongs(userID)
+
+// Each user gets their own isolated song library
+bobSongs, err := db.GetAllSongs("bob")  // Completely separate from alice's songs
 ```
 
-### Event Recording
+### Multi-Tenant Event Recording ✅ **UPDATED**
 ```go
-// Record a play event
-err := db.RecordPlayEvent("song123", "play", nil)
+// Record a play event for a specific user
+userID := "alice"
+err := db.RecordPlayEvent(userID, "song123", "play", nil)
 
-// Record a transition
-err := db.RecordTransition("song1", "song2", "play")
+// Record a transition for a specific user
+err := db.RecordTransition(userID, "song1", "song2", "play")
 
-// Get transition probability
-prob, err := db.GetTransitionProbability("song1", "song2")
+// Get transition probability for a specific user
+prob, err := db.GetTransitionProbability(userID, "song1", "song2")
+
+// Each user's events and transitions are completely isolated
+bobProb, err := db.GetTransitionProbability("bob", "song1", "song2")  // Independent from alice's data
 ```
 
 ### Connection Pool Management

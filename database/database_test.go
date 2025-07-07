@@ -142,7 +142,7 @@ func TestStoreSongs(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestStoreSongsReplace(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestStoreSongsReplace(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(updatedSongs)
+	err = db.StoreSongs("testuser", updatedSongs)
 	if err != nil {
 		t.Errorf("Failed to update songs: %v", err)
 	}
@@ -245,13 +245,13 @@ func TestGetAllSongs(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Retrieve all songs
-	retrievedSongs, err := db.GetAllSongs()
+	retrievedSongs, err := db.GetAllSongs("testuser")
 	if err != nil {
 		t.Errorf("Failed to get all songs: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestGetAllSongsEmpty(t *testing.T) {
 	}
 	defer db.Close()
 	
-	songs, err := db.GetAllSongs()
+	songs, err := db.GetAllSongs("testuser")
 	if err != nil {
 		t.Errorf("Failed to get all songs: %v", err)
 	}
@@ -324,13 +324,13 @@ func TestRecordPlayEvent(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record a play event
-	err = db.RecordPlayEvent("1", "play", nil)
+	err = db.RecordPlayEvent("testuser", "1", "play", nil)
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
 	}
@@ -380,13 +380,13 @@ func TestRecordSkipEvent(t *testing.T) {
 		},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record a skip event
-	err = db.RecordPlayEvent("1", "skip", nil)
+	err = db.RecordPlayEvent("testuser", "1", "skip", nil)
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
@@ -421,14 +421,14 @@ func TestRecordPlayEventWithPreviousSong(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record play event with previous song
 	previousSong := "1"
-	err = db.RecordPlayEvent("2", "play", &previousSong)
+	err = db.RecordPlayEvent("testuser", "2", "play", &previousSong)
 	if err != nil {
 		t.Errorf("Failed to record play event with previous song: %v", err)
 	}
@@ -463,13 +463,13 @@ func TestRecordTransition(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record a transition (play)
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
@@ -504,13 +504,13 @@ func TestRecordTransitionSkip(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record a transition (skip)
-	err = db.RecordTransition("1", "2", "skip")
+	err = db.RecordTransition("testuser", "1", "2", "skip")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
@@ -545,23 +545,23 @@ func TestUpdateTransitionProbabilities(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Record multiple transitions
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
-	err = db.RecordTransition("1", "2", "skip")
+	err = db.RecordTransition("testuser", "1", "2", "skip")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
@@ -598,13 +598,13 @@ func TestGetTransitionProbability(t *testing.T) {
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 	
 	// Test getting probability for non-existent transition (should return 0.5 and no error)
-	prob, err := db.GetTransitionProbability("1", "2")
+	prob, err := db.GetTransitionProbability("testuser", "1", "2")
 	if err != nil {
 		t.Errorf("Unexpected error for non-existent transition: %v", err)
 	}
@@ -613,12 +613,12 @@ func TestGetTransitionProbability(t *testing.T) {
 	}
 	
 	// Record a transition and test again
-	err = db.RecordTransition("1", "2", "play")
+	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
 	
-	prob, err = db.GetTransitionProbability("1", "2")
+	prob, err = db.GetTransitionProbability("testuser", "1", "2")
 	if err != nil {
 		t.Errorf("Failed to get transition probability: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 	defer db.Close()
 	
 	// Test getting probability for non-existent songs (should return 0.5 and no error)
-	prob, err := db.GetTransitionProbability("nonexistent1", "nonexistent2")
+	prob, err := db.GetTransitionProbability("testuser", "nonexistent1", "nonexistent2")
 	if err != nil {
 		t.Errorf("Unexpected error for non-existent transition: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 	}
 
 	// Test getting probability with empty strings (should return error)
-	prob, err = db.GetTransitionProbability("", "")
+	prob, err = db.GetTransitionProbability("testuser", "", "")
 	if err == nil {
 		t.Error("Expected error for empty song IDs")
 	}
@@ -845,7 +845,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 280},
 	}
 	
-	err = db.StoreSongs(songs)
+	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Fatalf("Failed to store test songs: %v", err)
 	}
@@ -866,13 +866,13 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 				case 0:
 					// Record play event
 					songID := fmt.Sprintf("%d", (goroutineID%3)+1)
-					err := db.RecordPlayEvent(songID, "play", nil)
+					err := db.RecordPlayEvent("testuser", songID, "play", nil)
 					if err != nil {
 						t.Errorf("Goroutine %d: RecordPlayEvent failed: %v", goroutineID, err)
 					}
 				case 1:
 					// Get all songs
-					_, err := db.GetAllSongs()
+					_, err := db.GetAllSongs("testuser")
 					if err != nil {
 						t.Errorf("Goroutine %d: GetAllSongs failed: %v", goroutineID, err)
 					}
@@ -880,7 +880,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 					// Record transition
 					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
 					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
-					err := db.RecordTransition(fromSong, toSong, "play")
+					err := db.RecordTransition("testuser", fromSong, toSong, "play")
 					if err != nil {
 						t.Errorf("Goroutine %d: RecordTransition failed: %v", goroutineID, err)
 					}
@@ -888,7 +888,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 					// Get transition probability
 					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
 					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
-					_, err := db.GetTransitionProbability(fromSong, toSong)
+					_, err := db.GetTransitionProbability("testuser", fromSong, toSong)
 					if err != nil {
 						t.Errorf("Goroutine %d: GetTransitionProbability failed: %v", goroutineID, err)
 					}
@@ -901,7 +901,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 	wg.Wait()
 	
 	// Verify that operations completed successfully
-	allSongs, err := db.GetAllSongs()
+	allSongs, err := db.GetAllSongs("testuser")
 	if err != nil {
 		t.Errorf("Failed to get songs after concurrent test: %v", err)
 	}

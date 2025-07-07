@@ -62,7 +62,7 @@ func TestHandleShuffle(t *testing.T) {
 		{ID: "3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 200},
 	}
 	
-	err = db.StoreSongs(testSongs)
+	err = db.StoreSongs("testuser", testSongs)
 	if err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestHandleShuffle(t *testing.T) {
 	handler := New(logger, shuffleService)
 	
 	t.Run("Default size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
 		w := httptest.NewRecorder()
 		
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -119,7 +119,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 	
 	t.Run("Custom size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?size=2", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=2", nil)
 		w := httptest.NewRecorder()
 		
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -144,7 +144,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 	
 	t.Run("Invalid size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?size=invalid", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=invalid", nil)
 		w := httptest.NewRecorder()
 		
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -165,7 +165,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 	
 	t.Run("Zero size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?size=0", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=0", nil)
 		w := httptest.NewRecorder()
 		
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -191,7 +191,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 	
 	t.Run("Negative size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?size=-5", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=-5", nil)
 		w := httptest.NewRecorder()
 		
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -215,6 +215,21 @@ func TestHandleShuffle(t *testing.T) {
 			t.Errorf("Expected 3 songs with negative size, got %d", len(songList))
 		}
 	})
+	
+	t.Run("Missing user parameter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs", nil)
+		w := httptest.NewRecorder()
+		
+		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+		
+		if !handled {
+			t.Error("HandleShuffle should return true when user parameter is missing")
+		}
+		
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status 400, got %d", w.Code)
+		}
+	})
 }
 
 func TestHandleShuffleEmpty(t *testing.T) {
@@ -233,7 +248,7 @@ func TestHandleShuffleEmpty(t *testing.T) {
 	shuffleService := shuffle.New(db, logger)
 	handler := New(logger, shuffleService)
 	
-	req := httptest.NewRequest("GET", "/rest/getRandomSongs", nil)
+	req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
 	w := httptest.NewRecorder()
 	
 	handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -340,14 +355,14 @@ func TestHandleStream(t *testing.T) {
 	handler := New(logger, shuffleService)
 	
 	t.Run("With song ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/stream?id=123", nil)
+		req := httptest.NewRequest("GET", "/rest/stream?u=testuser&id=123", nil)
 		w := httptest.NewRecorder()
 		
 		var recordedSongID string
 		var recordedEventType string
 		var recordedPreviousSong *string
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordedSongID = songID
 			recordedEventType = eventType
 			recordedPreviousSong = previousSong
@@ -373,11 +388,11 @@ func TestHandleStream(t *testing.T) {
 	})
 	
 	t.Run("Without song ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/stream", nil)
+		req := httptest.NewRequest("GET", "/rest/stream?u=testuser", nil)
 		w := httptest.NewRecorder()
 		
 		var recordCalled bool
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordCalled = true
 		}
 		
@@ -393,11 +408,11 @@ func TestHandleStream(t *testing.T) {
 	})
 	
 	t.Run("With empty song ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/stream?id=", nil)
+		req := httptest.NewRequest("GET", "/rest/stream?u=testuser&id=", nil)
 		w := httptest.NewRecorder()
 		
 		var recordCalled bool
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordCalled = true
 		}
 		
@@ -430,7 +445,7 @@ func TestHandleScrobble(t *testing.T) {
 	handler := New(logger, shuffleService)
 	
 	t.Run("Play event", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/scrobble?id=123&submission=true", nil)
+		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=123&submission=true", nil)
 		w := httptest.NewRecorder()
 		
 		var recordedSongID string
@@ -438,13 +453,13 @@ func TestHandleScrobble(t *testing.T) {
 		var recordedPreviousSong *string
 		var lastPlayedSongID string
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordedSongID = songID
 			recordedEventType = eventType
 			recordedPreviousSong = previousSong
 		}
 		
-		setLastPlayedFunc := func(songID string) {
+		setLastPlayedFunc := func(userID, songID string) {
 			lastPlayedSongID = songID
 		}
 		
@@ -472,7 +487,7 @@ func TestHandleScrobble(t *testing.T) {
 	})
 	
 	t.Run("Skip event", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/scrobble?id=456&submission=false", nil)
+		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=456&submission=false", nil)
 		w := httptest.NewRecorder()
 		
 		var recordedSongID string
@@ -480,13 +495,13 @@ func TestHandleScrobble(t *testing.T) {
 		var recordedPreviousSong *string
 		var lastPlayedCalled bool
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordedSongID = songID
 			recordedEventType = eventType
 			recordedPreviousSong = previousSong
 		}
 		
-		setLastPlayedFunc := func(songID string) {
+		setLastPlayedFunc := func(userID, songID string) {
 			lastPlayedCalled = true
 		}
 		
@@ -514,17 +529,17 @@ func TestHandleScrobble(t *testing.T) {
 	})
 	
 	t.Run("Without song ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/scrobble?submission=true", nil)
+		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&submission=true", nil)
 		w := httptest.NewRecorder()
 		
 		var recordCalled bool
 		var lastPlayedCalled bool
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordCalled = true
 		}
 		
-		setLastPlayedFunc := func(songID string) {
+		setLastPlayedFunc := func(userID, songID string) {
 			lastPlayedCalled = true
 		}
 		
@@ -544,17 +559,17 @@ func TestHandleScrobble(t *testing.T) {
 	})
 	
 	t.Run("With empty song ID", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/scrobble?id=&submission=true", nil)
+		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=&submission=true", nil)
 		w := httptest.NewRecorder()
 		
 		var recordCalled bool
 		var lastPlayedCalled bool
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordCalled = true
 		}
 		
-		setLastPlayedFunc := func(songID string) {
+		setLastPlayedFunc := func(userID, songID string) {
 			lastPlayedCalled = true
 		}
 		
@@ -574,19 +589,19 @@ func TestHandleScrobble(t *testing.T) {
 	})
 	
 	t.Run("Without submission parameter", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/scrobble?id=789", nil)
+		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=789", nil)
 		w := httptest.NewRecorder()
 		
 		var recordedSongID string
 		var recordedEventType string
 		var lastPlayedCalled bool
 		
-		recordFunc := func(songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, previousSong *string) {
 			recordedSongID = songID
 			recordedEventType = eventType
 		}
 		
-		setLastPlayedFunc := func(songID string) {
+		setLastPlayedFunc := func(userID, songID string) {
 			lastPlayedCalled = true
 		}
 		
@@ -626,7 +641,7 @@ func TestHandleShuffleContentType(t *testing.T) {
 	shuffleService := shuffle.New(db, logger)
 	handler := New(logger, shuffleService)
 	
-	req := httptest.NewRequest("GET", "/rest/getRandomSongs", nil)
+	req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
 	w := httptest.NewRecorder()
 	
 	handler.HandleShuffle(w, req, "/rest/getRandomSongs")

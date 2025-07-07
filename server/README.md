@@ -1,20 +1,20 @@
 # Server Module
 
-The server module provides the main proxy server implementation with request routing, lifecycle management, database connection pooling, and integration of all other modules.
+The server module provides the main proxy server implementation with **complete multi-tenancy support**, request routing, lifecycle management, database connection pooling, and integration of all other modules.
 
 ## Overview
 
 This module handles:
-- HTTP server setup and configuration
-- Database connection pool initialization and management
-- Reverse proxy implementation with comprehensive input validation
-- Hook system for request interception
-- Rate limiting and DoS protection
-- Input sanitization and log injection prevention
-- Background task management (song synchronization)
-- Graceful shutdown handling
-- Request logging and monitoring with sanitized inputs
-- Connection pool health monitoring and statistics
+- **Multi-tenant HTTP server setup** and configuration with user context validation
+- **User-isolated database connection pool** initialization and management
+- **Per-user reverse proxy implementation** with comprehensive input validation and user context
+- **Multi-tenant hook system** for request interception with user isolation
+- **User-aware rate limiting** and DoS protection
+- **User context input sanitization** and log injection prevention
+- **Per-user background task management** (user-specific song synchronization)
+- **Multi-tenant graceful shutdown** handling
+- **User-specific request logging** and monitoring with sanitized inputs
+- **Connection pool health monitoring** and statistics for multi-user environments
 
 ## Core Components
 
@@ -244,26 +244,27 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 
 **Security Note**: This implementation ensures passwords are never exposed in server logs, debug output, or error messages by using proper URL parameter encoding instead of direct string formatting.
 
-## Event Recording
+## Multi-Tenant Event Recording ✅ **UPDATED**
 
-### Play Event Recording
+### Per-User Play Event Recording
 ```go
-func (ps *ProxyServer) RecordPlayEvent(songID, eventType string, previousSong *string) {
-    // Record in database
-    if err := ps.db.RecordPlayEvent(songID, eventType, previousSong); err != nil {
-        ps.logger.WithError(err).Error("Failed to record play event")
+func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {
+    // Record in database with user context isolation
+    if err := ps.db.RecordPlayEvent(userID, songID, eventType, previousSong); err != nil {
+        ps.logger.WithError(err).WithField("user_id", userID).Error("Failed to record play event")
         return
     }
 
-    // Update transition data
+    // Update user-specific transition data
     if previousSong != nil {
-        if err := ps.db.RecordTransition(*previousSong, songID, eventType); err != nil {
-            ps.logger.WithError(err).Error("Failed to record transition")
+        if err := ps.db.RecordTransition(userID, *previousSong, songID, eventType); err != nil {
+            ps.logger.WithError(err).WithField("user_id", userID).Error("Failed to record transition")
         }
     }
 
-    // Log the event
+    // Log the event with user context
     ps.logger.WithFields(logrus.Fields{
+        "user_id":      userID,
         "songId":       songID,
         "eventType":    eventType,
         "previousSong": previousSong,
@@ -271,11 +272,11 @@ func (ps *ProxyServer) RecordPlayEvent(songID, eventType string, previousSong *s
 }
 ```
 
-### Last Played Tracking
+### User-Specific Last Played Tracking
 ```go
-func (ps *ProxyServer) SetLastPlayed(songID string) {
+func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
     song := &models.Song{ID: songID}
-    ps.shuffle.SetLastPlayed(song)
+    ps.shuffle.SetLastPlayed(userID, song)
 }
 ```
 

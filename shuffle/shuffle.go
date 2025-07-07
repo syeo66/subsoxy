@@ -15,29 +15,30 @@ import (
 type Service struct {
 	db         *database.DB
 	logger     *logrus.Logger
-	lastPlayed *models.Song
+	lastPlayed map[string]*models.Song  // Map userID to last played song
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
 	return &Service{
-		db:     db,
-		logger: logger,
+		db:         db,
+		logger:     logger,
+		lastPlayed: make(map[string]*models.Song),
 	}
 }
 
-func (s *Service) SetLastPlayed(song *models.Song) {
-	s.lastPlayed = song
+func (s *Service) SetLastPlayed(userID string, song *models.Song) {
+	s.lastPlayed[userID] = song
 }
 
-func (s *Service) GetWeightedShuffledSongs(count int) ([]models.Song, error) {
-	songs, err := s.db.GetAllSongs()
+func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {
+	songs, err := s.db.GetAllSongs(userID)
 	if err != nil {
 		return nil, err
 	}
 
 	weightedSongs := make([]models.WeightedSong, 0, len(songs))
 	for _, song := range songs {
-		weight := s.calculateSongWeight(song)
+		weight := s.calculateSongWeight(userID, song)
 		weightedSongs = append(weightedSongs, models.WeightedSong{
 			Song:   song,
 			Weight: weight,
@@ -77,21 +78,22 @@ func (s *Service) GetWeightedShuffledSongs(count int) ([]models.Song, error) {
 	return result, nil
 }
 
-func (s *Service) calculateSongWeight(song models.Song) float64 {
+func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 	baseWeight := 1.0
 	
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed)
 	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
-	transitionWeight := s.calculateTransitionWeight(song.ID)
+	transitionWeight := s.calculateTransitionWeight(userID, song.ID)
 	
 	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight
 	
 	s.logger.WithFields(logrus.Fields{
-		"songId":        song.ID,
-		"timeWeight":    timeWeight,
-		"playSkipWeight": playSkipWeight,
-		"transitionWeight":  transitionWeight,
-		"finalWeight":   finalWeight,
+		"userID":           userID,
+		"songId":           song.ID,
+		"timeWeight":       timeWeight,
+		"playSkipWeight":   playSkipWeight,
+		"transitionWeight": transitionWeight,
+		"finalWeight":      finalWeight,
 	}).Debug("Calculated song weight")
 	
 	return finalWeight
@@ -125,12 +127,13 @@ func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
 	return 0.2 + (playRatio * 1.8)
 }
 
-func (s *Service) calculateTransitionWeight(songID string) float64 {
-	if s.lastPlayed == nil {
+func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
+	lastPlayed, exists := s.lastPlayed[userID]
+	if !exists || lastPlayed == nil {
 		return 1.0
 	}
 	
-	probability, err := s.db.GetTransitionProbability(s.lastPlayed.ID, songID)
+	probability, err := s.db.GetTransitionProbability(userID, lastPlayed.ID, songID)
 	if err != nil {
 		return 1.0
 	}
