@@ -56,18 +56,6 @@
 - **Fix**: Add security middleware with proper headers
 - **Files**: `server/server.go`
 
-### 2. **Monitoring and Observability** 🟡
-- **Issue**: No metrics or health endpoints
-- **Risk**: Difficult to monitor and troubleshoot in production
-- **Fix**: Add Prometheus metrics and health endpoints
-- **Files**: `server/server.go`
-
-### 3. **Configuration Management** 🟡
-- **Issue**: No hot-reload capability
-- **Risk**: Requires restart for configuration changes
-- **Fix**: Implement configuration watching and hot-reload
-- **Files**: `config/config.go`
-
 ## Implementation Priority Order
 
 1. **Performance Issues** (Priority 2) - Fix within 1-2 weeks
