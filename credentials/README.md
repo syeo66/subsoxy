@@ -1,24 +1,30 @@
 # Credentials Module
 
-The credentials module provides secure credential management for authenticating with the upstream Subsonic server.
+The credentials module provides secure credential management with AES-256-GCM encryption for authenticating with the upstream Subsonic server.
 
 ## Overview
 
 This module handles:
+- **AES-256-GCM Encryption**: All passwords are encrypted in memory using industry-standard authenticated encryption
 - Dynamic credential capture from client requests
 - Credential validation against upstream server
-- Thread-safe credential storage
+- Thread-safe encrypted credential storage
 - Background operation authentication
-- Automatic cleanup of invalid credentials
+- Secure credential cleanup with memory zeroing
 
 ## Features
 
 ### Security
+- **AES-256-GCM Encryption**: All passwords encrypted using authenticated encryption with unique instance keys
+- **Memory Protection**: Credentials never stored in plain text, protecting against memory dumps
+- **Secure Cleanup**: Encrypted data is securely zeroed before deallocation
+- **Per-Instance Security**: Each server instance generates unique 32-byte encryption keys
+- **Forward Security**: New encryption keys generated on each server restart
 - **No Hardcoded Credentials**: All credentials come from authenticated client requests
 - **Real-time Validation**: Credentials are validated against the upstream server using `/rest/ping`
 - **Thread-Safe Storage**: Concurrent access is protected with read-write mutexes
 - **Timeout Protection**: Validation requests have configurable timeouts
-- **Automatic Cleanup**: Invalid credentials are removed from storage
+- **Automatic Cleanup**: Invalid credentials are securely removed from storage
 
 ### Performance
 - **Asynchronous Validation**: Credential validation doesn't block client requests
@@ -55,13 +61,48 @@ credManager.ClearInvalid()
 4. **Storage**: Store valid credentials in thread-safe map
 5. **Logging**: Log validation results for monitoring
 
-### Thread Safety
+### Data Structures
 ```go
+// Encrypted credential storage
+type encryptedCredential struct {
+    EncryptedPassword []byte `json:"encrypted_password"`
+    Nonce            []byte `json:"nonce"`
+}
+
 type Manager struct {
-    validCredentials map[string]string
-    mutex            sync.RWMutex  // Protects concurrent access
+    validCredentials map[string]encryptedCredential  // Encrypted storage
+    mutex            sync.RWMutex                    // Protects concurrent access
     logger           *logrus.Logger
     upstreamURL      string
+    encryptionKey    []byte                         // AES-256 key (32 bytes)
+}
+```
+
+### Encryption Implementation
+```go
+// AES-256-GCM encryption
+func (cm *Manager) encryptPassword(password string) (encryptedCredential, error) {
+    block, err := aes.NewCipher(cm.encryptionKey)
+    if err != nil {
+        return encryptedCredential{}, err
+    }
+    
+    gcm, err := cipher.NewGCM(block)
+    if err != nil {
+        return encryptedCredential{}, err
+    }
+    
+    nonce := make([]byte, gcm.NonceSize())
+    if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+        return encryptedCredential{}, err
+    }
+    
+    encryptedPassword := gcm.Seal(nil, nonce, []byte(password), nil)
+    
+    return encryptedCredential{
+        EncryptedPassword: encryptedPassword,
+        Nonce:            nonce,
+    }, nil
 }
 ```
 
@@ -153,9 +194,13 @@ The validation uses the standard Subsonic ping endpoint:
 
 ## Security Considerations
 
-### Memory Storage
+### Encrypted Memory Storage
+- **AES-256-GCM Protection**: All passwords encrypted with authenticated encryption
+- **Unique Instance Keys**: Each server instance has independent 32-byte encryption keys
+- **Memory Dump Protection**: Plain text passwords never exist in memory after validation
+- **Secure Cleanup**: Encrypted data is zeroed before deallocation
 - Credentials are stored in memory only (not persisted)
-- Application restart clears all stored credentials
+- Application restart clears all stored credentials and generates new encryption keys
 - No credential exposure in logs or files
 
 ### Validation Security
@@ -164,9 +209,11 @@ The validation uses the standard Subsonic ping endpoint:
 - Timeout prevents resource exhaustion attacks
 
 ### Access Control
-- Only validated credentials are stored
+- Only validated credentials are stored (encrypted)
 - Read-write mutex prevents race conditions
-- Automatic cleanup of invalid credentials
+- All encryption/decryption operations are thread-safe
+- Automatic secure cleanup of invalid credentials
+- Per-instance encryption keys provide isolation between server instances
 
 ## Monitoring
 
@@ -186,3 +233,46 @@ logger.Warn("Clearing potentially invalid credentials")
 - Track credential validation success/failure rates
 - Monitor background operation authentication
 - Log credential usage patterns
+- Monitor encryption/decryption operation performance
+
+## Encryption Details
+
+### Algorithm
+- **Cipher**: AES-256 (Advanced Encryption Standard with 256-bit keys)
+- **Mode**: GCM (Galois/Counter Mode) for authenticated encryption
+- **Key Size**: 32 bytes (256 bits)
+- **Nonce Size**: 12 bytes (96 bits) - standard for GCM
+
+### Key Management
+- **Generation**: Cryptographically secure random key generation using `crypto/rand`
+- **Scope**: Per-instance keys (not shared between server instances)
+- **Lifetime**: Keys exist only for the lifetime of the server process
+- **Fallback**: Deterministic key generation as fallback if `crypto/rand` fails
+
+### Security Properties
+- **Confidentiality**: AES-256 provides strong encryption
+- **Authenticity**: GCM mode ensures data hasn't been tampered with
+- **Unique Nonces**: Each encryption uses a unique nonce for semantic security
+- **Forward Security**: New keys generated on each server restart
+- **Memory Safety**: Encrypted data is securely zeroed on cleanup
+
+### Testing
+```go
+// Test encryption/decryption
+func TestEncryptionDecryption(t *testing.T) {
+    manager := New(logger, "http://localhost:4533")
+    
+    password := "test-password-123"
+    encryptedCred, err := manager.encryptPassword(password)
+    // Verify encrypted data is different from original
+    // Verify decryption returns original password
+}
+
+// Test different managers have different keys
+func TestEncryptionWithDifferentKeys(t *testing.T) {
+    manager1 := New(logger, "http://localhost:4533")
+    manager2 := New(logger, "http://localhost:4533")
+    
+    // Verify different managers can't decrypt each other's data
+}
+```

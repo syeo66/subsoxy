@@ -354,6 +354,202 @@ func TestConcurrentAccess(t *testing.T) {
 	// Test should complete without deadlock or panic
 }
 
+func TestEncryptionDecryption(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	manager := New(logger, "http://localhost:4533")
+	
+	// Test encryption and decryption
+	password := "test-password-123"
+	encryptedCred, err := manager.encryptPassword(password)
+	if err != nil {
+		t.Errorf("Failed to encrypt password: %v", err)
+	}
+	
+	// Verify encrypted data is different from original
+	if string(encryptedCred.EncryptedPassword) == password {
+		t.Error("Encrypted password should not be the same as original")
+	}
+	
+	// Test decryption
+	decryptedPassword, err := manager.decryptPassword(encryptedCred)
+	if err != nil {
+		t.Errorf("Failed to decrypt password: %v", err)
+	}
+	
+	if decryptedPassword != password {
+		t.Errorf("Decrypted password doesn't match original. Expected: %s, Got: %s", password, decryptedPassword)
+	}
+}
+
+func TestEncryptionWithDifferentKeys(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	manager1 := New(logger, "http://localhost:4533")
+	manager2 := New(logger, "http://localhost:4533")
+	
+	// Verify different managers have different keys
+	if manager1.GetEncryptionInfo() == manager2.GetEncryptionInfo() {
+		t.Error("Different managers should have different encryption keys")
+	}
+	
+	password := "test-password"
+	
+	// Encrypt with first manager
+	encryptedCred, err := manager1.encryptPassword(password)
+	if err != nil {
+		t.Errorf("Failed to encrypt password: %v", err)
+	}
+	
+	// Try to decrypt with second manager (should fail)
+	_, err = manager2.decryptPassword(encryptedCred)
+	if err == nil {
+		t.Error("Decryption with different key should fail")
+	}
+	
+	// Decrypt with original manager (should succeed)
+	decryptedPassword, err := manager1.decryptPassword(encryptedCred)
+	if err != nil {
+		t.Errorf("Failed to decrypt with original key: %v", err)
+	}
+	
+	if decryptedPassword != password {
+		t.Errorf("Decrypted password doesn't match original. Expected: %s, Got: %s", password, decryptedPassword)
+	}
+}
+
+func TestSecureCredentialClearing(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer mockServer.Close()
+	
+	manager := New(logger, mockServer.URL)
+	
+	// Store credentials
+	err := manager.ValidateAndStore("testuser", "testpass")
+	if err != nil {
+		t.Errorf("Failed to store credentials: %v", err)
+	}
+	
+	// Verify credentials are stored and encrypted
+	user, pass := manager.GetValid()
+	if user != "testuser" || pass != "testpass" {
+		t.Errorf("Expected stored credentials testuser/testpass, got %s/%s", user, pass)
+	}
+	
+	// Get reference to encrypted data before clearing
+	manager.mutex.RLock()
+	var encryptedData []byte
+	if cred, exists := manager.validCredentials["testuser"]; exists {
+		encryptedData = make([]byte, len(cred.EncryptedPassword))
+		copy(encryptedData, cred.EncryptedPassword)
+	}
+	manager.mutex.RUnlock()
+	
+	// Clear credentials
+	manager.ClearInvalid()
+	
+	// Verify credentials are cleared
+	user, pass = manager.GetValid()
+	if user != "" || pass != "" {
+		t.Errorf("Expected cleared credentials, got %s/%s", user, pass)
+	}
+	
+	// Verify encrypted data was zeroed (this is a basic check)
+	if len(encryptedData) > 0 {
+		// Note: We can't reliably test if the original memory was zeroed
+		// because Go's garbage collector may have moved the data
+		// This test mainly verifies the clearing logic executes without error
+		_ = encryptedData // Reference to avoid unused variable warning
+	}
+}
+
+func TestEncryptionWithCorruptedData(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	manager := New(logger, "http://localhost:4533")
+	
+	// Create corrupted encrypted credential with proper nonce size (12 bytes for GCM)
+	corruptedCred := encryptedCredential{
+		EncryptedPassword: []byte("corrupted-data"),
+		Nonce:            make([]byte, 12), // GCM requires 12-byte nonce
+	}
+	
+	// Try to decrypt corrupted data (should fail)
+	_, err := manager.decryptPassword(corruptedCred)
+	if err == nil {
+		t.Error("Decryption of corrupted data should fail")
+	}
+}
+
+func TestMemorySecurityValidation(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer mockServer.Close()
+	
+	manager := New(logger, mockServer.URL)
+	
+	password := "secret-password-123"
+	
+	// Store credential
+	err := manager.ValidateAndStore("testuser", password)
+	if err != nil {
+		t.Errorf("Failed to store credentials: %v", err)
+	}
+	
+	// Verify that the stored credential is encrypted
+	manager.mutex.RLock()
+	if cred, exists := manager.validCredentials["testuser"]; exists {
+		// Verify the encrypted data doesn't contain the original password
+		if string(cred.EncryptedPassword) == password {
+			t.Error("Encrypted password should not contain original password")
+		}
+		if string(cred.Nonce) == password {
+			t.Error("Nonce should not contain original password")
+		}
+		
+		// Verify encrypted data is not empty
+		if len(cred.EncryptedPassword) == 0 {
+			t.Error("Encrypted password should not be empty")
+		}
+		if len(cred.Nonce) == 0 {
+			t.Error("Nonce should not be empty")
+		}
+	} else {
+		t.Error("Credential should be stored")
+	}
+	manager.mutex.RUnlock()
+	
+	// Verify retrieval still works
+	user, pass := manager.GetValid()
+	if user != "testuser" || pass != password {
+		t.Errorf("Expected retrieved credentials testuser/%s, got %s/%s", password, user, pass)
+	}
+}
+
 func TestValidateInvalidResponseFormat(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)

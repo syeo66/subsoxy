@@ -1,6 +1,8 @@
 module github.com/syeo66/subsoxy
 
-go 1.21
+go 1.23.0
+
+toolchain go1.24.4
 
 require (
 	github.com/gorilla/mux v1.8.0
@@ -9,4 +11,4 @@ require (
 	golang.org/x/time v0.5.0
 )
 
-require golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
+require golang.org/x/sys v0.33.0 // indirect

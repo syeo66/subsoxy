@@ -11,7 +11,7 @@ This application uses a modular architecture with the following components:
 - **`database/`**: SQLite3 database operations with structured error handling and schema management
 - **`handlers/`**: HTTP request handlers for different Subsonic API endpoints with input validation
 - **`server/`**: Main proxy server logic and lifecycle management with error recovery
-- **`credentials/`**: Secure authentication and credential validation with timeout protection
+- **`credentials/`**: Secure authentication and credential validation with AES-256-GCM encryption and timeout protection
 - **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning
 - **`errors/`**: Structured error handling with categorization and context
 - **`main.go`**: Entry point that wires all modules together
@@ -20,7 +20,7 @@ This application uses a modular architecture with the following components:
 
 - **Reverse Proxy**: Forwards all requests to upstream Subsonic server with health monitoring
 - **Hook System**: Intercept and process requests at any endpoint with comprehensive error handling
-- **Credential Management**: Secure credential handling with dynamic validation, timeout protection, and thread-safe storage
+- **Credential Management**: Secure credential handling with AES-256-GCM encryption, dynamic validation, timeout protection, and thread-safe storage
 - **Song Tracking**: SQLite3 database tracks played songs with play/skip statistics and comprehensive validation
 - **Transition Probability Analysis**: Builds transition probabilities between songs for intelligent recommendations
 - **Weighted Shuffle**: Intelligent song shuffling based on play history, preferences, and transition probabilities
@@ -37,11 +37,16 @@ This application implements comprehensive security measures to protect credentia
 
 ### Credential Security ✅
 
+- **AES-256-GCM Encryption**: All passwords are encrypted in memory using industry-standard authenticated encryption
+- **Memory Protection**: Credentials are never stored in plain text, protecting against memory dumps and process inspection
+- **Unique Instance Keys**: Each server instance generates random 32-byte encryption keys for isolation
+- **Secure Memory Management**: Encrypted data is securely zeroed before deallocation
+- **Forward Security**: New encryption keys generated on each server restart
 - **No Password Logging**: Passwords are never exposed in server logs, debug output, or error messages
 - **Secure URL Encoding**: All credentials are properly encoded using `url.Values{}` to prevent logging vulnerabilities
 - **Dynamic Validation**: Credentials are validated against the upstream Subsonic server with timeout protection
-- **Thread-Safe Storage**: Valid credentials are stored in memory with mutex protection
-- **Automatic Cleanup**: Invalid credentials are automatically removed from storage
+- **Thread-Safe Storage**: Valid encrypted credentials are stored in memory with mutex protection
+- **Automatic Cleanup**: Invalid credentials are automatically and securely removed from storage
 - **No Hardcoded Credentials**: All credentials come from authenticated client requests
 
 ### Network Security
@@ -487,6 +492,17 @@ Each module has clearly defined dependencies:
 - `main.go` → `config/`, `server/` (application entry point)
 
 The `errors/` package provides the foundation for structured error handling throughout the application, while `models/` defines core data structures used across modules.
+
+### External Dependencies
+
+This application uses the following external libraries:
+
+- **`github.com/gorilla/mux`**: HTTP router for request handling and middleware
+- **`github.com/sirupsen/logrus`**: Structured logging with configurable levels and formatting
+- **`github.com/mattn/go-sqlite3`**: SQLite3 database driver for song tracking and analytics
+- **`golang.org/x/crypto`**: Cryptographic functions for AES-256-GCM credential encryption
+- **`golang.org/x/time/rate`**: Rate limiting implementation using token bucket algorithm
+- **Standard Library**: `net/http/httputil`, `crypto/aes`, `crypto/cipher`, and other Go standard packages
 
 ## License
 
