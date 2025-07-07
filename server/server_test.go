@@ -16,10 +16,13 @@ import (
 
 func TestNew(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "info",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "info",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  true,
 	}
 	defer os.Remove("test.db")
 	
@@ -56,14 +59,20 @@ func TestNew(t *testing.T) {
 	if server.shuffle == nil {
 		t.Error("Shuffle service should not be nil")
 	}
+	if server.rateLimiter == nil {
+		t.Error("Rate limiter should not be nil when enabled")
+	}
 }
 
 func TestNewWithInvalidUpstreamURL(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "://invalid-url",  // This will definitely be invalid
-		LogLevel:     "info",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "://invalid-url",  // This will definitely be invalid
+		LogLevel:          "info",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  true,
 	}
 	defer os.Remove("test.db")
 	
@@ -702,5 +711,150 @@ func TestConfigValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRateLimitingEnabled(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      2,
+		RateLimitBurst:    3,
+		RateLimitEnabled:  true,
+	}
+	defer os.Remove("test.db")
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	if server.rateLimiter == nil {
+		t.Error("Rate limiter should not be nil when enabled")
+	}
+	
+	// Test that first few requests are allowed
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+		
+		server.proxyHandler(w, req)
+		
+		// Should not be rate limited (will fail proxy connection, but that's expected)
+		if w.Code == http.StatusTooManyRequests {
+			t.Errorf("Request %d should not be rate limited", i+1)
+		}
+	}
+	
+	// Test that additional requests are rate limited
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	
+	server.proxyHandler(w, req)
+	
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected status 429, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Rate limit exceeded") {
+		t.Errorf("Expected 'Rate limit exceeded' message, got: %s", w.Body.String())
+	}
+}
+
+func TestRateLimitingDisabled(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      1,
+		RateLimitBurst:    1,
+		RateLimitEnabled:  false,
+	}
+	defer os.Remove("test.db")
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	if server.rateLimiter != nil {
+		t.Error("Rate limiter should be nil when disabled")
+	}
+	
+	// Test that many requests are allowed when rate limiting is disabled
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+		
+		server.proxyHandler(w, req)
+		
+		// Should never be rate limited
+		if w.Code == http.StatusTooManyRequests {
+			t.Errorf("Request %d should not be rate limited when rate limiting is disabled", i+1)
+		}
+	}
+}
+
+func TestRateLimitingWithHooks(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      1,
+		RateLimitBurst:    1,
+		RateLimitEnabled:  true,
+	}
+	defer os.Remove("test.db")
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	// Add a hook that handles the request
+	var hookCalled bool
+	testHook := func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		hookCalled = true
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("handled by hook"))
+		return true
+	}
+	
+	server.AddHook("/test/hook", testHook)
+	
+	// First request should be allowed and handled by hook
+	req := httptest.NewRequest("GET", "/test/hook", nil)
+	w := httptest.NewRecorder()
+	
+	server.proxyHandler(w, req)
+	
+	if !hookCalled {
+		t.Error("Hook should have been called")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "handled by hook" {
+		t.Errorf("Expected 'handled by hook', got '%s'", w.Body.String())
+	}
+	
+	// Second request should be rate limited before hook is called
+	hookCalled = false
+	req = httptest.NewRequest("GET", "/test/hook", nil)
+	w = httptest.NewRecorder()
+	
+	server.proxyHandler(w, req)
+	
+	if hookCalled {
+		t.Error("Hook should not have been called when rate limited")
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected status 429, got %d", w.Code)
 	}
 }

@@ -8,6 +8,7 @@ This module handles:
 - HTTP server setup and configuration
 - Reverse proxy implementation
 - Hook system for request interception
+- Rate limiting and DoS protection
 - Background task management (song synchronization)
 - Graceful shutdown handling
 - Request logging and monitoring
@@ -30,6 +31,7 @@ type ProxyServer struct {
     server      *http.Server
     syncTicker  *time.Ticker
     shutdownChan chan struct{}
+    rateLimiter *rate.Limiter
 }
 ```
 

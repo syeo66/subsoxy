@@ -25,6 +25,7 @@ This application uses a modular architecture with the following components:
 - **Transition Probability Analysis**: Builds transition probabilities between songs for intelligent recommendations
 - **Weighted Shuffle**: Intelligent song shuffling based on play history, preferences, and transition probabilities
 - **Automatic Sync**: Fetches and updates song library from Subsonic API with error recovery and authentication
+- **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
 - **Input Validation**: Thorough validation of all configuration parameters and API inputs
 - **Logging**: Structured logging with configurable levels and error context
@@ -63,9 +64,19 @@ This application implements comprehensive security measures to protect credentia
 - **Comprehensive Testing**: Security features are thoroughly tested with unit tests
 - **Regular Updates**: Security implementations follow Go best practices and are regularly reviewed
 
+### Rate Limiting ✅
+
+- **DoS Protection**: Comprehensive rate limiting using token bucket algorithm to prevent abuse
+- **Configurable Limits**: Adjustable requests per second (RPS) and burst size for different environments
+- **Early Filtering**: Rate limiting applied before request processing to maximize security
+- **HTTP 429 Responses**: Clean error responses for rate-limited requests with proper logging
+- **Hook Protection**: All endpoints including built-in hooks are protected from rapid requests
+- **Flexible Configuration**: Can be disabled for development or tuned for production environments
+
 ### Recent Security Improvements
 
-- **Password Logging Fix**: ✅ **RESOLVED** - Eliminated password exposure in server logs during song synchronization
+- **Rate Limiting**: ✅ **IMPLEMENTED** - Complete DoS protection with configurable token bucket rate limiting
+- **Password Logging Fix**: ✅ **RESOLVED** - Eliminated password exposure in server logs during song synchronization  
 - **Secure Authentication**: Enhanced credential validation with proper error handling
 - **Network Security**: Improved timeout handling and error context
 
@@ -90,12 +101,18 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-upstream string`: Upstream Subsonic server URL, must be valid HTTP/HTTPS URL (default: http://localhost:4533)
 - `-log-level string`: Log level - debug, info, warn, error (default: info)
 - `-db-path string`: SQLite database file path, directories will be created if needed (default: subsoxy.db)
+- `-rate-limit-rps int`: Rate limit requests per second (default: 100)
+- `-rate-limit-burst int`: Rate limit burst size (default: 200)
+- `-rate-limit-enabled`: Enable rate limiting (default: true)
 
 #### Environment variables
 - `PORT`: Proxy server port (1-65535)
 - `UPSTREAM_URL`: Upstream Subsonic server URL (HTTP/HTTPS)
 - `LOG_LEVEL`: Log level (debug, info, warn, error)
 - `DB_PATH`: SQLite database file path
+- `RATE_LIMIT_RPS`: Rate limit requests per second (default: 100)
+- `RATE_LIMIT_BURST`: Rate limit burst size (default: 200)
+- `RATE_LIMIT_ENABLED`: Enable rate limiting (default: true)
 
 #### Configuration Validation
 
@@ -104,6 +121,8 @@ The application validates all configuration parameters at startup:
 - **Upstream URL**: Must be a valid HTTP or HTTPS URL with a host
 - **Log Level**: Must be one of: debug, info, warn, error (case-insensitive)
 - **Database Path**: Parent directories will be created automatically if they don't exist
+- **Rate Limit RPS**: Must be at least 1 request per second
+- **Rate Limit Burst**: Must be at least 1 and greater than or equal to RPS
 
 If any configuration is invalid, the application will exit with a detailed error message explaining what needs to be fixed.
 
@@ -125,9 +144,88 @@ If any configuration is invalid, the application will exit with a detailed error
 # Debug logging
 ./subsoxy -log-level debug
 
+# Rate limiting examples
+./subsoxy -rate-limit-rps 50 -rate-limit-burst 100    # Moderate rate limiting
+./subsoxy -rate-limit-rps 10 -rate-limit-burst 20     # Strict rate limiting  
+./subsoxy -rate-limit-enabled=false                   # Disable rate limiting
+
 # Using environment variables
-PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db ./subsoxy
+PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db RATE_LIMIT_RPS=50 ./subsoxy
 ```
+
+## Rate Limiting
+
+The server includes comprehensive rate limiting to protect against DoS attacks and excessive usage patterns. The rate limiting uses a token bucket algorithm that allows for burst traffic while maintaining overall throughput limits.
+
+### How Rate Limiting Works
+
+- **Token Bucket Algorithm**: Implemented using `golang.org/x/time/rate` for precise rate control
+- **Early Filtering**: Rate limiting is applied before any request processing, including hooks
+- **Per-Server Limiting**: Rate limits apply to all requests to the server (not per-client)
+- **HTTP 429 Responses**: Rate-limited requests receive proper HTTP 429 status codes
+- **Structured Logging**: Rate limit violations are logged with client IP and endpoint information
+
+### Configuration
+
+Rate limiting can be configured via command-line flags or environment variables:
+
+```bash
+# Default configuration (recommended for most use cases)
+./subsoxy  # 100 RPS, 200 burst, enabled
+
+# Conservative settings (shared/public instances)
+./subsoxy -rate-limit-rps 10 -rate-limit-burst 20
+
+# Aggressive settings (high-security environments)  
+./subsoxy -rate-limit-rps 1 -rate-limit-burst 5
+
+# Development/testing (rate limiting disabled)
+./subsoxy -rate-limit-enabled=false
+
+# Environment variable configuration
+export RATE_LIMIT_RPS=50
+export RATE_LIMIT_BURST=100
+export RATE_LIMIT_ENABLED=true
+./subsoxy
+```
+
+### Rate Limiting Parameters
+
+- **RPS (Requests Per Second)**: Maximum sustained request rate (default: 100)
+- **Burst Size**: Maximum number of requests allowed in a burst (default: 200)
+- **Enabled**: Whether rate limiting is active (default: true)
+
+The burst size should typically be 1.5-2x the RPS value to allow for normal usage patterns while still providing protection against abuse.
+
+### Testing Rate Limiting
+
+You can test the rate limiting functionality using curl:
+
+```bash
+# Start server with strict rate limiting for testing
+./subsoxy -port 8081 -rate-limit-rps 2 -rate-limit-burst 3
+
+# Test rapid requests (4th+ requests should return HTTP 429)
+for i in {1..5}; do 
+  curl -s -w "Request $i - Status: %{http_code}\n" http://localhost:8081/test -o /dev/null
+done
+```
+
+### Rate Limiting vs. Hooks
+
+Rate limiting is applied **before** hook processing, which means:
+
+- Rate-limited requests never reach hooks or the upstream server
+- Built-in endpoints (like `/rest/getRandomSongs`) are protected
+- Hook processing overhead is avoided for rate-limited requests
+- Maximum security with minimal performance impact
+
+### Production Recommendations
+
+- **Web servers**: 50-100 RPS with 100-200 burst
+- **API servers**: 20-50 RPS with 50-100 burst  
+- **Public instances**: 5-20 RPS with 10-40 burst
+- **Development**: Disable rate limiting for easier testing
 
 ## Hook System
 

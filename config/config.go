@@ -11,26 +11,35 @@ import (
 )
 
 type Config struct {
-	ProxyPort    string
-	UpstreamURL  string
-	LogLevel     string
-	DatabasePath string
+	ProxyPort         string
+	UpstreamURL       string
+	LogLevel          string
+	DatabasePath      string
+	RateLimitRPS      int
+	RateLimitBurst    int
+	RateLimitEnabled  bool
 }
 
 func New() (*Config, error) {
 	var (
-		port     = flag.String("port", getEnvOrDefault("PORT", "8080"), "Proxy server port")
-		upstream = flag.String("upstream", getEnvOrDefault("UPSTREAM_URL", "http://localhost:4533"), "Upstream Subsonic server URL")
-		logLevel = flag.String("log-level", getEnvOrDefault("LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
-		dbPath   = flag.String("db-path", getEnvOrDefault("DB_PATH", "subsoxy.db"), "Database file path")
+		port             = flag.String("port", getEnvOrDefault("PORT", "8080"), "Proxy server port")
+		upstream         = flag.String("upstream", getEnvOrDefault("UPSTREAM_URL", "http://localhost:4533"), "Upstream Subsonic server URL")
+		logLevel         = flag.String("log-level", getEnvOrDefault("LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
+		dbPath           = flag.String("db-path", getEnvOrDefault("DB_PATH", "subsoxy.db"), "Database file path")
+		rateLimitRPS     = flag.Int("rate-limit-rps", getEnvIntOrDefault("RATE_LIMIT_RPS", 100), "Rate limit requests per second")
+		rateLimitBurst   = flag.Int("rate-limit-burst", getEnvIntOrDefault("RATE_LIMIT_BURST", 200), "Rate limit burst size")
+		rateLimitEnabled = flag.Bool("rate-limit-enabled", getEnvBoolOrDefault("RATE_LIMIT_ENABLED", true), "Enable rate limiting")
 	)
 	flag.Parse()
 
 	config := &Config{
-		ProxyPort:    *port,
-		UpstreamURL:  *upstream,
-		LogLevel:     *logLevel,
-		DatabasePath: *dbPath,
+		ProxyPort:         *port,
+		UpstreamURL:       *upstream,
+		LogLevel:          *logLevel,
+		DatabasePath:      *dbPath,
+		RateLimitRPS:      *rateLimitRPS,
+		RateLimitBurst:    *rateLimitBurst,
+		RateLimitEnabled:  *rateLimitEnabled,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -55,6 +64,10 @@ func (c *Config) Validate() error {
 	}
 	
 	if err := c.validateDatabasePath(); err != nil {
+		return err
+	}
+	
+	if err := c.validateRateLimit(); err != nil {
 		return err
 	}
 	
@@ -145,9 +158,47 @@ func (c *Config) validateDatabasePath() error {
 	return nil
 }
 
+func (c *Config) validateRateLimit() error {
+	if c.RateLimitRPS < 1 {
+		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_RPS", "rate limit RPS must be at least 1").
+			WithContext("rps", c.RateLimitRPS)
+	}
+	
+	if c.RateLimitBurst < 1 {
+		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_BURST", "rate limit burst must be at least 1").
+			WithContext("burst", c.RateLimitBurst)
+	}
+	
+	if c.RateLimitBurst < c.RateLimitRPS {
+		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_BURST", "rate limit burst must be at least equal to RPS").
+			WithContext("burst", c.RateLimitBurst).
+			WithContext("rps", c.RateLimitRPS)
+	}
+	
+	return nil
+}
+
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvIntOrDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBoolOrDefault(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
 	}
 	return defaultValue
 }

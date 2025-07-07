@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	
 	"github.com/syeo66/subsoxy/config"
 	"github.com/syeo66/subsoxy/errors"
@@ -34,6 +35,7 @@ type ProxyServer struct {
 	server      *http.Server
 	syncTicker  *time.Ticker
 	shutdownChan chan struct{}
+	rateLimiter *rate.Limiter
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -70,6 +72,17 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	shuffleService := shuffle.New(db, logger)
 	handlersService := handlers.New(logger, shuffleService)
 
+	var rateLimiter *rate.Limiter
+	if cfg.RateLimitEnabled {
+		rateLimiter = rate.NewLimiter(rate.Limit(cfg.RateLimitRPS), cfg.RateLimitBurst)
+		logger.WithFields(logrus.Fields{
+			"rps":   cfg.RateLimitRPS,
+			"burst": cfg.RateLimitBurst,
+		}).Info("Rate limiting enabled")
+	} else {
+		logger.Info("Rate limiting disabled")
+	}
+
 	server := &ProxyServer{
 		config:      cfg,
 		logger:      logger,
@@ -80,6 +93,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		handlers:    handlersService,
 		shuffle:     shuffleService,
 		shutdownChan: make(chan struct{}),
+		rateLimiter: rateLimiter,
 	}
 
 	go server.syncSongs()
@@ -99,6 +113,18 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		"endpoint": endpoint,
 		"remote":   r.RemoteAddr,
 	}).Info("Incoming request")
+
+	if ps.rateLimiter != nil {
+		if !ps.rateLimiter.Allow() {
+			ps.logger.WithFields(logrus.Fields{
+				"endpoint": endpoint,
+				"remote":   r.RemoteAddr,
+			}).Warn("Rate limit exceeded")
+			
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+	}
 
 	if strings.HasPrefix(endpoint, "/rest/") {
 		username := r.URL.Query().Get("u")

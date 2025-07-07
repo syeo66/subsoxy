@@ -32,6 +32,9 @@ if err != nil {
 | `-upstream` | `UPSTREAM_URL` | `http://localhost:4533` | Valid HTTP/HTTPS URL | Upstream Subsonic server URL |
 | `-log-level` | `LOG_LEVEL` | `info` | debug/info/warn/error | Log level (case-insensitive) |
 | `-db-path` | `DB_PATH` | `subsoxy.db` | Valid file path | SQLite database file path |
+| `-rate-limit-rps` | `RATE_LIMIT_RPS` | `100` | ≥1 | Rate limit requests per second |
+| `-rate-limit-burst` | `RATE_LIMIT_BURST` | `200` | ≥1, ≥RPS | Rate limit burst size |
+| `-rate-limit-enabled` | `RATE_LIMIT_ENABLED` | `true` | true/false | Enable rate limiting |
 
 ## Validation Details
 

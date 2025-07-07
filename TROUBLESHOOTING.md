@@ -201,6 +201,70 @@ grep -i password /var/log/subsoxy.log  # Should return no results
 - Maintains full functionality while securing credential handling
 - Follows the same secure pattern used in credential validation
 
+### Rate Limiting Issues
+
+**Error**: `[config:INVALID_RATE_LIMIT_RPS] rate limit RPS must be at least 1`
+
+**Causes:**
+- Invalid rate limit configuration
+- RPS set to 0 or negative value
+- Burst size smaller than RPS
+
+**Solutions:**
+```bash
+# Fix invalid RPS
+./subsoxy -rate-limit-rps 10    # Instead of -rate-limit-rps 0
+
+# Fix burst size
+./subsoxy -rate-limit-rps 10 -rate-limit-burst 20  # Burst >= RPS
+
+# Check environment variables
+echo $RATE_LIMIT_RPS    # Should be ≥1
+echo $RATE_LIMIT_BURST  # Should be ≥RPS
+```
+
+**Common Rate Limiting Problems:**
+
+1. **Too Many 429 Responses**
+   ```bash
+   # Increase rate limits for high-traffic scenarios
+   ./subsoxy -rate-limit-rps 200 -rate-limit-burst 400
+   
+   # Or disable temporarily for debugging
+   ./subsoxy -rate-limit-enabled=false
+   ```
+
+2. **Rate Limiting Not Working**
+   ```bash
+   # Verify rate limiting is enabled
+   ./subsoxy -rate-limit-enabled=true -log-level debug
+   
+   # Test with rapid requests
+   for i in {1..10}; do curl -s -o /dev/null -w "Status: %{http_code}\n" http://localhost:8080/test; done
+   ```
+
+3. **Development/Testing Issues**
+   ```bash
+   # Disable rate limiting for development
+   ./subsoxy -rate-limit-enabled=false
+   
+   # Use very high limits for testing
+   ./subsoxy -rate-limit-rps 10000 -rate-limit-burst 20000
+   ```
+
+**Rate Limiting Log Patterns:**
+```bash
+# Rate limit violations
+grep "Rate limit exceeded" subsoxy.log
+
+# Rate limiting configuration
+grep "Rate limiting enabled" subsoxy.log
+grep "Rate limiting disabled" subsoxy.log
+
+# Monitor rate limiting in real-time
+./subsoxy -log-level debug 2>&1 | grep -E "(Rate limit|429)"
+```
+
 ## Authentication Issues
 
 ### Invalid Credentials
