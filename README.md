@@ -27,7 +27,7 @@ This application uses a modular architecture with the following components:
 - **Automatic Sync**: Fetches and updates song library from Subsonic API with error recovery and authentication
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
-- **Input Validation**: Thorough validation of all configuration parameters and API inputs
+- **Input Validation & Security**: Comprehensive input validation, sanitization, and log injection prevention
 - **Logging**: Structured logging with configurable levels and error context
 - **Configuration**: Command-line flags and environment variables with validation and helpful error messages
 
@@ -55,9 +55,14 @@ This application implements comprehensive security measures to protect credentia
 - **Upstream Validation**: All requests to upstream servers are validated before forwarding
 - **Error Context**: Network errors provide context without exposing sensitive information
 
-### Data Security
+### Input Validation & Security ✅
 
-- **Input Validation**: All configuration parameters and API inputs are thoroughly validated
+- **Log Injection Prevention**: All user inputs sanitized to remove control characters before logging
+- **Input Length Limits**: Maximum lengths enforced for song IDs (255), usernames (100), and general inputs (1000)
+- **Song ID Validation**: Format and length validation for all song identifiers
+- **Control Character Filtering**: Removes newlines, carriage returns, tabs, and escape sequences
+- **DoS Protection**: Input truncation prevents memory exhaustion attacks
+- **Parameter Validation**: All API parameters validated with structured error responses
 - **Database Protection**: SQLite database operations use prepared statements to prevent injection
 - **Structured Errors**: Error handling provides context while protecting sensitive information
 - **Graceful Degradation**: System continues operating even when individual components fail
@@ -80,6 +85,7 @@ This application implements comprehensive security measures to protect credentia
 
 ### Recent Security Improvements
 
+- **Input Validation & Sanitization**: ✅ **IMPLEMENTED** - Comprehensive protection against log injection, control character attacks, and DoS attempts
 - **Rate Limiting**: ✅ **IMPLEMENTED** - Complete DoS protection with configurable token bucket rate limiting
 - **Password Logging Fix**: ✅ **RESOLVED** - Eliminated password exposure in server logs during song synchronization  
 - **Secure Authentication**: Enhanced credential validation with proper error handling

@@ -23,6 +23,12 @@ import (
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
+const (
+	MaxEndpointLength = 1000
+	MaxUsernameLength = 100
+	MaxRemoteAddrLength = 100
+)
+
 type ProxyServer struct {
 	config      *config.Config
 	logger      *logrus.Logger
@@ -101,6 +107,50 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	return server, nil
 }
 
+// sanitizeForLogging removes control characters and limits length to prevent log injection
+func sanitizeForLogging(input string) string {
+	// Remove control characters (ASCII 0-31 and 127)
+	sanitized := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, input)
+	
+	// Limit length to prevent resource exhaustion
+	if len(sanitized) > MaxEndpointLength {
+		sanitized = sanitized[:MaxEndpointLength] + "..."
+	}
+	
+	return sanitized
+}
+
+// sanitizeRemoteAddr sanitizes remote address for logging
+func sanitizeRemoteAddr(remoteAddr string) string {
+	if len(remoteAddr) > MaxRemoteAddrLength {
+		return remoteAddr[:MaxRemoteAddrLength] + "..."
+	}
+	return remoteAddr
+}
+
+// sanitizeUsername sanitizes username for logging
+func sanitizeUsername(username string) string {
+	// Remove control characters
+	sanitized := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, username)
+	
+	// Limit length
+	if len(sanitized) > MaxUsernameLength {
+		sanitized = sanitized[:MaxUsernameLength] + "..."
+	}
+	
+	return sanitized
+}
+
 func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 	ps.hooks[endpoint] = append(ps.hooks[endpoint], hook)
 }
@@ -108,17 +158,21 @@ func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	endpoint := r.URL.Path
 	
+	// Sanitize inputs for logging
+	sanitizedEndpoint := sanitizeForLogging(endpoint)
+	sanitizedRemoteAddr := sanitizeRemoteAddr(r.RemoteAddr)
+	
 	ps.logger.WithFields(logrus.Fields{
 		"method":   r.Method,
-		"endpoint": endpoint,
-		"remote":   r.RemoteAddr,
+		"endpoint": sanitizedEndpoint,
+		"remote":   sanitizedRemoteAddr,
 	}).Info("Incoming request")
 
 	if ps.rateLimiter != nil {
 		if !ps.rateLimiter.Allow() {
 			ps.logger.WithFields(logrus.Fields{
-				"endpoint": endpoint,
-				"remote":   r.RemoteAddr,
+				"endpoint": sanitizedEndpoint,
+				"remote":   sanitizedRemoteAddr,
 			}).Warn("Rate limit exceeded")
 			
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
@@ -129,10 +183,20 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(endpoint, "/rest/") {
 		username := r.URL.Query().Get("u")
 		password := r.URL.Query().Get("p")
+		
+		// Validate input lengths
+		if len(username) > MaxUsernameLength {
+			ps.logger.WithFields(logrus.Fields{
+				"username_length": len(username),
+				"max_length": MaxUsernameLength,
+			}).Warn("Username too long, truncating")
+			username = username[:MaxUsernameLength]
+		}
+		
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
 			go func() {
 				if err := ps.credentials.ValidateAndStore(username, password); err != nil {
-					ps.logger.WithError(err).WithField("username", username).Debug("Failed to validate credentials")
+					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Debug("Failed to validate credentials")
 				}
 			}()
 		}
@@ -147,7 +211,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(endpoint, "/rest/") {
-		ps.logger.WithField("endpoint", endpoint).Debug("Subsonic API endpoint")
+		ps.logger.WithField("endpoint", sanitizedEndpoint).Debug("Subsonic API endpoint")
 	}
 
 	ps.proxy.ServeHTTP(w, r)
@@ -308,10 +372,18 @@ func (ps *ProxyServer) RecordPlayEvent(songID, eventType string, previousSong *s
 		}
 	}
 
+	// Sanitize song IDs for logging
+	sanitizedSongID := sanitizeForLogging(songID)
+	var sanitizedPreviousSong *string
+	if previousSong != nil {
+		sanitized := sanitizeForLogging(*previousSong)
+		sanitizedPreviousSong = &sanitized
+	}
+
 	ps.logger.WithFields(logrus.Fields{
-		"songId":       songID,
+		"songId":       sanitizedSongID,
 		"eventType":    eventType,
-		"previousSong": previousSong,
+		"previousSong": sanitizedPreviousSong,
 	}).Debug("Recorded play event")
 }
 

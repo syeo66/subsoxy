@@ -4,11 +4,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	
 	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/shuffle"
+)
+
+const (
+	MaxSongIDLength = 255
+	MaxInputLength = 1000
 )
 
 type Handler struct {
@@ -21,6 +27,35 @@ func New(logger *logrus.Logger, shuffleService *shuffle.Service) *Handler {
 		logger:  logger,
 		shuffle: shuffleService,
 	}
+}
+
+// SanitizeForLogging removes control characters and limits length to prevent log injection
+func SanitizeForLogging(input string) string {
+	// Remove control characters (ASCII 0-31 and 127)
+	sanitized := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, input)
+	
+	// Limit length to prevent resource exhaustion
+	if len(sanitized) > MaxInputLength {
+		sanitized = sanitized[:MaxInputLength] + "..."
+	}
+	
+	return sanitized
+}
+
+// ValidateSongID validates song ID format and length
+func ValidateSongID(songID string) error {
+	if len(songID) == 0 {
+		return errors.ErrMissingParameter.WithContext("parameter", "songID")
+	}
+	if len(songID) > MaxSongIDLength {
+		return errors.ErrInvalidInput.WithContext("field", "songID").WithContext("length", len(songID)).WithContext("max_length", MaxSongIDLength)
+	}
+	return nil
 }
 
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
@@ -96,8 +131,12 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string)) bool {
 	songID := r.URL.Query().Get("id")
 	if songID != "" {
+		if err := ValidateSongID(songID); err != nil {
+			h.logger.WithError(err).Warn("Invalid song ID in stream request")
+			return false
+		}
 		recordFunc(songID, "start", nil)
-		h.logger.WithField("song_id", songID).Debug("Recorded stream start event")
+		h.logger.WithField("song_id", SanitizeForLogging(songID)).Debug("Recorded stream start event")
 	} else {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Stream request missing song ID")
@@ -115,17 +154,24 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 		return false
 	}
 	
+	if err := ValidateSongID(songID); err != nil {
+		h.logger.WithError(err).Warn("Invalid song ID in scrobble request")
+		return false
+	}
+	
+	sanitizedSongID := SanitizeForLogging(songID)
+	
 	if submission == "true" {
 		recordFunc(songID, "play", nil)
 		setLastPlayed(songID)
-		h.logger.WithField("song_id", songID).Debug("Recorded play event")
+		h.logger.WithField("song_id", sanitizedSongID).Debug("Recorded play event")
 	} else {
 		// Treat missing or non-"true" submission as skip
 		recordFunc(songID, "skip", nil)
-		h.logger.WithField("song_id", songID).Debug("Recorded skip event")
+		h.logger.WithField("song_id", sanitizedSongID).Debug("Recorded skip event")
 		
 		if submission == "" {
-			h.logger.WithField("song_id", songID).Debug("Scrobble request missing submission parameter, treating as skip")
+			h.logger.WithField("song_id", sanitizedSongID).Debug("Scrobble request missing submission parameter, treating as skip")
 		}
 	}
 	

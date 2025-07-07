@@ -6,12 +6,13 @@ The server module provides the main proxy server implementation with request rou
 
 This module handles:
 - HTTP server setup and configuration
-- Reverse proxy implementation
+- Reverse proxy implementation with comprehensive input validation
 - Hook system for request interception
 - Rate limiting and DoS protection
+- Input sanitization and log injection prevention
 - Background task management (song synchronization)
 - Graceful shutdown handling
-- Request logging and monitoring
+- Request logging and monitoring with sanitized inputs
 
 ## Core Components
 
@@ -327,14 +328,122 @@ router := mux.NewRouter()
 router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 ```
 
+## Input Validation and Security
+
+### Input Sanitization Functions
+
+**Log Injection Prevention**:
+```go
+// sanitizeForLogging removes control characters and limits length to prevent log injection
+func sanitizeForLogging(input string) string {
+    // Remove control characters (ASCII 0-31 and 127)
+    sanitized := strings.Map(func(r rune) rune {
+        if r < 32 || r == 127 {
+            return -1
+        }
+        return r
+    }, input)
+    
+    // Limit length to prevent resource exhaustion
+    if len(sanitized) > MaxEndpointLength {
+        sanitized = sanitized[:MaxEndpointLength] + "..."
+    }
+    
+    return sanitized
+}
+
+// sanitizeUsername sanitizes username for logging
+func sanitizeUsername(username string) string {
+    // Remove control characters
+    sanitized := strings.Map(func(r rune) rune {
+        if r < 32 || r == 127 {
+            return -1
+        }
+        return r
+    }, username)
+    
+    // Limit length
+    if len(sanitized) > MaxUsernameLength {
+        sanitized = sanitized[:MaxUsernameLength] + "..."
+    }
+    
+    return sanitized
+}
+```
+
+**Security Constants**:
+```go
+const (
+    MaxEndpointLength = 1000
+    MaxUsernameLength = 100
+    MaxRemoteAddrLength = 100
+)
+```
+
+### Secure Request Processing
+
+**Safe Request Logging**:
+```go
+func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
+    endpoint := r.URL.Path
+    
+    // Sanitize inputs for logging
+    sanitizedEndpoint := sanitizeForLogging(endpoint)
+    sanitizedRemoteAddr := sanitizeRemoteAddr(r.RemoteAddr)
+    
+    ps.logger.WithFields(logrus.Fields{
+        "method":   r.Method,
+        "endpoint": sanitizedEndpoint,
+        "remote":   sanitizedRemoteAddr,
+    }).Info("Incoming request")
+    
+    // Rate limiting check...
+    // Username validation with length limits...
+    
+    if strings.HasPrefix(endpoint, "/rest/") {
+        username := r.URL.Query().Get("u")
+        password := r.URL.Query().Get("p")
+        
+        // Validate input lengths
+        if len(username) > MaxUsernameLength {
+            ps.logger.WithFields(logrus.Fields{
+                "username_length": len(username),
+                "max_length": MaxUsernameLength,
+            }).Warn("Username too long, truncating")
+            username = username[:MaxUsernameLength]
+        }
+        
+        if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
+            go func() {
+                if err := ps.credentials.ValidateAndStore(username, password); err != nil {
+                    ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Debug("Failed to validate credentials")
+                }
+            }()
+        }
+    }
+    
+    // Hook processing and proxy forwarding...
+}
+```
+
+### Security Benefits
+
+- **Log Injection Prevention**: All user inputs sanitized before logging
+- **Control Character Filtering**: Newlines, carriage returns, tabs, and escape sequences removed
+- **DoS Protection**: Input length limits prevent memory exhaustion attacks
+- **Username Validation**: Long usernames truncated with warnings
+- **Endpoint Sanitization**: Malicious paths sanitized for safe logging
+- **Remote Address Filtering**: Client addresses sanitized to prevent log pollution
+
 ## Monitoring and Logging
 
 ### Request Logging
 ```go
+// Sanitized logging with security protections
 ps.logger.WithFields(logrus.Fields{
     "method":   r.Method,
-    "endpoint": endpoint,
-    "remote":   r.RemoteAddr,
+    "endpoint": sanitizedEndpoint,
+    "remote":   sanitizedRemoteAddr,
 }).Info("Incoming request")
 ```
 

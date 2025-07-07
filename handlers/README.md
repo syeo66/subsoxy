@@ -5,10 +5,11 @@ The handlers module provides HTTP request handlers for different Subsonic API en
 ## Overview
 
 This module handles:
-- Endpoint-specific request processing
+- Endpoint-specific request processing with comprehensive input validation
+- Input sanitization and security protection against log injection attacks
 - Response formatting and serialization
 - Integration with shuffle service
-- Error handling and logging
+- Error handling and logging with sanitized inputs
 - Custom business logic for enhanced features
 
 ## Handler Types
@@ -169,17 +170,87 @@ if err != nil {
 }
 ```
 
-### Parameter Validation
+### Input Validation and Sanitization
+
+**Parameter Validation with Size Limits**:
 ```go
-// Parse and validate size parameter
+// Parse and validate size parameter with comprehensive error handling
 sizeStr := r.URL.Query().Get("size")
 size := 50  // default
 if sizeStr != "" {
-    if parsedSize, err := strconv.Atoi(sizeStr); err == nil && parsedSize > 0 {
-        size = parsedSize
+    if parsedSize, err := strconv.Atoi(sizeStr); err == nil {
+        if parsedSize > 10000 { // Prevent extremely large requests
+            validationErr := errors.ErrValidationFailed.WithContext("field", "size").
+                WithContext("value", parsedSize).
+                WithContext("max_allowed", 10000)
+            h.logger.WithError(validationErr).Warn("Size parameter too large")
+            http.Error(w, "Size parameter too large (max: 10000)", http.StatusBadRequest)
+            return true
+        }
+        if parsedSize > 0 { // Only use valid positive sizes
+            size = parsedSize
+        }
+    } else {
+        validationErr := errors.ErrInvalidInput.WithContext("field", "size").
+            WithContext("value", sizeStr)
+        h.logger.WithError(validationErr).Warn("Invalid size parameter")
+        http.Error(w, "Invalid size parameter", http.StatusBadRequest)
+        return true
     }
-    // Invalid sizes are ignored, default is used
 }
+```
+
+**Song ID Validation and Sanitization**:
+```go
+// Validate song ID format and length
+func ValidateSongID(songID string) error {
+    if len(songID) == 0 {
+        return errors.ErrMissingParameter.WithContext("parameter", "songID")
+    }
+    if len(songID) > MaxSongIDLength {
+        return errors.ErrInvalidInput.WithContext("field", "songID").
+            WithContext("length", len(songID)).
+            WithContext("max_length", MaxSongIDLength)
+    }
+    return nil
+}
+
+// Sanitize inputs for logging to prevent log injection
+func SanitizeForLogging(input string) string {
+    // Remove control characters (ASCII 0-31 and 127)
+    sanitized := strings.Map(func(r rune) rune {
+        if r < 32 || r == 127 {
+            return -1
+        }
+        return r
+    }, input)
+    
+    // Limit length to prevent resource exhaustion
+    if len(sanitized) > MaxInputLength {
+        sanitized = sanitized[:MaxInputLength] + "..."
+    }
+    
+    return sanitized
+}
+
+// Example usage in stream handler
+songID := r.URL.Query().Get("id")
+if songID != "" {
+    if err := ValidateSongID(songID); err != nil {
+        h.logger.WithError(err).Warn("Invalid song ID in stream request")
+        return false
+    }
+    recordFunc(songID, "start", nil)
+    h.logger.WithField("song_id", SanitizeForLogging(songID)).Debug("Recorded stream start event")
+}
+```
+
+**Security Constants**:
+```go
+const (
+    MaxSongIDLength = 255
+    MaxInputLength = 1000
+)
 ```
 
 ## Response Formats
