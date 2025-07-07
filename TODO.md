@@ -185,11 +185,13 @@ The application currently stores all data globally (shared across all users). Th
 
 ### Migration Strategy
 
+Since the project is not in productive use, no data migration is needed:
+
 1. Add new schema with `user_id` fields
-2. Migrate existing data (assign to default user or prompt for assignment)
+2. ~~Migrate existing data~~ (Not needed - no production data)
 3. Update application code to use user-specific operations
 4. Test thoroughly with multiple users
-5. Remove old global data structures
+5. ~~Remove old global data structures~~ (Not needed - direct implementation of new schema)
 
 ## Implementation Priority Order
 
