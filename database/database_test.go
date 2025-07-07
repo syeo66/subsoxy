@@ -1,9 +1,13 @@
 package database
 
+import "fmt"
+
 import (
 	"database/sql"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/syeo66/subsoxy/models"
@@ -653,4 +657,266 @@ func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 	if prob != 0.5 {
 		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
 	}
+}
+
+// Connection Pool Tests
+
+func TestDefaultPoolConfig(t *testing.T) {
+	config := DefaultPoolConfig()
+	
+	if config.MaxOpenConns != 25 {
+		t.Errorf("Expected MaxOpenConns 25, got %d", config.MaxOpenConns)
+	}
+	if config.MaxIdleConns != 5 {
+		t.Errorf("Expected MaxIdleConns 5, got %d", config.MaxIdleConns)
+	}
+	if config.ConnMaxLifetime != 30*time.Minute {
+		t.Errorf("Expected ConnMaxLifetime 30m, got %v", config.ConnMaxLifetime)
+	}
+	if config.ConnMaxIdleTime != 5*time.Minute {
+		t.Errorf("Expected ConnMaxIdleTime 5m, got %v", config.ConnMaxIdleTime)
+	}
+	if !config.HealthCheck {
+		t.Error("Expected HealthCheck to be true")
+	}
+}
+
+func TestNewWithPool(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_pool.db"
+	defer os.Remove(dbPath)
+	
+	poolConfig := &ConnectionPool{
+		MaxOpenConns:    10,
+		MaxIdleConns:    3,
+		ConnMaxLifetime: 15 * time.Minute,
+		ConnMaxIdleTime: 2 * time.Minute,
+		HealthCheck:     false, // Disable for test to avoid goroutine
+	}
+	
+	db, err := NewWithPool(dbPath, logger, poolConfig)
+	if err != nil {
+		t.Fatalf("Failed to create database with pool: %v", err)
+	}
+	defer db.Close()
+	
+	if db.pool.MaxOpenConns != 10 {
+		t.Errorf("Expected MaxOpenConns 10, got %d", db.pool.MaxOpenConns)
+	}
+	if db.pool.MaxIdleConns != 3 {
+		t.Errorf("Expected MaxIdleConns 3, got %d", db.pool.MaxIdleConns)
+	}
+	if db.pool.ConnMaxLifetime != 15*time.Minute {
+		t.Errorf("Expected ConnMaxLifetime 15m, got %v", db.pool.ConnMaxLifetime)
+	}
+}
+
+func TestUpdatePoolConfig(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_update.db"
+	defer os.Remove(dbPath)
+	
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	// Test valid config update
+	newConfig := &ConnectionPool{
+		MaxOpenConns:    15,
+		MaxIdleConns:    7,
+		ConnMaxLifetime: 20 * time.Minute,
+		ConnMaxIdleTime: 3 * time.Minute,
+		HealthCheck:     false,
+	}
+	
+	err = db.UpdatePoolConfig(newConfig)
+	if err != nil {
+		t.Errorf("Failed to update pool config: %v", err)
+	}
+	
+	if db.pool.MaxOpenConns != 15 {
+		t.Errorf("Expected MaxOpenConns 15, got %d", db.pool.MaxOpenConns)
+	}
+	
+	// Test invalid config (max idle > max open)
+	invalidConfig := &ConnectionPool{
+		MaxOpenConns: 10,
+		MaxIdleConns: 15, // Invalid: > MaxOpenConns
+	}
+	
+	err = db.UpdatePoolConfig(invalidConfig)
+	if err == nil {
+		t.Error("Expected error for invalid pool config")
+	}
+	
+	// Test invalid config (zero max open)
+	invalidConfig2 := &ConnectionPool{
+		MaxOpenConns: 0, // Invalid
+		MaxIdleConns: 1,
+	}
+	
+	err = db.UpdatePoolConfig(invalidConfig2)
+	if err == nil {
+		t.Error("Expected error for zero max open connections")
+	}
+}
+
+func TestGetConnectionStats(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_stats.db"
+	defer os.Remove(dbPath)
+	
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	stats := db.GetConnectionStats()
+	
+	// Basic validation that stats are being tracked
+	if stats.OpenConnections < 0 {
+		t.Errorf("OpenConnections should not be negative, got %d", stats.OpenConnections)
+	}
+	if stats.IdleConnections < 0 {
+		t.Errorf("IdleConnections should not be negative, got %d", stats.IdleConnections)
+	}
+}
+
+func TestPerformHealthCheck(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_health.db"
+	defer os.Remove(dbPath)
+	
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	// Perform health check manually
+	db.performHealthCheck()
+	
+	stats := db.GetConnectionStats()
+	if stats.HealthChecks == 0 {
+		t.Error("Expected health check count to be > 0")
+	}
+	if stats.LastHealthCheck.IsZero() {
+		t.Error("Expected LastHealthCheck to be set")
+	}
+}
+
+func TestConcurrentDatabaseAccess(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_concurrent.db"
+	defer os.Remove(dbPath)
+	
+	// Use a smaller pool for testing concurrency
+	poolConfig := &ConnectionPool{
+		MaxOpenConns:    5,
+		MaxIdleConns:    2,
+		ConnMaxLifetime: 1 * time.Minute,
+		ConnMaxIdleTime: 10 * time.Second,
+		HealthCheck:     false, // Disable to avoid interfering with test
+	}
+	
+	db, err := NewWithPool(dbPath, logger, poolConfig)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	// Store test songs first
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
+		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
+		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 280},
+	}
+	
+	err = db.StoreSongs(songs)
+	if err != nil {
+		t.Fatalf("Failed to store test songs: %v", err)
+	}
+	
+	// Run concurrent operations
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	operationsPerGoroutine := 5
+	
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			
+			for j := 0; j < operationsPerGoroutine; j++ {
+				// Mix of different database operations
+				switch j % 4 {
+				case 0:
+					// Record play event
+					songID := fmt.Sprintf("%d", (goroutineID%3)+1)
+					err := db.RecordPlayEvent(songID, "play", nil)
+					if err != nil {
+						t.Errorf("Goroutine %d: RecordPlayEvent failed: %v", goroutineID, err)
+					}
+				case 1:
+					// Get all songs
+					_, err := db.GetAllSongs()
+					if err != nil {
+						t.Errorf("Goroutine %d: GetAllSongs failed: %v", goroutineID, err)
+					}
+				case 2:
+					// Record transition
+					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
+					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
+					err := db.RecordTransition(fromSong, toSong, "play")
+					if err != nil {
+						t.Errorf("Goroutine %d: RecordTransition failed: %v", goroutineID, err)
+					}
+				case 3:
+					// Get transition probability
+					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
+					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
+					_, err := db.GetTransitionProbability(fromSong, toSong)
+					if err != nil {
+						t.Errorf("Goroutine %d: GetTransitionProbability failed: %v", goroutineID, err)
+					}
+				}
+			}
+		}(i)
+	}
+	
+	// Wait for all goroutines to complete
+	wg.Wait()
+	
+	// Verify that operations completed successfully
+	allSongs, err := db.GetAllSongs()
+	if err != nil {
+		t.Errorf("Failed to get songs after concurrent test: %v", err)
+	}
+	if len(allSongs) != 3 {
+		t.Errorf("Expected 3 songs after concurrent test, got %d", len(allSongs))
+	}
+	
+	// Check that some play events were recorded
+	totalPlayCount := 0
+	for _, song := range allSongs {
+		totalPlayCount += song.PlayCount
+	}
+	if totalPlayCount == 0 {
+		t.Error("Expected some play events to be recorded during concurrent test")
+	}
+	
+	t.Logf("Concurrent test completed successfully with %d total plays", totalPlayCount)
 }

@@ -22,6 +22,7 @@ This application uses a modular architecture with the following components:
 - **Hook System**: Intercept and process requests at any endpoint with comprehensive error handling
 - **Credential Management**: Secure credential handling with AES-256-GCM encryption, dynamic validation, timeout protection, and thread-safe storage
 - **Song Tracking**: SQLite3 database tracks played songs with play/skip statistics and comprehensive validation
+- **Database Connection Pooling**: Advanced connection pool management with health monitoring for optimal performance
 - **Transition Probability Analysis**: Builds transition probabilities between songs for intelligent recommendations
 - **Weighted Shuffle**: Intelligent song shuffling based on play history, preferences, and transition probabilities
 - **Automatic Sync**: Fetches and updates song library from Subsonic API with error recovery and authentication
@@ -115,6 +116,11 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-rate-limit-rps int`: Rate limit requests per second (default: 100)
 - `-rate-limit-burst int`: Rate limit burst size (default: 200)
 - `-rate-limit-enabled`: Enable rate limiting (default: true)
+- `-db-max-open-conns int`: Maximum number of open database connections (default: 25)
+- `-db-max-idle-conns int`: Maximum number of idle database connections (default: 5)
+- `-db-conn-max-lifetime duration`: Maximum connection lifetime (default: 30m)
+- `-db-conn-max-idle-time duration`: Maximum connection idle time (default: 5m)
+- `-db-health-check`: Enable database health checks (default: true)
 
 #### Environment variables
 - `PORT`: Proxy server port (1-65535)
@@ -124,6 +130,11 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `RATE_LIMIT_RPS`: Rate limit requests per second (default: 100)
 - `RATE_LIMIT_BURST`: Rate limit burst size (default: 200)
 - `RATE_LIMIT_ENABLED`: Enable rate limiting (default: true)
+- `DB_MAX_OPEN_CONNS`: Maximum number of open database connections (default: 25)
+- `DB_MAX_IDLE_CONNS`: Maximum number of idle database connections (default: 5)
+- `DB_CONN_MAX_LIFETIME`: Maximum connection lifetime (default: 30m)
+- `DB_CONN_MAX_IDLE_TIME`: Maximum connection idle time (default: 5m)
+- `DB_HEALTH_CHECK`: Enable database health checks (default: true)
 
 #### Configuration Validation
 
@@ -134,6 +145,9 @@ The application validates all configuration parameters at startup:
 - **Database Path**: Parent directories will be created automatically if they don't exist
 - **Rate Limit RPS**: Must be at least 1 request per second
 - **Rate Limit Burst**: Must be at least 1 and greater than or equal to RPS
+- **DB Max Open Connections**: Must be at least 1 connection
+- **DB Max Idle Connections**: Cannot be negative or exceed max open connections
+- **DB Connection Lifetimes**: Cannot be negative durations
 
 If any configuration is invalid, the application will exit with a detailed error message explaining what needs to be fixed.
 
@@ -160,8 +174,13 @@ If any configuration is invalid, the application will exit with a detailed error
 ./subsoxy -rate-limit-rps 10 -rate-limit-burst 20     # Strict rate limiting  
 ./subsoxy -rate-limit-enabled=false                   # Disable rate limiting
 
+# Database connection pool examples
+./subsoxy -db-max-open-conns 50 -db-max-idle-conns 10 -db-conn-max-lifetime 1h  # High-performance
+./subsoxy -db-max-open-conns 10 -db-max-idle-conns 2 -db-conn-max-lifetime 15m  # Conservative
+./subsoxy -db-health-check=false                      # Disable health checks
+
 # Using environment variables
-PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db RATE_LIMIT_RPS=50 ./subsoxy
+PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db RATE_LIMIT_RPS=50 DB_MAX_OPEN_CONNS=30 ./subsoxy
 ```
 
 ## Rate Limiting
@@ -349,7 +368,47 @@ time="2023-12-01T10:30:00Z" level=error msg="Database connection failed"
 
 ## Database Features
 
-The server automatically creates and manages a SQLite3 database to track song play statistics and build transition probability analysis for song sequences.
+The server automatically creates and manages a SQLite3 database with advanced connection pooling to track song play statistics and build transition probability analysis for song sequences.
+
+### Database Connection Pooling ✅
+
+The application implements advanced database connection pooling for optimal performance under high load:
+
+#### Performance Benefits
+- **Connection Reuse**: Maintains a pool of database connections to avoid expensive connection creation
+- **Configurable Pool Size**: Adjustable maximum open and idle connection limits
+- **Connection Lifecycle Management**: Automatic rotation and cleanup of aged connections
+- **Health Monitoring**: Periodic health checks to ensure connection validity
+- **Thread Safety**: Safe concurrent access from multiple request handlers
+- **Resource Management**: Automatic cleanup of idle and expired connections
+
+#### Configuration Options
+- **Max Open Connections**: Maximum number of concurrent database connections (default: 25)
+- **Max Idle Connections**: Maximum number of idle connections to keep open (default: 5)
+- **Connection Lifetime**: Maximum time a connection can be reused (default: 30 minutes)
+- **Idle Timeout**: Maximum time a connection can stay idle (default: 5 minutes)
+- **Health Checks**: Automatic connection health monitoring (default: enabled)
+
+#### Pool Management
+- **Background Health Checks**: Connection validation every 30 seconds
+- **Connection Statistics**: Real-time monitoring of pool performance
+- **Dynamic Configuration**: Runtime pool configuration updates
+- **Comprehensive Logging**: Pool status and health metrics logging
+
+#### Usage Examples
+```bash
+# High-performance setup for heavy load
+./subsoxy -db-max-open-conns 50 -db-max-idle-conns 10 -db-conn-max-lifetime 1h
+
+# Conservative setup for low resource usage
+./subsoxy -db-max-open-conns 10 -db-max-idle-conns 2 -db-conn-max-lifetime 15m
+
+# Environment variable configuration
+export DB_MAX_OPEN_CONNS=30
+export DB_MAX_IDLE_CONNS=8
+export DB_CONN_MAX_LIFETIME=45m
+./subsoxy
+```
 
 ### Database Schema
 
@@ -508,7 +567,17 @@ This application uses the following external libraries:
 - **`github.com/mattn/go-sqlite3`**: SQLite3 database driver for song tracking and analytics
 - **`golang.org/x/crypto`**: Cryptographic functions for AES-256-GCM credential encryption
 - **`golang.org/x/time/rate`**: Rate limiting implementation using token bucket algorithm
-- **Standard Library**: `net/http/httputil`, `crypto/aes`, `crypto/cipher`, and other Go standard packages
+- **Standard Library**: `net/http/httputil`, `crypto/aes`, `crypto/cipher`, `database/sql`, and other Go standard packages
+
+### Performance Features
+
+The application includes several performance optimizations:
+
+- **Database Connection Pooling**: Advanced connection pool management with configurable limits and health monitoring
+- **Concurrent Request Handling**: Thread-safe operations with proper synchronization
+- **Rate Limiting**: Token bucket algorithm for efficient request throttling
+- **Resource Management**: Automatic cleanup of connections and memory
+- **Health Monitoring**: Background health checks and performance metrics
 
 ## License
 

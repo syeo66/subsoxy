@@ -1,16 +1,18 @@
 # Database Module
 
-The database module handles all SQLite3 database operations for song tracking and transition analysis with comprehensive error handling and validation.
+The database module handles all SQLite3 database operations for song tracking and transition analysis with comprehensive error handling, validation, and advanced connection pooling.
 
 ## Overview
 
 This module provides:
 - Database initialization and schema creation with error recovery
+- Advanced connection pooling with health monitoring and statistics
 - Song storage and retrieval with input validation
 - Play event recording with structured error handling
 - Transition probability tracking with graceful degradation
 - Thread-safe database operations with transaction management
 - Comprehensive error context for debugging
+- Real-time connection pool performance monitoring
 
 ## Database Schema
 
@@ -58,10 +60,32 @@ CREATE TABLE song_transitions (
 ## API
 
 ### Initialization
+
+#### Basic Initialization
 ```go
 import "github.com/syeo66/subsoxy/database"
 
+// Using default connection pool settings
 db, err := database.New("/path/to/database.db", logger)
+if err != nil {
+    // handle error
+}
+defer db.Close()
+```
+
+#### Advanced Initialization with Custom Pool Configuration
+```go
+// Create custom connection pool configuration
+poolConfig := &database.ConnectionPool{
+    MaxOpenConns:    50,                // Maximum concurrent connections
+    MaxIdleConns:    10,                // Maximum idle connections
+    ConnMaxLifetime: 30 * time.Minute,  // Connection lifetime
+    ConnMaxIdleTime: 5 * time.Minute,   // Idle timeout
+    HealthCheck:     true,              // Enable health checks
+}
+
+// Initialize with custom pool settings
+db, err := database.NewWithPool("/path/to/database.db", logger, poolConfig)
 if err != nil {
     // handle error
 }
@@ -90,7 +114,53 @@ err := db.RecordTransition("song1", "song2", "play")
 prob, err := db.GetTransitionProbability("song1", "song2")
 ```
 
+### Connection Pool Management
+```go
+// Get current connection pool statistics
+stats := db.GetConnectionStats()
+fmt.Printf("Open connections: %d\n", stats.OpenConnections)
+fmt.Printf("Idle connections: %d\n", stats.IdleConnections)
+fmt.Printf("Health checks: %d\n", stats.HealthChecks)
+
+// Update pool configuration at runtime
+newConfig := &database.ConnectionPool{
+    MaxOpenConns:    100,
+    MaxIdleConns:    20,
+    ConnMaxLifetime: 1 * time.Hour,
+    ConnMaxIdleTime: 10 * time.Minute,
+    HealthCheck:     true,
+}
+err := db.UpdatePoolConfig(newConfig)
+if err != nil {
+    // handle configuration error
+}
+```
+
 ## Features
+
+### Database Connection Pooling ✅
+
+**Performance Optimization**:
+- **Connection Reuse**: Maintains a pool of database connections to avoid expensive connection creation
+- **Configurable Pool Size**: Adjustable maximum open and idle connection limits (default: 25 max open, 5 max idle)
+- **Connection Lifecycle Management**: Automatic rotation and cleanup of aged connections (default: 30m lifetime, 5m idle timeout)
+- **Health Monitoring**: Periodic health checks every 30 seconds to ensure connection validity
+
+**Thread-Safe Operations**:
+- All connection pool operations are protected with mutex locks
+- Safe concurrent access from multiple request handlers
+- Atomic statistics tracking and updates
+
+**Dynamic Configuration**:
+- Runtime pool configuration updates via `UpdatePoolConfig()`
+- Configuration validation with detailed error messages
+- Live monitoring of connection pool performance via `GetConnectionStats()`
+
+**Health Check System**:
+- Background health checks with connection validation
+- Connection statistics monitoring (open, idle, in-use connections)
+- Failed connection tracking and logging
+- Automatic pool performance metrics
 
 ### Transaction Management
 - Bulk operations use transactions for performance
@@ -121,9 +191,12 @@ Context: {"field": "songID"}
 ```
 
 ### Performance Optimization
-- Indexes on frequently queried columns
-- Bulk inserts for song synchronization
-- Prepared statements for repeated operations
+- **Database Connection Pooling**: Advanced connection pool management for high-concurrency scenarios
+- **Indexes**: Optimized indexes on frequently queried columns (song_id, timestamp, transitions)
+- **Bulk Inserts**: Transaction-based bulk operations for song synchronization
+- **Prepared Statements**: Cached prepared statements for repeated operations
+- **Connection Lifecycle**: Automatic connection rotation and cleanup for optimal resource usage
+- **Health Monitoring**: Background connection health checks to prevent stale connections
 
 ### Data Integrity
 - Foreign key constraints

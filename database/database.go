@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -14,14 +15,49 @@ import (
 type DB struct {
 	conn   *sql.DB
 	logger *logrus.Logger
+	mu     sync.RWMutex
+	pool   *ConnectionPool
+}
+
+// ConnectionPool manages database connection pool settings
+type ConnectionPool struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+	HealthCheck     bool
+	mu              sync.RWMutex
+	stats           ConnectionStats
+}
+
+// ConnectionStats tracks connection pool statistics
+type ConnectionStats struct {
+	OpenConnections int
+	IdleConnections int
+	ConnectionsInUse int
+	TotalConnections int
+	FailedConnections int
+	HealthChecks     int
+	LastHealthCheck  time.Time
 }
 
 func New(dbPath string, logger *logrus.Logger) (*DB, error) {
+	return NewWithPool(dbPath, logger, DefaultPoolConfig())
+}
+
+// NewWithPool creates a new database connection with custom pool configuration
+func NewWithPool(dbPath string, logger *logrus.Logger, poolConfig *ConnectionPool) (*DB, error) {
 	conn, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "CONNECTION_FAILED", "failed to open database").
 			WithContext("path", dbPath)
 	}
+
+	// Configure connection pool settings
+	conn.SetMaxOpenConns(poolConfig.MaxOpenConns)
+	conn.SetMaxIdleConns(poolConfig.MaxIdleConns)
+	conn.SetConnMaxLifetime(poolConfig.ConnMaxLifetime)
+	conn.SetConnMaxIdleTime(poolConfig.ConnMaxIdleTime)
 
 	if err := conn.Ping(); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "CONNECTION_FAILED", "failed to ping database").
@@ -31,6 +67,7 @@ func New(dbPath string, logger *logrus.Logger) (*DB, error) {
 	db := &DB{
 		conn:   conn,
 		logger: logger,
+		pool:   poolConfig,
 	}
 
 	if err := db.createTables(); err != nil {
@@ -38,10 +75,29 @@ func New(dbPath string, logger *logrus.Logger) (*DB, error) {
 			WithContext("path", dbPath)
 	}
 
+	// Start health check goroutine if enabled
+	if poolConfig.HealthCheck {
+		go db.healthCheckLoop()
+	}
+
 	return db, nil
 }
 
+// DefaultPoolConfig returns default connection pool configuration
+func DefaultPoolConfig() *ConnectionPool {
+	return &ConnectionPool{
+		MaxOpenConns:    25,  // Reasonable default for SQLite
+		MaxIdleConns:    5,   // Keep some connections idle
+		ConnMaxLifetime: 30 * time.Minute, // Rotate connections every 30 minutes
+		ConnMaxIdleTime: 5 * time.Minute,  // Close idle connections after 5 minutes
+		HealthCheck:     true,
+	}
+}
+
 func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if err := db.conn.Close(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "CLOSE_FAILED", "failed to close database connection")
 	}
@@ -172,7 +228,14 @@ func (db *DB) RecordPlayEvent(songID, eventType string, previousSong *string) er
 
 	now := time.Now()
 	
-	_, err := db.conn.Exec(`INSERT INTO play_events (song_id, event_type, timestamp, previous_song) VALUES (?, ?, ?, ?)`,
+	// Use a transaction to ensure atomicity
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction")
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`INSERT INTO play_events (song_id, event_type, timestamp, previous_song) VALUES (?, ?, ?, ?)`,
 		songID, eventType, now, previousSong)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to record play event").
@@ -181,17 +244,21 @@ func (db *DB) RecordPlayEvent(songID, eventType string, previousSong *string) er
 	}
 
 	if eventType == "play" {
-		_, err := db.conn.Exec(`UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ?`, now, songID)
+		_, err := tx.Exec(`UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ?`, now, songID)
 		if err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song play count").
 				WithContext("song_id", songID)
 		}
 	} else if eventType == "skip" {
-		_, err := db.conn.Exec(`UPDATE songs SET skip_count = skip_count + 1 WHERE id = ?`, songID)
+		_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1 WHERE id = ?`, songID)
 		if err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song skip count").
 				WithContext("song_id", songID)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction")
 	}
 
 	return nil
@@ -262,4 +329,104 @@ func (db *DB) GetTransitionProbability(fromSongID, toSongID string) (float64, er
 	}
 	
 	return probability, nil
+}
+
+// healthCheckLoop runs periodic health checks on the database connection
+func (db *DB) healthCheckLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			db.performHealthCheck()
+		}
+	}
+}
+
+// performHealthCheck checks database connection health and updates statistics
+func (db *DB) performHealthCheck() {
+	db.pool.mu.Lock()
+	defer db.pool.mu.Unlock()
+
+	db.pool.stats.HealthChecks++
+	db.pool.stats.LastHealthCheck = time.Now()
+
+	if err := db.conn.Ping(); err != nil {
+		db.pool.stats.FailedConnections++
+		db.logger.WithError(err).Error("Database health check failed")
+		return
+	}
+
+	// Update connection statistics
+	stats := db.conn.Stats()
+	db.pool.stats.OpenConnections = stats.OpenConnections
+	db.pool.stats.IdleConnections = stats.Idle
+	db.pool.stats.ConnectionsInUse = stats.InUse
+	db.pool.stats.TotalConnections = int(stats.MaxOpenConnections)
+
+	db.logger.WithFields(logrus.Fields{
+		"open_connections": stats.OpenConnections,
+		"idle_connections": stats.Idle,
+		"connections_in_use": stats.InUse,
+		"max_open_connections": stats.MaxOpenConnections,
+	}).Debug("Database health check completed")
+}
+
+// GetConnectionStats returns current connection pool statistics
+func (db *DB) GetConnectionStats() ConnectionStats {
+	db.pool.mu.RLock()
+	defer db.pool.mu.RUnlock()
+
+	// Update current stats from sql.DB
+	stats := db.conn.Stats()
+	db.pool.stats.OpenConnections = stats.OpenConnections
+	db.pool.stats.IdleConnections = stats.Idle
+	db.pool.stats.ConnectionsInUse = stats.InUse
+
+	return db.pool.stats
+}
+
+// UpdatePoolConfig updates connection pool configuration
+func (db *DB) UpdatePoolConfig(config *ConnectionPool) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if config.MaxOpenConns < 1 {
+		return errors.New(errors.CategoryDatabase, "INVALID_POOL_CONFIG", "max open connections must be at least 1").
+			WithContext("max_open_conns", config.MaxOpenConns)
+	}
+
+	if config.MaxIdleConns < 0 {
+		return errors.New(errors.CategoryDatabase, "INVALID_POOL_CONFIG", "max idle connections cannot be negative").
+			WithContext("max_idle_conns", config.MaxIdleConns)
+	}
+
+	if config.MaxIdleConns > config.MaxOpenConns {
+		return errors.New(errors.CategoryDatabase, "INVALID_POOL_CONFIG", "max idle connections cannot exceed max open connections").
+			WithContext("max_idle_conns", config.MaxIdleConns).
+			WithContext("max_open_conns", config.MaxOpenConns)
+	}
+
+	// Apply new configuration
+	db.conn.SetMaxOpenConns(config.MaxOpenConns)
+	db.conn.SetMaxIdleConns(config.MaxIdleConns)
+	db.conn.SetConnMaxLifetime(config.ConnMaxLifetime)
+	db.conn.SetConnMaxIdleTime(config.ConnMaxIdleTime)
+
+	db.pool.MaxOpenConns = config.MaxOpenConns
+	db.pool.MaxIdleConns = config.MaxIdleConns
+	db.pool.ConnMaxLifetime = config.ConnMaxLifetime
+	db.pool.ConnMaxIdleTime = config.ConnMaxIdleTime
+	db.pool.HealthCheck = config.HealthCheck
+
+	db.logger.WithFields(logrus.Fields{
+		"max_open_conns": config.MaxOpenConns,
+		"max_idle_conns": config.MaxIdleConns,
+		"conn_max_lifetime": config.ConnMaxLifetime,
+		"conn_max_idle_time": config.ConnMaxIdleTime,
+		"health_check": config.HealthCheck,
+	}).Info("Database connection pool configuration updated")
+
+	return nil
 }

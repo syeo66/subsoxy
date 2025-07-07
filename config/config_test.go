@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestGetEnvOrDefault(t *testing.T) {
@@ -137,6 +138,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: false,
 		},
@@ -150,6 +156,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -163,6 +174,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -176,6 +192,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -189,6 +210,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -202,6 +228,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -215,6 +246,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      0,
 				RateLimitBurst:    200,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -228,6 +264,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    0,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -241,6 +282,11 @@ func TestConfigValidation(t *testing.T) {
 				RateLimitRPS:      100,
 				RateLimitBurst:    50,
 				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
 			},
 			wantErr: true,
 		},
@@ -253,5 +299,211 @@ func TestConfigValidation(t *testing.T) {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// Database Pool Configuration Tests
+
+func TestValidateDatabasePool(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{
+			name: "Valid database pool config",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid DB max open connections - zero",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    0, // Invalid
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid DB max idle connections - negative",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    -1, // Invalid
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid DB max idle connections - exceeds max open",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    10,
+				DBMaxIdleConns:    15, // Invalid: > MaxOpenConns
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid DB connection max lifetime - negative",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: -1 * time.Minute, // Invalid
+				DBConnMaxIdleTime: 5 * time.Minute,
+				DBHealthCheck:     true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid DB connection max idle time - negative",
+			config: &Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       "http://localhost:4533",
+				LogLevel:          "info",
+				DatabasePath:      "test.db",
+				RateLimitRPS:      100,
+				RateLimitBurst:    200,
+				RateLimitEnabled:  true,
+				DBMaxOpenConns:    25,
+				DBMaxIdleConns:    5,
+				DBConnMaxLifetime: 30 * time.Minute,
+				DBConnMaxIdleTime: -1 * time.Minute, // Invalid
+				DBHealthCheck:     true,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validateDatabasePool()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Config.validateDatabasePool() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetEnvDurationOrDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		key          string
+		defaultValue time.Duration
+		envValue     string
+		expected     time.Duration
+	}{
+		{
+			name:         "Valid duration environment variable",
+			key:          "TEST_DURATION",
+			defaultValue: 5 * time.Minute,
+			envValue:     "10m",
+			expected:     10 * time.Minute,
+		},
+		{
+			name:         "Invalid duration environment variable",
+			key:          "TEST_DURATION_INVALID",
+			defaultValue: 5 * time.Minute,
+			envValue:     "invalid",
+			expected:     5 * time.Minute,
+		},
+		{
+			name:         "Missing environment variable",
+			key:          "TEST_DURATION_MISSING",
+			defaultValue: 5 * time.Minute,
+			envValue:     "",
+			expected:     5 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean up any existing environment variable
+			os.Unsetenv(tt.key)
+			
+			// Set environment variable if specified
+			if tt.envValue != "" {
+				os.Setenv(tt.key, tt.envValue)
+				defer os.Unsetenv(tt.key)
+			}
+
+			result := getEnvDurationOrDefault(tt.key, tt.defaultValue)
+			if result != tt.expected {
+				t.Errorf("getEnvDurationOrDefault() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetDatabasePoolConfig(t *testing.T) {
+	config := &Config{
+		DBMaxOpenConns:    15,
+		DBMaxIdleConns:    7,
+		DBConnMaxLifetime: 20 * time.Minute,
+		DBConnMaxIdleTime: 3 * time.Minute,
+		DBHealthCheck:     false,
+	}
+
+	poolConfig := config.GetDatabasePoolConfig()
+
+	if poolConfig.MaxOpenConns != 15 {
+		t.Errorf("Expected MaxOpenConns 15, got %d", poolConfig.MaxOpenConns)
+	}
+	if poolConfig.MaxIdleConns != 7 {
+		t.Errorf("Expected MaxIdleConns 7, got %d", poolConfig.MaxIdleConns)
+	}
+	if poolConfig.ConnMaxLifetime != 20*time.Minute {
+		t.Errorf("Expected ConnMaxLifetime 20m, got %v", poolConfig.ConnMaxLifetime)
+	}
+	if poolConfig.ConnMaxIdleTime != 3*time.Minute {
+		t.Errorf("Expected ConnMaxIdleTime 3m, got %v", poolConfig.ConnMaxIdleTime)
+	}
+	if poolConfig.HealthCheck != false {
+		t.Errorf("Expected HealthCheck false, got %v", poolConfig.HealthCheck)
 	}
 }

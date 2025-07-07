@@ -35,6 +35,11 @@ if err != nil {
 | `-rate-limit-rps` | `RATE_LIMIT_RPS` | `100` | ≥1 | Rate limit requests per second |
 | `-rate-limit-burst` | `RATE_LIMIT_BURST` | `200` | ≥1, ≥RPS | Rate limit burst size |
 | `-rate-limit-enabled` | `RATE_LIMIT_ENABLED` | `true` | true/false | Enable rate limiting |
+| `-db-max-open-conns` | `DB_MAX_OPEN_CONNS` | `25` | ≥1 | Maximum open database connections |
+| `-db-max-idle-conns` | `DB_MAX_IDLE_CONNS` | `5` | ≥0, ≤max-open | Maximum idle database connections |
+| `-db-conn-max-lifetime` | `DB_CONN_MAX_LIFETIME` | `30m` | ≥0 | Maximum connection lifetime |
+| `-db-conn-max-idle-time` | `DB_CONN_MAX_IDLE_TIME` | `5m` | ≥0 | Maximum connection idle time |
+| `-db-health-check` | `DB_HEALTH_CHECK` | `true` | true/false | Enable database health checks |
 
 ## Validation Details
 
@@ -59,17 +64,38 @@ if err != nil {
 - Parent directories are created automatically if they don't exist
 - Error example: `[config:INVALID_DATABASE_PATH] cannot create database directory`
 
+### Database Pool Validation ✅
+- **Max Open Connections**: Must be at least 1
+- **Max Idle Connections**: Cannot be negative and cannot exceed max open connections
+- **Connection Lifetimes**: Cannot be negative durations
+- Error examples:
+  - `[config:INVALID_DB_MAX_OPEN_CONNS] database max open connections must be at least 1`
+  - `[config:INVALID_DB_MAX_IDLE_CONNS] database max idle connections cannot exceed max open connections`
+
 ## Examples
 
 ```bash
 # Using command-line flags
 ./subsoxy -port 9090 -upstream http://my-server:4533 -log-level debug
 
+# Database connection pool configuration
+./subsoxy -db-max-open-conns 50 -db-max-idle-conns 10 -db-conn-max-lifetime 1h
+
 # Using environment variables
 PORT=9090 UPSTREAM_URL=http://my-server:4533 LOG_LEVEL=debug ./subsoxy
 
+# Database pool via environment variables
+export DB_MAX_OPEN_CONNS=30
+export DB_MAX_IDLE_CONNS=8
+export DB_CONN_MAX_LIFETIME=45m
+export DB_HEALTH_CHECK=true
+./subsoxy
+
 # Mixed usage (flags override environment variables)
 PORT=8080 ./subsoxy -port 9090  # Will use port 9090
+
+# High-performance configuration
+./subsoxy -db-max-open-conns 100 -db-max-idle-conns 20 -rate-limit-rps 200
 ```
 
 ## Error Handling

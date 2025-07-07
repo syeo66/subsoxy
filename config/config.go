@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/syeo66/subsoxy/errors"
 )
@@ -18,6 +19,12 @@ type Config struct {
 	RateLimitRPS      int
 	RateLimitBurst    int
 	RateLimitEnabled  bool
+	// Database connection pool settings
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
+	DBConnMaxIdleTime time.Duration
+	DBHealthCheck     bool
 }
 
 func New() (*Config, error) {
@@ -29,6 +36,12 @@ func New() (*Config, error) {
 		rateLimitRPS     = flag.Int("rate-limit-rps", getEnvIntOrDefault("RATE_LIMIT_RPS", 100), "Rate limit requests per second")
 		rateLimitBurst   = flag.Int("rate-limit-burst", getEnvIntOrDefault("RATE_LIMIT_BURST", 200), "Rate limit burst size")
 		rateLimitEnabled = flag.Bool("rate-limit-enabled", getEnvBoolOrDefault("RATE_LIMIT_ENABLED", true), "Enable rate limiting")
+		// Database connection pool flags
+		dbMaxOpenConns    = flag.Int("db-max-open-conns", getEnvIntOrDefault("DB_MAX_OPEN_CONNS", 25), "Maximum number of open database connections")
+		dbMaxIdleConns    = flag.Int("db-max-idle-conns", getEnvIntOrDefault("DB_MAX_IDLE_CONNS", 5), "Maximum number of idle database connections")
+		dbConnMaxLifetime = flag.Duration("db-conn-max-lifetime", getEnvDurationOrDefault("DB_CONN_MAX_LIFETIME", 30*time.Minute), "Maximum connection lifetime")
+		dbConnMaxIdleTime = flag.Duration("db-conn-max-idle-time", getEnvDurationOrDefault("DB_CONN_MAX_IDLE_TIME", 5*time.Minute), "Maximum connection idle time")
+		dbHealthCheck     = flag.Bool("db-health-check", getEnvBoolOrDefault("DB_HEALTH_CHECK", true), "Enable database health checks")
 	)
 	flag.Parse()
 
@@ -40,6 +53,11 @@ func New() (*Config, error) {
 		RateLimitRPS:      *rateLimitRPS,
 		RateLimitBurst:    *rateLimitBurst,
 		RateLimitEnabled:  *rateLimitEnabled,
+		DBMaxOpenConns:    *dbMaxOpenConns,
+		DBMaxIdleConns:    *dbMaxIdleConns,
+		DBConnMaxLifetime: *dbConnMaxLifetime,
+		DBConnMaxIdleTime: *dbConnMaxIdleTime,
+		DBHealthCheck:     *dbHealthCheck,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -68,6 +86,10 @@ func (c *Config) Validate() error {
 	}
 	
 	if err := c.validateRateLimit(); err != nil {
+		return err
+	}
+	
+	if err := c.validateDatabasePool(); err != nil {
 		return err
 	}
 	
@@ -178,6 +200,26 @@ func (c *Config) validateRateLimit() error {
 	return nil
 }
 
+// GetDatabasePoolConfig returns database pool configuration
+func (c *Config) GetDatabasePoolConfig() *DatabasePoolConfig {
+	return &DatabasePoolConfig{
+		MaxOpenConns:    c.DBMaxOpenConns,
+		MaxIdleConns:    c.DBMaxIdleConns,
+		ConnMaxLifetime: c.DBConnMaxLifetime,
+		ConnMaxIdleTime: c.DBConnMaxIdleTime,
+		HealthCheck:     c.DBHealthCheck,
+	}
+}
+
+// DatabasePoolConfig represents database connection pool configuration
+type DatabasePoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+	HealthCheck     bool
+}
+
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -201,4 +243,43 @@ func getEnvBoolOrDefault(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			return duration
+		}
+	}
+	return defaultValue
+}
+
+func (c *Config) validateDatabasePool() error {
+	if c.DBMaxOpenConns < 1 {
+		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_OPEN_CONNS", "database max open connections must be at least 1").
+			WithContext("db_max_open_conns", c.DBMaxOpenConns)
+	}
+	
+	if c.DBMaxIdleConns < 0 {
+		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_IDLE_CONNS", "database max idle connections cannot be negative").
+			WithContext("db_max_idle_conns", c.DBMaxIdleConns)
+	}
+	
+	if c.DBMaxIdleConns > c.DBMaxOpenConns {
+		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_IDLE_CONNS", "database max idle connections cannot exceed max open connections").
+			WithContext("db_max_idle_conns", c.DBMaxIdleConns).
+			WithContext("db_max_open_conns", c.DBMaxOpenConns)
+	}
+	
+	if c.DBConnMaxLifetime < 0 {
+		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_LIFETIME", "database connection max lifetime cannot be negative").
+			WithContext("db_conn_max_lifetime", c.DBConnMaxLifetime)
+	}
+	
+	if c.DBConnMaxIdleTime < 0 {
+		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_IDLE_TIME", "database connection max idle time cannot be negative").
+			WithContext("db_conn_max_idle_time", c.DBConnMaxIdleTime)
+	}
+	
+	return nil
 }

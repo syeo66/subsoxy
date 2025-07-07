@@ -68,11 +68,28 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
 	}
 
-	db, err := database.New(cfg.DatabasePath, logger)
+	// Create database connection pool configuration
+	poolConfig := &database.ConnectionPool{
+		MaxOpenConns:    cfg.DBMaxOpenConns,
+		MaxIdleConns:    cfg.DBMaxIdleConns,
+		ConnMaxLifetime: cfg.DBConnMaxLifetime,
+		ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
+		HealthCheck:     cfg.DBHealthCheck,
+	}
+
+	db, err := database.NewWithPool(cfg.DatabasePath, logger, poolConfig)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryServer, "INITIALIZATION_FAILED", "failed to initialize database").
 			WithContext("database_path", cfg.DatabasePath)
 	}
+
+	logger.WithFields(logrus.Fields{
+		"max_open_conns":      cfg.DBMaxOpenConns,
+		"max_idle_conns":      cfg.DBMaxIdleConns,
+		"conn_max_lifetime":   cfg.DBConnMaxLifetime,
+		"conn_max_idle_time":  cfg.DBConnMaxIdleTime,
+		"health_check":        cfg.DBHealthCheck,
+	}).Info("Database connection pool configured")
 
 	credManager := credentials.New(logger, cfg.UpstreamURL)
 	shuffleService := shuffle.New(db, logger)

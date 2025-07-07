@@ -1,11 +1,12 @@
 # Server Module
 
-The server module provides the main proxy server implementation with request routing, lifecycle management, and integration of all other modules.
+The server module provides the main proxy server implementation with request routing, lifecycle management, database connection pooling, and integration of all other modules.
 
 ## Overview
 
 This module handles:
 - HTTP server setup and configuration
+- Database connection pool initialization and management
 - Reverse proxy implementation with comprehensive input validation
 - Hook system for request interception
 - Rate limiting and DoS protection
@@ -13,6 +14,7 @@ This module handles:
 - Background task management (song synchronization)
 - Graceful shutdown handling
 - Request logging and monitoring with sanitized inputs
+- Connection pool health monitoring and statistics
 
 ## Core Components
 
@@ -42,10 +44,16 @@ type ProxyServer struct {
 ```go
 import "github.com/syeo66/subsoxy/server"
 
+// Server automatically configures database connection pool from config
 proxyServer, err := server.New(config)
 if err != nil {
     log.Fatal("Failed to create server:", err)
 }
+
+// The server logs connection pool configuration on startup:
+// time="..." level=info msg="Database connection pool configured" 
+//   max_open_conns=25 max_idle_conns=5 conn_max_lifetime=30m0s
+//   conn_max_idle_time=5m0s health_check=true
 ```
 
 ### Server Lifecycle
@@ -127,7 +135,52 @@ if hooks, exists := ps.hooks[endpoint]; exists {
 ps.proxy.ServeHTTP(w, r)
 ```
 
+## Database Connection Pool Integration ✅
+
+The server module automatically initializes and manages the database connection pool:
+
+### Connection Pool Setup
+```go
+// Server extracts pool configuration from config and creates pooled connection
+poolConfig := &database.ConnectionPool{
+    MaxOpenConns:    cfg.DBMaxOpenConns,
+    MaxIdleConns:    cfg.DBMaxIdleConns,
+    ConnMaxLifetime: cfg.DBConnMaxLifetime,
+    ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
+    HealthCheck:     cfg.DBHealthCheck,
+}
+
+db, err := database.NewWithPool(cfg.DatabasePath, logger, poolConfig)
+```
+
+### Pool Monitoring
+```go
+// The server logs connection pool configuration on startup
+logger.WithFields(logrus.Fields{
+    "max_open_conns":      cfg.DBMaxOpenConns,
+    "max_idle_conns":      cfg.DBMaxIdleConns,
+    "conn_max_lifetime":   cfg.DBConnMaxLifetime,
+    "conn_max_idle_time":  cfg.DBConnMaxIdleTime,
+    "health_check":        cfg.DBHealthCheck,
+}).Info("Database connection pool configured")
+```
+
+### Benefits for Server Operations
+- **High Concurrency**: Multiple request handlers can access database simultaneously
+- **Resource Efficiency**: Connection reuse reduces overhead for database operations
+- **Health Monitoring**: Background health checks ensure database availability
+- **Performance**: Optimized for high-load scenarios with configurable pool sizes
+
 ## Background Tasks
+
+### Database Health Monitoring
+Background health checks monitor connection pool status:
+```go
+// Health checks run every 30 seconds (when enabled)
+// - Validates database connectivity
+// - Updates connection statistics
+// - Logs pool performance metrics
+```
 
 ### Song Synchronization
 Automatically fetches songs from the upstream Subsonic server:
