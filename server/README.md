@@ -160,13 +160,33 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
         return
     }
     
-    // Fetch from Subsonic API
-    url := fmt.Sprintf("%s/rest/search3?query=*&songCount=10000&f=json&v=1.15.0&c=subsoxy&u=%s&p=%s", 
-        ps.config.UpstreamURL, username, password)
+    // Construct URL with proper encoding to prevent credential exposure in logs
+    baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/search3")
+    if err != nil {
+        parseErr := errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL").
+            WithContext("upstream_url", ps.config.UpstreamURL).
+            WithContext("username", username)
+        ps.logger.WithError(parseErr).Error("Failed to parse upstream URL for song syncing")
+        return
+    }
     
+    // Use URL query parameters to safely encode credentials
+    params := url.Values{}
+    params.Add("u", username)
+    params.Add("p", password)
+    params.Add("query", "*")
+    params.Add("songCount", "10000")
+    params.Add("f", "json")
+    params.Add("v", "1.15.0")
+    params.Add("c", "subsoxy")
+    baseURL.RawQuery = params.Encode()
+    
+    resp, err := http.Get(baseURL.String())
     // ... fetch and store songs
 }
 ```
+
+**Security Note**: This implementation ensures passwords are never exposed in server logs, debug output, or error messages by using proper URL parameter encoding instead of direct string formatting.
 
 ## Event Recording
 

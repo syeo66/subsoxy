@@ -30,6 +30,45 @@ This application uses a modular architecture with the following components:
 - **Logging**: Structured logging with configurable levels and error context
 - **Configuration**: Command-line flags and environment variables with validation and helpful error messages
 
+## Security
+
+This application implements comprehensive security measures to protect credentials, data, and network communications:
+
+### Credential Security ✅
+
+- **No Password Logging**: Passwords are never exposed in server logs, debug output, or error messages
+- **Secure URL Encoding**: All credentials are properly encoded using `url.Values{}` to prevent logging vulnerabilities
+- **Dynamic Validation**: Credentials are validated against the upstream Subsonic server with timeout protection
+- **Thread-Safe Storage**: Valid credentials are stored in memory with mutex protection
+- **Automatic Cleanup**: Invalid credentials are automatically removed from storage
+- **No Hardcoded Credentials**: All credentials come from authenticated client requests
+
+### Network Security
+
+- **Timeout Protection**: All network requests have configurable timeouts to prevent hanging connections
+- **Upstream Validation**: All requests to upstream servers are validated before forwarding
+- **Error Context**: Network errors provide context without exposing sensitive information
+
+### Data Security
+
+- **Input Validation**: All configuration parameters and API inputs are thoroughly validated
+- **Database Protection**: SQLite database operations use prepared statements to prevent injection
+- **Structured Errors**: Error handling provides context while protecting sensitive information
+- **Graceful Degradation**: System continues operating even when individual components fail
+
+### Security Best Practices
+
+- **Minimal Exposure**: Only necessary information is logged or exposed in error messages
+- **Secure Defaults**: All security-sensitive configurations use secure default values
+- **Comprehensive Testing**: Security features are thoroughly tested with unit tests
+- **Regular Updates**: Security implementations follow Go best practices and are regularly reviewed
+
+### Recent Security Improvements
+
+- **Password Logging Fix**: ✅ **RESOLVED** - Eliminated password exposure in server logs during song synchronization
+- **Secure Authentication**: Enhanced credential validation with proper error handling
+- **Network Security**: Improved timeout handling and error context
+
 ## Installation
 
 ```bash

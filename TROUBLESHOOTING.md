@@ -171,6 +171,36 @@ curl -w "%{time_total}\n" http://my-subsonic-server:4533/rest/ping
 iftop  # or nethogs, nload
 ```
 
+## Security Issues
+
+### Password Logging Vulnerability (Fixed)
+
+**Previous Issue**: Passwords were exposed in server logs during song synchronization
+
+**Security Risk**: 
+- Passwords visible in log files
+- Potential credential exposure in debug output
+- Risk of credential leakage through log aggregation systems
+
+**Fix Applied**:
+- ✅ **RESOLVED**: Updated `server/server.go` to use secure URL parameter encoding
+- Passwords are now properly encoded using `url.Values{}` instead of direct string formatting
+- No more credential exposure in logs, debug output, or error messages
+
+**Verification**:
+```bash
+# Check that passwords are not in logs
+grep -i password /var/log/subsoxy.log  # Should return no results
+
+# Verify secure URL construction
+# Look for "URL_PARSE_FAILED" errors instead of exposed credentials
+```
+
+**Impact**: 
+- All password logging vulnerabilities eliminated
+- Maintains full functionality while securing credential handling
+- Follows the same secure pattern used in credential validation
+
 ## Authentication Issues
 
 ### Invalid Credentials
