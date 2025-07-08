@@ -1,5 +1,11 @@
 # TODO
 
+## Priority 3: Verification
+
+### 1. Verify User Isolation on Song Sync 🟠
+
+### 2. Make Sure Song Sync is Started When New Credentials are Verified  🟠
+
 ## Priority 4: Code Quality and Maintainability
 
 ### 1. **Magic Numbers and Constants** 🟡
