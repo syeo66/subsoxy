@@ -25,6 +25,12 @@ type Config struct {
 	DBConnMaxLifetime time.Duration
 	DBConnMaxIdleTime time.Duration
 	DBHealthCheck     bool
+	// CORS settings
+	CORSEnabled       bool
+	CORSAllowOrigins  []string
+	CORSAllowMethods  []string
+	CORSAllowHeaders  []string
+	CORSAllowCredentials bool
 }
 
 func New() (*Config, error) {
@@ -42,6 +48,12 @@ func New() (*Config, error) {
 		dbConnMaxLifetime = flag.Duration("db-conn-max-lifetime", getEnvDurationOrDefault("DB_CONN_MAX_LIFETIME", 30*time.Minute), "Maximum connection lifetime")
 		dbConnMaxIdleTime = flag.Duration("db-conn-max-idle-time", getEnvDurationOrDefault("DB_CONN_MAX_IDLE_TIME", 5*time.Minute), "Maximum connection idle time")
 		dbHealthCheck     = flag.Bool("db-health-check", getEnvBoolOrDefault("DB_HEALTH_CHECK", true), "Enable database health checks")
+		// CORS flags
+		corsEnabled       = flag.Bool("cors-enabled", getEnvBoolOrDefault("CORS_ENABLED", true), "Enable CORS headers")
+		corsAllowOrigins  = flag.String("cors-allow-origins", getEnvOrDefault("CORS_ALLOW_ORIGINS", "*"), "CORS allowed origins (comma-separated)")
+		corsAllowMethods  = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS"), "CORS allowed methods (comma-separated)")
+		corsAllowHeaders  = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", "Content-Type,Authorization,X-Requested-With"), "CORS allowed headers (comma-separated)")
+		corsAllowCredentials = flag.Bool("cors-allow-credentials", getEnvBoolOrDefault("CORS_ALLOW_CREDENTIALS", false), "CORS allow credentials")
 	)
 	flag.Parse()
 
@@ -58,6 +70,11 @@ func New() (*Config, error) {
 		DBConnMaxLifetime: *dbConnMaxLifetime,
 		DBConnMaxIdleTime: *dbConnMaxIdleTime,
 		DBHealthCheck:     *dbHealthCheck,
+		CORSEnabled:       *corsEnabled,
+		CORSAllowOrigins:  parseCommaSeparatedString(*corsAllowOrigins),
+		CORSAllowMethods:  parseCommaSeparatedString(*corsAllowMethods),
+		CORSAllowHeaders:  parseCommaSeparatedString(*corsAllowHeaders),
+		CORSAllowCredentials: *corsAllowCredentials,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -90,6 +107,10 @@ func (c *Config) Validate() error {
 	}
 	
 	if err := c.validateDatabasePool(); err != nil {
+		return err
+	}
+	
+	if err := c.validateCORS(); err != nil {
 		return err
 	}
 	
@@ -254,6 +275,18 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 	return defaultValue
 }
 
+func parseCommaSeparatedString(input string) []string {
+	if input == "" {
+		return []string{}
+	}
+	result := strings.Split(input, ",")
+	// Trim whitespace from each element
+	for i := range result {
+		result[i] = strings.TrimSpace(result[i])
+	}
+	return result
+}
+
 func (c *Config) validateDatabasePool() error {
 	if c.DBMaxOpenConns < 1 {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_OPEN_CONNS", "database max open connections must be at least 1").
@@ -279,6 +312,47 @@ func (c *Config) validateDatabasePool() error {
 	if c.DBConnMaxIdleTime < 0 {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_IDLE_TIME", "database connection max idle time cannot be negative").
 			WithContext("db_conn_max_idle_time", c.DBConnMaxIdleTime)
+	}
+	
+	return nil
+}
+
+func (c *Config) validateCORS() error {
+	// If CORS is disabled, skip validation
+	if !c.CORSEnabled {
+		return nil
+	}
+	
+	// Validate origins - empty list is invalid if CORS is enabled
+	if len(c.CORSAllowOrigins) == 0 {
+		return errors.New(errors.CategoryConfig, "INVALID_CORS_ORIGINS", "CORS origins cannot be empty when CORS is enabled").
+			WithContext("cors_enabled", c.CORSEnabled)
+	}
+	
+	// Validate methods - must have at least one method
+	if len(c.CORSAllowMethods) == 0 {
+		return errors.New(errors.CategoryConfig, "INVALID_CORS_METHODS", "CORS methods cannot be empty when CORS is enabled").
+			WithContext("cors_enabled", c.CORSEnabled)
+	}
+	
+	// Validate that methods are reasonable HTTP methods
+	validMethods := map[string]bool{
+		"GET": true, "POST": true, "PUT": true, "DELETE": true, 
+		"OPTIONS": true, "HEAD": true, "PATCH": true,
+	}
+	
+	for _, method := range c.CORSAllowMethods {
+		upperMethod := strings.ToUpper(method)
+		if !validMethods[upperMethod] {
+			return errors.New(errors.CategoryConfig, "INVALID_CORS_METHOD", "invalid HTTP method in CORS configuration").
+				WithContext("method", method).
+				WithContext("valid_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"})
+		}
+	}
+	
+	// Validate headers - empty list is allowed
+	if len(c.CORSAllowHeaders) == 0 {
+		// Headers can be empty, that's fine
 	}
 	
 	return nil

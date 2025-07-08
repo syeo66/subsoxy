@@ -174,8 +174,57 @@ func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 	ps.hooks[endpoint] = append(ps.hooks[endpoint], hook)
 }
 
+// setCORSHeaders sets CORS headers based on configuration
+func (ps *ProxyServer) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	
+	// Set Access-Control-Allow-Origin
+	if len(ps.config.CORSAllowOrigins) > 0 {
+		if ps.config.CORSAllowOrigins[0] == "*" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else {
+			// Check if the origin is in the allowed list
+			for _, allowedOrigin := range ps.config.CORSAllowOrigins {
+				if origin == allowedOrigin {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					break
+				}
+			}
+		}
+	}
+	
+	// Set Access-Control-Allow-Methods
+	if len(ps.config.CORSAllowMethods) > 0 {
+		w.Header().Set("Access-Control-Allow-Methods", strings.Join(ps.config.CORSAllowMethods, ", "))
+	}
+	
+	// Set Access-Control-Allow-Headers
+	if len(ps.config.CORSAllowHeaders) > 0 {
+		w.Header().Set("Access-Control-Allow-Headers", strings.Join(ps.config.CORSAllowHeaders, ", "))
+	}
+	
+	// Set Access-Control-Allow-Credentials
+	if ps.config.CORSAllowCredentials {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+	
+	// Set Access-Control-Max-Age for preflight cache (24 hours)
+	w.Header().Set("Access-Control-Max-Age", "86400")
+}
+
 func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	endpoint := r.URL.Path
+	
+	// Add CORS headers if enabled
+	if ps.config.CORSEnabled {
+		ps.setCORSHeaders(w, r)
+		
+		// Handle preflight OPTIONS requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
 	
 	// Sanitize inputs for logging
 	sanitizedEndpoint := sanitizeForLogging(endpoint)

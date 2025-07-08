@@ -29,6 +29,7 @@ This application uses a modular architecture with the following components:
 - **Thread-Safe Server Operations**: Race condition-free background synchronization with proper mutex protection and graceful shutdown handling
 - **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and authentication
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
+- **CORS Support**: Comprehensive CORS header management for web application integration with configurable origins, methods, and headers
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
 - **Input Validation & Security**: Comprehensive input validation, sanitization, user context validation, and log injection prevention
 - **Logging**: Structured logging with configurable levels and error context
@@ -182,6 +183,11 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-db-conn-max-lifetime duration`: Maximum connection lifetime (default: 30m)
 - `-db-conn-max-idle-time duration`: Maximum connection idle time (default: 5m)
 - `-db-health-check`: Enable database health checks (default: true)
+- `-cors-enabled`: Enable CORS headers (default: true)
+- `-cors-allow-origins string`: CORS allowed origins, comma-separated (default: "*")
+- `-cors-allow-methods string`: CORS allowed methods, comma-separated (default: "GET,POST,PUT,DELETE,OPTIONS")
+- `-cors-allow-headers string`: CORS allowed headers, comma-separated (default: "Content-Type,Authorization,X-Requested-With")
+- `-cors-allow-credentials`: CORS allow credentials (default: false)
 
 #### Environment variables
 - `PORT`: Proxy server port (1-65535)
@@ -196,6 +202,11 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `DB_CONN_MAX_LIFETIME`: Maximum connection lifetime (default: 30m)
 - `DB_CONN_MAX_IDLE_TIME`: Maximum connection idle time (default: 5m)
 - `DB_HEALTH_CHECK`: Enable database health checks (default: true)
+- `CORS_ENABLED`: Enable CORS headers (default: true)
+- `CORS_ALLOW_ORIGINS`: CORS allowed origins, comma-separated (default: "*")
+- `CORS_ALLOW_METHODS`: CORS allowed methods, comma-separated (default: "GET,POST,PUT,DELETE,OPTIONS")
+- `CORS_ALLOW_HEADERS`: CORS allowed headers, comma-separated (default: "Content-Type,Authorization,X-Requested-With")
+- `CORS_ALLOW_CREDENTIALS`: CORS allow credentials (default: false)
 
 #### Configuration Validation
 
@@ -209,6 +220,9 @@ The application validates all configuration parameters at startup:
 - **DB Max Open Connections**: Must be at least 1 connection
 - **DB Max Idle Connections**: Cannot be negative or exceed max open connections
 - **DB Connection Lifetimes**: Cannot be negative durations
+- **CORS Origins**: Cannot be empty when CORS is enabled
+- **CORS Methods**: Must be valid HTTP methods (GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH)
+- **CORS Headers**: Can be empty (optional)
 
 If any configuration is invalid, the application will exit with a detailed error message explaining what needs to be fixed.
 
@@ -240,9 +254,94 @@ If any configuration is invalid, the application will exit with a detailed error
 ./subsoxy -db-max-open-conns 10 -db-max-idle-conns 2 -db-conn-max-lifetime 15m  # Conservative
 ./subsoxy -db-health-check=false                      # Disable health checks
 
+# CORS configuration examples
+./subsoxy -cors-allow-origins "http://localhost:3000,https://myapp.com"  # Specific origins
+./subsoxy -cors-allow-credentials=true                # Enable credentials
+./subsoxy -cors-enabled=false                         # Disable CORS entirely
+./subsoxy -cors-allow-methods "GET,POST,OPTIONS"      # Restrict methods
+
 # Using environment variables
-PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db RATE_LIMIT_RPS=50 DB_MAX_OPEN_CONNS=30 ./subsoxy
+PORT=9090 UPSTREAM_URL=http://my-subsonic-server:4533 LOG_LEVEL=debug DB_PATH=/path/to/music.db RATE_LIMIT_RPS=50 DB_MAX_OPEN_CONNS=30 CORS_ALLOW_ORIGINS="http://localhost:3000" ./subsoxy
 ```
+
+## CORS Support ✅ **NEW**
+
+The server includes comprehensive Cross-Origin Resource Sharing (CORS) support to enable web applications running on different domains/ports to access the Subsonic API proxy.
+
+### Why CORS is Important
+
+CORS is essential for web-based music players and applications that need to:
+- Access the proxy from different domains or ports
+- Make API requests from browser-based JavaScript applications
+- Integrate with single-page applications (SPAs) and web frameworks
+- Support development environments with different origins
+
+### CORS Configuration
+
+CORS can be configured via command-line flags or environment variables:
+
+```bash
+# Default configuration (allows all origins)
+./subsoxy  # CORS enabled, allows "*", basic methods and headers
+
+# Restrict to specific origins
+./subsoxy -cors-allow-origins "http://localhost:3000,https://myapp.com"
+
+# Enable credentials for authenticated requests
+./subsoxy -cors-allow-credentials=true -cors-allow-origins "http://localhost:3000"
+
+# Disable CORS entirely (for server-to-server usage)
+./subsoxy -cors-enabled=false
+
+# Custom methods and headers
+./subsoxy -cors-allow-methods "GET,POST,OPTIONS" -cors-allow-headers "Content-Type,Authorization"
+
+# Environment variable configuration
+export CORS_ENABLED=true
+export CORS_ALLOW_ORIGINS="http://localhost:3000,https://app.example.com"
+export CORS_ALLOW_CREDENTIALS=true
+./subsoxy
+```
+
+### CORS Parameters
+
+- **Enabled**: Whether CORS headers are added to responses (default: true)
+- **Allow Origins**: Comma-separated list of allowed origins (default: "*")
+- **Allow Methods**: Comma-separated list of allowed HTTP methods (default: "GET,POST,PUT,DELETE,OPTIONS")
+- **Allow Headers**: Comma-separated list of allowed request headers (default: "Content-Type,Authorization,X-Requested-With")
+- **Allow Credentials**: Whether to allow credentials in cross-origin requests (default: false)
+
+### CORS Security
+
+- **Origin Validation**: When specific origins are configured, only matching origins receive CORS headers
+- **Wildcard Handling**: Using "*" allows all origins (convenient for development, consider restrictions for production)
+- **Credentials Security**: When credentials are enabled, wildcard origins are not allowed for security
+- **Preflight Requests**: OPTIONS requests are handled automatically for complex CORS requests
+
+### Testing CORS
+
+You can test CORS functionality using curl:
+
+```bash
+# Test basic CORS headers
+curl -H "Origin: http://localhost:3000" -i http://localhost:8080/rest/ping
+
+# Test preflight request
+curl -X OPTIONS -H "Origin: http://localhost:3000" -H "Access-Control-Request-Method: GET" -i http://localhost:8080/rest/ping
+
+# Expected headers in response:
+# Access-Control-Allow-Origin: http://localhost:3000 (or *)
+# Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+# Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With
+# Access-Control-Max-Age: 86400
+```
+
+### Production Recommendations
+
+- **Development**: Use wildcard "*" for origins during development
+- **Production**: Specify exact origins for security: `-cors-allow-origins "https://myapp.com"`
+- **Credentials**: Only enable when necessary and with specific origins
+- **Methods**: Restrict to only needed HTTP methods for tighter security
 
 ## Rate Limiting
 
