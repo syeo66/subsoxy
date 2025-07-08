@@ -1,0 +1,114 @@
+# Binaries and executables
+subsoxy
+subsoxy-test
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database files (runtime data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Git files
+.git/
+.gitignore
+
+# Documentation (already in image via COPY)
+README.md
+TODO.md
+TROUBLESHOOTING.md
+LICENSE
+*/README.md
+
+# Docker files (don't need these in the image)
+Dockerfile*
+.dockerignore
+docker-compose.yml
+docker-compose.yaml
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Captain definition (already copied explicitly if needed)
+captain-definition
+
+# Air live reload config
+.air.toml
+
+# Test coverage and profiling
+profile.out
+mem.out
+cpu.out
+
+# Build artifacts from other systems
+dist/
+build/
+target/
+
+# Node.js files (if any frontend components)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python files (if any scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Backup files
+*.bak
+*.backup
+*.orig
