@@ -611,6 +611,7 @@ ps aux | grep subsoxy
 **Fixed Issues:**
 - ✅ **Database health check goroutine leak**: Fixed with proper shutdown channel signaling
 - ✅ **Race conditions in shuffle service**: Fixed with proper mutex protection
+- ✅ **Server syncTicker race condition**: Fixed with proper `sync.RWMutex` protection between background sync and shutdown
 - ✅ **Connection pool goroutine management**: Implemented with graceful shutdown
 
 This troubleshooting guide covers the most common issues. For additional help, enable debug logging and examine the error context provided by the structured error handling system.

@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -40,6 +41,7 @@ type ProxyServer struct {
 	shuffle     *shuffle.Service
 	server      *http.Server
 	syncTicker  *time.Ticker
+	syncMutex   sync.RWMutex
 	shutdownChan chan struct{}
 	rateLimiter *rate.Limiter
 }
@@ -267,9 +269,12 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	
 	close(ps.shutdownChan)
 	
+	// Safely stop the sync ticker
+	ps.syncMutex.RLock()
 	if ps.syncTicker != nil {
 		ps.syncTicker.Stop()
 	}
+	ps.syncMutex.RUnlock()
 	
 	if ps.db != nil {
 		if err := ps.db.Close(); err != nil {
@@ -289,14 +294,32 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 }
 
 func (ps *ProxyServer) syncSongs() {
+	// Safely create and store the ticker
+	ps.syncMutex.Lock()
 	ps.syncTicker = time.NewTicker(1 * time.Hour)
-	defer ps.syncTicker.Stop()
+	ps.syncMutex.Unlock()
+	
+	defer func() {
+		ps.syncMutex.Lock()
+		if ps.syncTicker != nil {
+			ps.syncTicker.Stop()
+		}
+		ps.syncMutex.Unlock()
+	}()
 
 	ps.fetchAndStoreSongs()
 
 	for {
+		ps.syncMutex.RLock()
+		ticker := ps.syncTicker
+		ps.syncMutex.RUnlock()
+		
+		if ticker == nil {
+			return
+		}
+		
 		select {
-		case <-ps.syncTicker.C:
+		case <-ticker.C:
 			ps.fetchAndStoreSongs()
 		case <-ps.shutdownChan:
 			ps.logger.Info("Stopping song sync goroutine")
