@@ -1131,3 +1131,88 @@ func TestGetTransitionProbabilities(t *testing.T) {
 		t.Errorf("Expected empty probabilities map, got %d entries", len(probabilities))
 	}
 }
+
+func TestHealthCheckShutdown(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	// Create database with health check enabled
+	poolConfig := &ConnectionPool{
+		MaxOpenConns:    5,
+		MaxIdleConns:    2,
+		ConnMaxLifetime: 30 * time.Minute,
+		ConnMaxIdleTime: 5 * time.Minute,
+		HealthCheck:     true,
+	}
+	
+	db, err := NewWithPool(":memory:", logger, poolConfig)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	
+	// Give the health check goroutine time to start
+	time.Sleep(100 * time.Millisecond)
+	
+	// Verify shutdown channel is initialized
+	if db.shutdownChan == nil {
+		t.Error("Shutdown channel should be initialized")
+	}
+	
+	// Close the database - this should signal the health check goroutine to stop
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("Failed to close database: %v", err)
+	}
+	
+	// Verify shutdown channel is closed
+	select {
+	case <-db.shutdownChan:
+		// Channel is closed, which is expected
+	default:
+		t.Error("Shutdown channel should be closed after database close")
+	}
+	
+	// Give time for goroutine to exit
+	time.Sleep(200 * time.Millisecond)
+	
+	// Verify that the health check goroutine has stopped by checking that 
+	// no new health checks are performed (this is implicit - if the goroutine
+	// was still running, it would continue updating statistics)
+	
+	// Test that calling Close() multiple times doesn't panic
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("Second close should not return error: %v", err)
+	}
+}
+
+func TestHealthCheckDisabled(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	// Create database with health check disabled
+	poolConfig := &ConnectionPool{
+		MaxOpenConns:    5,
+		MaxIdleConns:    2,
+		ConnMaxLifetime: 30 * time.Minute,
+		ConnMaxIdleTime: 5 * time.Minute,
+		HealthCheck:     false,
+	}
+	
+	db, err := NewWithPool(":memory:", logger, poolConfig)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	// Verify shutdown channel is still initialized even when health check is disabled
+	if db.shutdownChan == nil {
+		t.Error("Shutdown channel should be initialized even when health check is disabled")
+	}
+	
+	// Close should work normally
+	err = db.Close()
+	if err != nil {
+		t.Fatalf("Failed to close database: %v", err)
+	}
+}

@@ -530,4 +530,87 @@ free -h
 df -h
 ```
 
+## Server Shutdown Issues
+
+### Server Hangs on Shutdown
+
+**Error**: Server doesn't terminate cleanly when stopped
+
+**Causes:**
+- Background goroutines not properly terminated
+- Database connections not cleanly closed
+- Network connections still active
+
+**Solutions:**
+```bash
+# Check if server is responding
+curl -v http://localhost:8080/rest/ping
+
+# Force kill if hanging
+pkill -f subsoxy
+killall subsoxy
+
+# Check for hanging processes
+ps aux | grep subsoxy
+```
+
+**Prevention:**
+- ✅ **Database goroutine leaks**: Fixed - Health check goroutines now terminate properly
+- Always use `defer db.Close()` in custom implementations
+- Ensure all background operations handle shutdown signals
+
+### Database Connection Pool Issues
+
+**Error**: Database health check errors or connection exhaustion
+
+**Causes:**
+- Connection pool misconfiguration
+- Database file corruption
+- Insufficient connection limits
+
+**Solutions:**
+```bash
+# Check database health
+sqlite3 subsoxy.db "PRAGMA integrity_check;"
+
+# Verify connection pool settings
+./subsoxy -db-max-open-conns 10 -db-max-idle-conns 2 -log-level debug
+
+# Monitor connection statistics
+curl -s http://localhost:8080/debug/stats  # If debug endpoint available
+```
+
+**Configuration:**
+```bash
+# Conservative connection settings
+./subsoxy -db-max-open-conns 10 -db-max-idle-conns 2 -db-conn-max-lifetime 15m
+
+# Disable health checks if problematic
+./subsoxy -db-health-check=false
+```
+
+### Goroutine Monitoring
+
+**Symptoms:**
+- Increasing memory usage over time
+- Server slow to respond to shutdown signals
+- Process doesn't terminate cleanly
+
+**Diagnostic Commands:**
+```bash
+# Enable debug logging for goroutine information
+./subsoxy -log-level debug
+
+# Monitor process memory usage
+ps -p $(pgrep subsoxy) -o pid,vsz,rss,comm
+
+# Check for hanging processes after shutdown
+ps aux | grep subsoxy
+```
+
+**Fixed Issues:**
+- ✅ **Database health check goroutine leak**: Fixed with proper shutdown channel signaling
+- ✅ **Race conditions in shuffle service**: Fixed with proper mutex protection
+- ✅ **Connection pool goroutine management**: Implemented with graceful shutdown
+
 This troubleshooting guide covers the most common issues. For additional help, enable debug logging and examine the error context provided by the structured error handling system.

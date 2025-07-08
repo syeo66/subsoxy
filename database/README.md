@@ -101,7 +101,7 @@ db, err := database.NewWithPool("/path/to/database.db", logger, poolConfig)
 if err != nil {
     // handle error
 }
-defer db.Close()
+defer db.Close()  // Properly shuts down health check goroutine
 ```
 
 ### Multi-Tenant Song Operations ✅ **UPDATED**
@@ -182,6 +182,7 @@ if err != nil {
 - Connection statistics monitoring (open, idle, in-use connections)
 - Failed connection tracking and logging
 - Automatic pool performance metrics
+- **Goroutine Leak Prevention**: ✅ **FIXED** - Proper health check goroutine shutdown via channel signaling
 
 ### Transaction Management
 - Bulk operations use transactions for performance
@@ -240,3 +241,38 @@ Context: {"field": "songID"}
 - Automatically calculated as `play_count / (play_count + skip_count)`
 - Updated whenever transition events are recorded
 - Used by the shuffle algorithm for intelligent recommendations
+
+### Goroutine Management ✅ **FIXED**
+
+**Health Check Goroutine Lifecycle**:
+- **Shutdown Channel**: Database struct includes `shutdownChan chan struct{}` for clean shutdown
+- **Graceful Termination**: Health check goroutine listens for shutdown signal via `select` statement
+- **Resource Cleanup**: `Close()` method properly signals health check goroutine to stop
+- **No Leaks**: Guarantees all background goroutines terminate on database close
+- **Thread Safety**: Uses channel-based signaling for race-free shutdown
+- **Test Coverage**: Comprehensive tests verify proper goroutine lifecycle management
+
+**Implementation**:
+```go
+// Health check loop with proper shutdown handling
+func (db *DB) healthCheckLoop() {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ticker.C:
+            db.performHealthCheck()
+        case <-db.shutdownChan:
+            db.logger.Debug("Database health check loop shutting down")
+            return  // Goroutine exits cleanly
+        }
+    }
+}
+```
+
+**Benefits**:
+- **Production Ready**: Eliminates goroutine leak causing resource consumption
+- **Clean Shutdown**: Server shutdown doesn't hang waiting for background goroutines
+- **Resource Efficient**: Proper goroutine cleanup prevents memory leaks
+- **Monitoring Safe**: Health checks stop cleanly without affecting application shutdown

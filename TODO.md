@@ -29,11 +29,18 @@
 
 ## Priority 3: Concurrency and Thread Safety
 
-### 1. **Goroutine Leak Risk** 🟡
-- **Issue**: Goroutines started without proper cleanup tracking
-- **Risk**: Resource leaks under error conditions
-- **Fix**: Use context-based cancellation and proper lifecycle management
-- **Files**: `server/server.go`
+### 1. **Goroutine Leak Risk** ✅ **FIXED**
+- **Issue**: Database health check goroutine had no shutdown mechanism
+- **Risk**: Resource leaks on server shutdown
+- **Fix**: ✅ Added shutdown channel to database struct with proper cleanup
+- **Files**: `database/database.go`
+- **Implementation**:
+  - **Shutdown Channel**: Added `shutdownChan chan struct{}` to `DB` struct
+  - **Graceful Shutdown**: `healthCheckLoop()` listens for shutdown signal via `select`
+  - **Proper Cleanup**: `Close()` method signals shutdown by closing the channel
+  - **Thread Safety**: Uses channel-based signaling for clean shutdown
+  - **Idempotent Close**: Multiple `Close()` calls don't panic or error
+  - **Test Coverage**: Added `TestHealthCheckShutdown` and `TestHealthCheckDisabled`
 
 ### 2. **Race Conditions** ✅ **FIXED**
 - **Issue**: `lastPlayed` field not protected by mutex
@@ -79,7 +86,7 @@
 ## Implementation Priority Order
 
 1. **Performance Issues** (Priority 2) - ✅ **COMPLETED**
-2. **Concurrency Issues** (Priority 3) - Fix within 1 month
+2. **Concurrency Issues** (Priority 3) - ✅ **COMPLETED**
 3. **Code Quality** (Priority 4) - Ongoing improvements
 4. **Missing Features** (Priority 5) - Add as needed
 

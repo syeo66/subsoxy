@@ -14,10 +14,11 @@ import (
 )
 
 type DB struct {
-	conn   *sql.DB
-	logger *logrus.Logger
-	mu     sync.RWMutex
-	pool   *ConnectionPool
+	conn         *sql.DB
+	logger       *logrus.Logger
+	mu           sync.RWMutex
+	pool         *ConnectionPool
+	shutdownChan chan struct{}
 }
 
 // ConnectionPool manages database connection pool settings
@@ -66,9 +67,10 @@ func NewWithPool(dbPath string, logger *logrus.Logger, poolConfig *ConnectionPoo
 	}
 
 	db := &DB{
-		conn:   conn,
-		logger: logger,
-		pool:   poolConfig,
+		conn:         conn,
+		logger:       logger,
+		pool:         poolConfig,
+		shutdownChan: make(chan struct{}),
 	}
 
 	if err := db.createTables(); err != nil {
@@ -98,6 +100,14 @@ func DefaultPoolConfig() *ConnectionPool {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// Signal health check goroutine to stop
+	select {
+	case <-db.shutdownChan:
+		// Already closed
+	default:
+		close(db.shutdownChan)
+	}
 
 	if err := db.conn.Close(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "CLOSE_FAILED", "failed to close database connection")
@@ -586,6 +596,9 @@ func (db *DB) healthCheckLoop() {
 		select {
 		case <-ticker.C:
 			db.performHealthCheck()
+		case <-db.shutdownChan:
+			db.logger.Debug("Database health check loop shutting down")
+			return
 		}
 	}
 }
