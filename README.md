@@ -12,7 +12,7 @@ This application uses a modular architecture with the following components:
 - **`handlers/`**: HTTP request handlers for different Subsonic API endpoints with input validation
 - **`server/`**: Main proxy server logic and lifecycle management with error recovery
 - **`credentials/`**: Secure authentication and credential validation with AES-256-GCM encryption and timeout protection
-- **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning
+- **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning and thread safety
 - **`errors/`**: Structured error handling with categorization and context
 - **`main.go`**: Entry point that wires all modules together
 
@@ -25,7 +25,7 @@ This application uses a modular architecture with the following components:
 - **User-Specific Song Tracking**: SQLite3 database tracks played songs with play/skip statistics per user with comprehensive validation
 - **Database Connection Pooling**: Advanced connection pool management with health monitoring for optimal performance
 - **Per-User Transition Analysis**: Builds transition probabilities between songs for personalized intelligent recommendations
-- **Personalized Weighted Shuffle**: Intelligent song shuffling based on individual user play history, preferences, and transition probabilities
+- **Personalized Weighted Shuffle**: Thread-safe intelligent song shuffling based on individual user play history, preferences, and transition probabilities
 - **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and authentication
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging

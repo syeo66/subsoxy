@@ -144,13 +144,15 @@ h.logger.WithFields(logrus.Fields{
 ## Integration Points
 
 ### Shuffle Service
-The handlers module integrates with the shuffle service for intelligent song recommendations:
+The handlers module integrates with the shuffle service for intelligent song recommendations with thread safety:
 ```go
 type Handler struct {
     logger  *logrus.Logger
-    shuffle *shuffle.Service
+    shuffle *shuffle.Service  // Thread-safe concurrent access
 }
 ```
+
+The shuffle service provides thread-safe operations allowing multiple simultaneous requests from different users without race conditions.
 
 ### Event Recording
 Handlers accept callback functions for recording play events:

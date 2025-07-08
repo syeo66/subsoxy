@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,6 +17,7 @@ type Service struct {
 	db         *database.DB
 	logger     *logrus.Logger
 	lastPlayed map[string]*models.Song  // Map userID to last played song
+	mu         sync.RWMutex             // Protects lastPlayed map
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
@@ -27,6 +29,8 @@ func New(db *database.DB, logger *logrus.Logger) *Service {
 }
 
 func (s *Service) SetLastPlayed(userID string, song *models.Song) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.lastPlayed[userID] = song
 }
 
@@ -128,7 +132,10 @@ func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
 }
 
 func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
+	s.mu.RLock()
 	lastPlayed, exists := s.lastPlayed[userID]
+	s.mu.RUnlock()
+	
 	if !exists || lastPlayed == nil {
 		return 1.0
 	}

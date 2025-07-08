@@ -566,3 +566,73 @@ func TestEdgeCases(t *testing.T) {
 		t.Errorf("Expected non-negative number of songs, got %d", len(songs))
 	}
 }
+
+func TestConcurrentAccess(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_concurrent.db"
+	defer os.Remove(dbPath)
+	
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	service := New(db, logger)
+	
+	// Create test songs
+	songs := []models.Song{
+		{ID: "song1", Title: "Song 1", Artist: "Artist 1"},
+		{ID: "song2", Title: "Song 2", Artist: "Artist 2"},
+		{ID: "song3", Title: "Song 3", Artist: "Artist 3"},
+	}
+	
+	// Store songs in database
+	err = db.StoreSongs("testuser", songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	
+	// Test concurrent access to SetLastPlayed and calculateTransitionWeight
+	const numGoroutines = 100
+	const numIterations = 10
+	
+	// Start multiple goroutines that concurrently access lastPlayed map
+	done := make(chan bool, numGoroutines)
+	
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer func() { done <- true }()
+			
+			userID := "testuser"
+			for j := 0; j < numIterations; j++ {
+				// Concurrent SetLastPlayed calls
+				songIndex := (goroutineID + j) % len(songs)
+				service.SetLastPlayed(userID, &songs[songIndex])
+				
+				// Concurrent calculateTransitionWeight calls (reads lastPlayed)
+				weight := service.calculateTransitionWeight(userID, songs[songIndex].ID)
+				if weight < 0 {
+					t.Errorf("Invalid weight: %f", weight)
+				}
+			}
+		}(i)
+	}
+	
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+	
+	// Verify that the service is still functional after concurrent access
+	shuffledSongs, err := service.GetWeightedShuffledSongs("testuser", 3)
+	if err != nil {
+		t.Errorf("Failed to get shuffled songs after concurrent access: %v", err)
+	}
+	
+	if len(shuffledSongs) == 0 {
+		t.Error("Expected shuffled songs after concurrent access")
+	}
+}

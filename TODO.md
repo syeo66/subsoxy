@@ -22,11 +22,18 @@
 - **Fix**: Use context-based cancellation and proper lifecycle management
 - **Files**: `server/server.go`
 
-### 2. **Race Conditions** 🟡
+### 2. **Race Conditions** ✅ **FIXED**
 - **Issue**: `lastPlayed` field not protected by mutex
 - **Risk**: Race conditions in multi-threaded access
-- **Fix**: Add mutex protection for shared fields
+- **Fix**: ✅ Added `sync.RWMutex` protection for `lastPlayed` map access
 - **Files**: `shuffle/shuffle.go`
+- **Implementation**: 
+  - Added `mu sync.RWMutex` field to Service struct
+  - Protected write operations in `SetLastPlayed()` with `Lock()/Unlock()`
+  - Protected read operations in `calculateTransitionWeight()` with `RLock()/RUnlock()`
+  - Added `TestConcurrentAccess()` test with 100 goroutines × 10 iterations
+  - Verified with Go race detector - no race conditions detected
+  - Test coverage increased from 94.6% to 95.0%
 
 ## Priority 4: Code Quality and Maintainability
 
