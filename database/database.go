@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"strings"
 	"sync"
 	"time"
 
@@ -312,6 +313,80 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	return songs, nil
 }
 
+// GetSongCount returns the total number of songs for a user
+func (db *DB) GetSongCount(userID string) (int, error) {
+	if userID == "" {
+		return 0, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM songs WHERE user_id = ?`, userID).Scan(&count)
+	if err != nil {
+		return 0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get song count").
+			WithContext("userID", userID)
+	}
+
+	return count, nil
+}
+
+// GetSongsBatch returns a batch of songs for a user with pagination
+func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if limit <= 0 {
+		return nil, errors.ErrValidationFailed.WithContext("field", "limit")
+	}
+	if offset < 0 {
+		return nil, errors.ErrValidationFailed.WithContext("field", "offset")
+	}
+
+	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
+		COALESCE(last_played, '1970-01-01') as last_played, 
+		COALESCE(play_count, 0) as play_count, 
+		COALESCE(skip_count, 0) as skip_count 
+		FROM songs WHERE user_id = ? 
+		ORDER BY id LIMIT ? OFFSET ?`, userID, limit, offset)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query songs batch").
+			WithContext("userID", userID).
+			WithContext("limit", limit).
+			WithContext("offset", offset)
+	}
+	defer rows.Close()
+
+	var songs []models.Song
+	for rows.Next() {
+		var song models.Song
+		var lastPlayedStr string
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, 
+			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount)
+		if err != nil {
+			db.logger.WithError(err).WithFields(logrus.Fields{
+				"userID": userID,
+				"limit":  limit,
+				"offset": offset,
+			}).Error("Failed to scan song in batch")
+			continue
+		}
+		
+		if lastPlayedStr != "1970-01-01" {
+			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+		}
+		
+		songs = append(songs, song)
+	}
+	
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song batch iteration").
+			WithContext("userID", userID).
+			WithContext("limit", limit).
+			WithContext("offset", offset)
+	}
+	
+	return songs, nil
+}
+
 func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *string) error {
 	if userID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "userID")
@@ -439,6 +514,67 @@ func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (flo
 	}
 	
 	return probability, nil
+}
+
+// GetTransitionProbabilities returns transition probabilities for multiple songs in a batch
+// to avoid N+1 queries when calculating weights for many songs
+func (db *DB) GetTransitionProbabilities(userID, fromSongID string, toSongIDs []string) (map[string]float64, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if fromSongID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "fromSongID")
+	}
+	if len(toSongIDs) == 0 {
+		return make(map[string]float64), nil
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(toSongIDs))
+	args := make([]interface{}, 0, len(toSongIDs)+2)
+	args = append(args, userID, fromSongID)
+	
+	for i, toSongID := range toSongIDs {
+		placeholders[i] = "?"
+		args = append(args, toSongID)
+	}
+	
+	query := `SELECT to_song_id, COALESCE(probability, 0.5) as probability 
+		FROM song_transitions 
+		WHERE user_id = ? AND from_song_id = ? AND to_song_id IN (` + 
+		strings.Join(placeholders, ",") + `)`
+	
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probabilities").
+			WithContext("userID", userID).
+			WithContext("fromSongID", fromSongID).
+			WithContext("toSongCount", len(toSongIDs))
+	}
+	defer rows.Close()
+
+	probabilities := make(map[string]float64)
+	for rows.Next() {
+		var toSongID string
+		var probability float64
+		if err := rows.Scan(&toSongID, &probability); err != nil {
+			db.logger.WithError(err).WithFields(logrus.Fields{
+				"userID":     userID,
+				"fromSongID": fromSongID,
+			}).Error("Failed to scan transition probability")
+			continue
+		}
+		probabilities[toSongID] = probability
+	}
+
+	// Fill in default probabilities for songs not found
+	for _, toSongID := range toSongIDs {
+		if _, exists := probabilities[toSongID]; !exists {
+			probabilities[toSongID] = 0.5
+		}
+	}
+
+	return probabilities, nil
 }
 
 // healthCheckLoop runs periodic health checks on the database connection

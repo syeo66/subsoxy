@@ -920,3 +920,214 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 	
 	t.Logf("Concurrent test completed successfully with %d total plays", totalPlayCount)
 }
+
+func TestGetSongCount(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	userID := "testuser"
+	
+	// Test with no songs
+	count, err := db.GetSongCount(userID)
+	if err != nil {
+		t.Fatalf("Failed to get song count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 songs, got %d", count)
+	}
+	
+	// Add some songs
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
+		{ID: "3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
+	}
+	
+	err = db.StoreSongs(userID, songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	
+	// Test with songs
+	count, err = db.GetSongCount(userID)
+	if err != nil {
+		t.Fatalf("Failed to get song count: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Expected 3 songs, got %d", count)
+	}
+	
+	// Test with empty user ID
+	_, err = db.GetSongCount("")
+	if err == nil {
+		t.Error("Expected error for empty user ID")
+	}
+}
+
+func TestGetSongsBatch(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	userID := "testuser"
+	
+	// Add test songs
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
+		{ID: "3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
+		{ID: "4", Title: "Song 4", Artist: "Artist 4", Album: "Album 4", Duration: 240},
+		{ID: "5", Title: "Song 5", Artist: "Artist 5", Album: "Album 5", Duration: 260},
+	}
+	
+	err = db.StoreSongs(userID, songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	
+	// Test getting first batch
+	batch, err := db.GetSongsBatch(userID, 2, 0)
+	if err != nil {
+		t.Fatalf("Failed to get songs batch: %v", err)
+	}
+	if len(batch) != 2 {
+		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
+	}
+	
+	// Test getting second batch
+	batch, err = db.GetSongsBatch(userID, 2, 2)
+	if err != nil {
+		t.Fatalf("Failed to get songs batch: %v", err)
+	}
+	if len(batch) != 2 {
+		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
+	}
+	
+	// Test getting last batch (partial)
+	batch, err = db.GetSongsBatch(userID, 2, 4)
+	if err != nil {
+		t.Fatalf("Failed to get songs batch: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Errorf("Expected 1 song in batch, got %d", len(batch))
+	}
+	
+	// Test with empty user ID
+	_, err = db.GetSongsBatch("", 2, 0)
+	if err == nil {
+		t.Error("Expected error for empty user ID")
+	}
+	
+	// Test with invalid limit
+	_, err = db.GetSongsBatch(userID, 0, 0)
+	if err == nil {
+		t.Error("Expected error for zero limit")
+	}
+	
+	// Test with invalid offset
+	_, err = db.GetSongsBatch(userID, 2, -1)
+	if err == nil {
+		t.Error("Expected error for negative offset")
+	}
+}
+
+func TestGetTransitionProbabilities(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	userID := "testuser"
+	fromSongID := "song1"
+	toSongIDs := []string{"song2", "song3", "song4"}
+	
+	// Add some songs first
+	songs := []models.Song{
+		{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
+		{ID: "song2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
+		{ID: "song3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
+		{ID: "song4", Title: "Song 4", Artist: "Artist 4", Album: "Album 4", Duration: 240},
+	}
+	
+	err = db.StoreSongs(userID, songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	
+	// Record some transitions
+	err = db.RecordTransition(userID, fromSongID, "song2", "play")
+	if err != nil {
+		t.Fatalf("Failed to record transition: %v", err)
+	}
+	
+	err = db.RecordTransition(userID, fromSongID, "song3", "skip")
+	if err != nil {
+		t.Fatalf("Failed to record transition: %v", err)
+	}
+	
+	// Update probabilities - this is done automatically by RecordTransition
+	// so we just need to trigger it by recording multiple transitions
+	err = db.RecordTransition(userID, fromSongID, "song2", "play")
+	if err != nil {
+		t.Fatalf("Failed to record second transition: %v", err)
+	}
+	
+	// Test getting batch probabilities
+	probabilities, err := db.GetTransitionProbabilities(userID, fromSongID, toSongIDs)
+	if err != nil {
+		t.Fatalf("Failed to get transition probabilities: %v", err)
+	}
+	
+	if len(probabilities) != 3 {
+		t.Errorf("Expected 3 probabilities, got %d", len(probabilities))
+	}
+	
+	// Check that we got probabilities for all requested songs
+	for _, toSongID := range toSongIDs {
+		if _, exists := probabilities[toSongID]; !exists {
+			t.Errorf("Missing probability for song %s", toSongID)
+		}
+	}
+	
+	// song2 should have been played, so probability > 0.5
+	if probabilities["song2"] <= 0.5 {
+		t.Errorf("Expected probability > 0.5 for song2, got %f", probabilities["song2"])
+	}
+	
+	// song3 should have been skipped, so probability < 0.5
+	if probabilities["song3"] >= 0.5 {
+		t.Errorf("Expected probability < 0.5 for song3, got %f", probabilities["song3"])
+	}
+	
+	// song4 should have default probability of 0.5
+	if probabilities["song4"] != 0.5 {
+		t.Errorf("Expected probability 0.5 for song4, got %f", probabilities["song4"])
+	}
+	
+	// Test with empty user ID
+	_, err = db.GetTransitionProbabilities("", fromSongID, toSongIDs)
+	if err == nil {
+		t.Error("Expected error for empty user ID")
+	}
+	
+	// Test with empty from song ID
+	_, err = db.GetTransitionProbabilities(userID, "", toSongIDs)
+	if err == nil {
+		t.Error("Expected error for empty from song ID")
+	}
+	
+	// Test with empty to song IDs
+	probabilities, err = db.GetTransitionProbabilities(userID, fromSongID, []string{})
+	if err != nil {
+		t.Fatalf("Failed to get transition probabilities for empty list: %v", err)
+	}
+	if len(probabilities) != 0 {
+		t.Errorf("Expected empty probabilities map, got %d entries", len(probabilities))
+	}
+}
