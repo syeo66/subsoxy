@@ -1,5 +1,19 @@
 # TODO
 
+## Priority 1: Critical Multi-User Issues
+
+### 1. **Multi-User Song Sync Limitation** 🔴
+- **Issue**: Background sync only works for the first user with valid credentials
+- **Risk**: Other users have stale/empty song libraries, broken weighted shuffle
+- **Impact**: Multi-tenancy partially broken for automated sync
+- **Fix**: 
+  - Add `GetAllValid()` method to `credentials.Manager`
+  - Modify `fetchAndStoreSongs()` to iterate through all users
+  - Implement per-user error handling in sync process
+  - Add staggered sync to avoid overwhelming upstream server
+- **Files**: `server/server.go:383-387`, `credentials/credentials.go:139-153`
+- **Details**: `credentials.GetValid()` only returns first valid credential, causing background sync to sync only one user's songs
+
 ## Priority 4: Code Quality and Maintainability
 
 ### 1. **Magic Numbers and Constants** 🟡
@@ -28,10 +42,21 @@
 - **Fix**: Add security middleware with proper headers
 - **Files**: `server/server.go`
 
+### 2. **Documentation Restructure** 🟡
+- **Issue**: README.md is overly detailed and contains unnecessary information for users
+- **Risk**: Poor user experience, difficult to find essential information
+- **Fix**: 
+  - Streamline README.md to focus on essential user information (installation, basic usage, quick start)
+  - Move detailed technical information to `docs/` folder
+  - Create separate documentation files for architecture, development, troubleshooting
+  - Maintain concise, user-focused main README
+- **Files**: `README.md`, create `docs/` folder structure
+
 ## Implementation Priority Order
 
-1. **Code Quality** (Priority 4) - Ongoing improvements
-2. **Missing Features** (Priority 5) - Add as needed
+1. **Multi-User Issues** (Priority 1) - Fix immediately - CRITICAL
+2. **Code Quality** (Priority 4) - Ongoing improvements
+3. **Missing Features** (Priority 5) - Add as needed
 
 ## Legend
 - 🔴 Critical - Fix immediately
