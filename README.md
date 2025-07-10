@@ -506,6 +506,15 @@ Each error includes contextual information for better debugging:
 }
 ```
 
+### Go 1.13+ Compatibility
+
+The application uses modern Go error handling with full Go 1.13+ compatibility:
+
+- **Error Wrapping**: Proper error chains with `Unwrap()` support
+- **Error Comparison**: `Is()` method for error type comparison
+- **Error Unwrapping**: `As()` method for extracting specific error types
+- **Error Navigation**: Helper functions for traversing error chains
+
 ### Error Recovery
 
 The application implements graceful error recovery:

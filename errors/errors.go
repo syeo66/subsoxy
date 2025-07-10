@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -33,6 +34,45 @@ func (e *SubsoxyError) Error() string {
 
 func (e *SubsoxyError) Unwrap() error {
 	return e.Cause
+}
+
+// Is implements error comparison for Go 1.13+ error handling
+func (e *SubsoxyError) Is(target error) bool {
+	if target == nil {
+		return false
+	}
+	
+	// Check if target is a SubsoxyError with matching category and code
+	if targetErr, ok := target.(*SubsoxyError); ok {
+		return e.Category == targetErr.Category && e.Code == targetErr.Code
+	}
+	
+	// Check if the underlying cause matches
+	if e.Cause != nil {
+		return errors.Is(e.Cause, target)
+	}
+	
+	return false
+}
+
+// As implements error unwrapping for Go 1.13+ error handling
+func (e *SubsoxyError) As(target interface{}) bool {
+	if target == nil {
+		return false
+	}
+	
+	// Check if target is a pointer to SubsoxyError
+	if targetPtr, ok := target.(**SubsoxyError); ok {
+		*targetPtr = e
+		return true
+	}
+	
+	// Delegate to underlying cause if it exists
+	if e.Cause != nil {
+		return errors.As(e.Cause, target)
+	}
+	
+	return false
 }
 
 func (e *SubsoxyError) WithContext(key string, value interface{}) *SubsoxyError {
@@ -136,17 +176,43 @@ func GetErrorContext(err error) map[string]interface{} {
 	return subsoxyErr.Context
 }
 
-// As is a wrapper around errors.As
-func As(err error, target interface{}) bool {
-	if err == nil {
+// IsCode checks if an error chain contains a SubsoxyError with the specified code
+func IsCode(err error, code string) bool {
+	var subsoxyErr *SubsoxyError
+	if !As(err, &subsoxyErr) {
 		return false
 	}
-	// Simple type assertion for our use case
-	if subsoxyErr, ok := err.(*SubsoxyError); ok {
-		if targetPtr, ok := target.(**SubsoxyError); ok {
-			*targetPtr = subsoxyErr
+	return subsoxyErr.Code == code
+}
+
+// HasCategory checks if an error chain contains any SubsoxyError with the specified category
+func HasCategory(err error, category string) bool {
+	for err != nil {
+		if IsCategory(err, category) {
 			return true
 		}
+		err = errors.Unwrap(err)
 	}
 	return false
+}
+
+// GetRootCause returns the root cause of an error chain
+func GetRootCause(err error) error {
+	for {
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			return err
+		}
+		err = unwrapped
+	}
+}
+
+// As is a wrapper around errors.As for Go 1.13+ compatibility
+func As(err error, target interface{}) bool {
+	return errors.As(err, target)
+}
+
+// Is is a wrapper around errors.Is for Go 1.13+ compatibility
+func Is(err, target error) bool {
+	return errors.Is(err, target)
 }
