@@ -285,11 +285,17 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}()
 		} else {
+			// Log more details about what we're actually seeing in the request
 			ps.logger.WithFields(logrus.Fields{
 				"has_username": username != "",
 				"has_password": password != "",
 				"endpoint": sanitizedEndpoint,
-			}).Debug("No credentials found in request")
+				"query_params": r.URL.RawQuery,
+				"method": r.Method,
+				"content_type": r.Header.Get("Content-Type"),
+				"authorization": r.Header.Get("Authorization") != "",
+				"user_agent": r.Header.Get("User-Agent"),
+			}).Info("No credentials found in request - examining request details")
 		}
 	}
 
