@@ -278,11 +278,18 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
+			ps.logger.WithField("username", sanitizeUsername(username)).Info("Extracted credentials from request, attempting validation")
 			go func() {
 				if err := ps.credentials.ValidateAndStore(username, password); err != nil {
-					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Debug("Failed to validate credentials")
+					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
 				}
 			}()
+		} else {
+			ps.logger.WithFields(logrus.Fields{
+				"has_username": username != "",
+				"has_password": password != "",
+				"endpoint": sanitizedEndpoint,
+			}).Debug("No credentials found in request")
 		}
 	}
 
