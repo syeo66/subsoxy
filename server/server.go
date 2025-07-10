@@ -278,24 +278,23 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
-			ps.logger.WithField("username", sanitizeUsername(username)).Info("Extracted credentials from request, attempting validation")
+			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
 			go func() {
 				if err := ps.credentials.ValidateAndStore(username, password); err != nil {
 					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
 				}
 			}()
 		} else {
-			// Log more details about what we're actually seeing in the request
+			// Log details about request without exposing any credential information
 			ps.logger.WithFields(logrus.Fields{
 				"has_username": username != "",
 				"has_password": password != "",
 				"endpoint": sanitizedEndpoint,
-				"query_params": r.URL.RawQuery,
 				"method": r.Method,
 				"content_type": r.Header.Get("Content-Type"),
 				"authorization": r.Header.Get("Authorization") != "",
 				"user_agent": r.Header.Get("User-Agent"),
-			}).Info("No credentials found in request - examining request details")
+			}).Debug("No credentials found in request")
 		}
 	}
 

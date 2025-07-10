@@ -1,27 +1,31 @@
-# Credentials Module
+# Credentials Module ✅ **ENHANCED WITH TOKEN SUPPORT**
 
-The credentials module provides secure credential management with AES-256-GCM encryption for authenticating with the upstream Subsonic server.
+The credentials module provides secure multi-mode credential management with AES-256-GCM encryption for authenticating with the upstream Subsonic server.
 
 ## Overview
 
 This module handles:
-- **AES-256-GCM Encryption**: All passwords are encrypted in memory using industry-standard authenticated encryption
-- Dynamic credential capture from client requests
-- Credential validation against upstream server
+- **Multi-Mode Authentication**: Supports both password-based and token-based Subsonic authentication
+- **AES-256-GCM Encryption**: All credentials (passwords/tokens) are encrypted in memory using industry-standard authenticated encryption
+- **Dynamic credential capture** from client requests (both authentication modes)
+- **Multi-format validation** against upstream server (password and token authentication)
 - Thread-safe encrypted credential storage
 - Background operation authentication
 - Secure credential cleanup with memory zeroing
+- **Client Compatibility**: Full support for modern Subsonic clients (Symfonium, DSub, etc.)
 
 ## Features
 
 ### Security
-- **AES-256-GCM Encryption**: All passwords encrypted using authenticated encryption with unique instance keys
+- **Multi-Mode Authentication**: Supports both password-based (`u` + `p`) and token-based (`u` + `t` + `s`) authentication
+- **AES-256-GCM Encryption**: All credentials (passwords/tokens) encrypted using authenticated encryption with unique instance keys
 - **Memory Protection**: Credentials never stored in plain text, protecting against memory dumps
 - **Secure Cleanup**: Encrypted data is securely zeroed before deallocation
 - **Per-Instance Security**: Each server instance generates unique 32-byte encryption keys
 - **Forward Security**: New encryption keys generated on each server restart
 - **No Hardcoded Credentials**: All credentials come from authenticated client requests
-- **Real-time Validation**: Credentials are validated against the upstream server using `/rest/ping`
+- **Real-time Validation**: Credentials are validated against the upstream server using `/rest/ping` with appropriate auth method
+- **Token Validation**: Full support for validating token-based authentication against upstream server
 - **Thread-Safe Storage**: Concurrent access is protected with read-write mutexes
 - **Timeout Protection**: Validation requests have configurable timeouts
 - **Automatic Cleanup**: Invalid credentials are securely removed from storage
@@ -42,11 +46,17 @@ credManager := credentials.New(logger, upstreamURL)
 
 ### Credential Management
 ```go
-// Validate and store credentials (async)
+// Validate and store password-based credentials (async)
 credManager.ValidateAndStore("username", "password")
+
+// Validate and store token-based credentials (async)
+credManager.ValidateAndStore("username", "TOKEN:token_value:salt_value")
 
 // Get valid credentials for background operations
 username, password := credManager.GetValid()
+
+// Get all valid credentials (multi-user support)
+allCreds := credManager.GetAllValid()
 
 // Clear invalid credentials
 credManager.ClearInvalid()
@@ -56,10 +66,11 @@ credManager.ClearInvalid()
 
 ### Validation Process
 1. **Duplicate Check**: Verify if credentials are already stored and valid
-2. **Upstream Validation**: Make a `/rest/ping` request to the upstream server
-3. **Response Parsing**: Parse the JSON response to check status
-4. **Storage**: Store valid credentials in thread-safe map
-5. **Logging**: Log validation results for monitoring
+2. **Authentication Mode Detection**: Determine if using password-based or token-based authentication
+3. **Upstream Validation**: Make a `/rest/ping` request to the upstream server with appropriate auth parameters
+4. **Response Parsing**: Parse the JSON response to check status
+5. **Storage**: Store valid credentials (encrypted) in thread-safe map
+6. **Logging**: Log validation results for monitoring with auth mode indication
 
 ### Data Structures
 ```go
@@ -108,9 +119,27 @@ func (cm *Manager) encryptPassword(password string) (encryptedCredential, error)
 
 ### Validation Request
 ```go
-func (cm *Manager) validate(username, password string) bool {
-    url := fmt.Sprintf("%s/rest/ping?u=%s&p=%s&v=1.15.0&c=subsoxy&f=json", 
-        cm.upstreamURL, username, password)
+func (cm *Manager) validate(username, password string) error {
+    baseURL, _ := url.Parse(cm.upstreamURL + "/rest/ping")
+    params := url.Values{}
+    params.Add("u", username)
+    
+    // Check authentication mode
+    if strings.HasPrefix(password, "TOKEN:") {
+        // Token-based authentication
+        parts := strings.Split(password, ":")
+        token, salt := parts[1], parts[2]
+        params.Add("t", token)
+        params.Add("s", salt)
+    } else {
+        // Password-based authentication
+        params.Add("p", password)
+    }
+    
+    params.Add("v", "1.15.0")
+    params.Add("c", "subsoxy")
+    params.Add("f", "json")
+    baseURL.RawQuery = params.Encode()
     
     client := &http.Client{
         Timeout: 10 * time.Second,  // Prevent hanging
@@ -124,14 +153,30 @@ func (cm *Manager) validate(username, password string) bool {
 
 ### Client Request Handling
 ```go
-// In the proxy server
+// In the proxy server - now supports both auth modes
 if strings.HasPrefix(endpoint, "/rest/") {
-    username := r.URL.Query().Get("u")
-    password := r.URL.Query().Get("p")
+    username, password := extractCredentials(r)  // Extracts both password and token auth
     if username != "" && password != "" {
         // Validate asynchronously to avoid blocking the request
         go credManager.ValidateAndStore(username, password)
     }
+}
+
+// Enhanced credential extraction
+func extractCredentials(r *http.Request) (username, password string) {
+    username = r.URL.Query().Get("u")
+    password = r.URL.Query().Get("p")
+    
+    // If no password, try token-based auth
+    if password == "" {
+        token := r.URL.Query().Get("t")
+        salt := r.URL.Query().Get("s")
+        if token != "" && salt != "" {
+            password = "TOKEN:" + token + ":" + salt
+        }
+    }
+    
+    return username, password
 }
 ```
 
@@ -170,9 +215,16 @@ client := &http.Client{
 ```
 
 ### Upstream Endpoint
-The validation uses the standard Subsonic ping endpoint:
+The validation uses the standard Subsonic ping endpoint with appropriate authentication:
+
+**Password-based authentication:**
 ```
 /rest/ping?u={username}&p={password}&v=1.15.0&c=subsoxy&f=json
+```
+
+**Token-based authentication:**
+```
+/rest/ping?u={username}&t={token}&s={salt}&v=1.15.0&c=subsoxy&f=json
 ```
 
 ## Error Scenarios

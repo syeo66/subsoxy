@@ -22,7 +22,7 @@ This application uses a modular architecture with the following components:
 - **Reverse Proxy**: Forwards all requests to upstream Subsonic server with health monitoring
 - **Multi-Tenancy ✅**: Complete user data isolation with per-user song libraries, play history, and personalized recommendations
 - **Hook System**: Intercept and process requests at any endpoint with comprehensive error handling
-- **Credential Management**: Secure credential handling with AES-256-GCM encryption, dynamic validation, timeout protection, and thread-safe storage
+- **Multi-Mode Authentication**: Secure credential handling supporting both password-based and token-based Subsonic authentication with AES-256-GCM encryption, dynamic validation, timeout protection, and thread-safe storage
 - **User-Specific Song Tracking**: SQLite3 database tracks played songs with play/skip statistics per user with comprehensive validation
 - **Database Connection Pooling**: Advanced connection pool management with health monitoring for optimal performance
 - **Per-User Transition Analysis**: Builds transition probabilities between songs for personalized intelligent recommendations
@@ -58,8 +58,9 @@ The proxy implements **complete multi-tenancy** with full user data isolation at
 
 ### API Usage
 
-All Subsonic API endpoints require user context via the `u` parameter:
+All Subsonic API endpoints require user context via the `u` parameter with either password or token authentication:
 
+**Password-based authentication:**
 ```bash
 # User-specific song shuffle - each user gets personalized recommendations
 curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&size=50"
@@ -72,6 +73,19 @@ curl "http://localhost:8080/rest/stream?u=alice&p=password&id=song123"
 curl "http://localhost:8080/rest/scrobble?u=alice&p=password&id=song123&submission=true"
 ```
 
+**Token-based authentication (recommended for modern clients):**
+```bash
+# User-specific song shuffle with token authentication
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&size=50"
+curl "http://localhost:8080/rest/getRandomSongs?u=bob&t=token&s=salt&size=50"
+
+# User-specific stream tracking with token authentication
+curl "http://localhost:8080/rest/stream?u=alice&t=token&s=salt&id=song123"
+
+# User-specific play/skip recording with token authentication
+curl "http://localhost:8080/rest/scrobble?u=alice&t=token&s=salt&id=song123&submission=true"
+```
+
 ### Migration & Compatibility
 
 - **Automatic Migration**: Seamless upgrade from single-tenant to multi-tenant schema
@@ -82,6 +96,8 @@ curl "http://localhost:8080/rest/scrobble?u=alice&p=password&id=song123&submissi
 ### Security & Validation
 
 - **Required User Parameter**: All endpoints validate the presence of `u` parameter
+- **Multi-Auth Support**: Password-based (`u` + `p`) and token-based (`u` + `t` + `s`) authentication
+- **Client Compatibility**: Full support for modern Subsonic clients (Symfonium, DSub, etc.)
 - **Input Sanitization**: User IDs are sanitized to prevent log injection attacks
 - **Error Handling**: Clear error messages for missing or invalid user parameters
 - **User Context Enforcement**: All database operations strictly filter by user ID
@@ -90,19 +106,22 @@ curl "http://localhost:8080/rest/scrobble?u=alice&p=password&id=song123&submissi
 
 This application implements comprehensive security measures to protect credentials, data, and network communications:
 
-### Credential Security ✅
+### Credential Security ✅ **ENHANCED WITH TOKEN SUPPORT**
 
-- **AES-256-GCM Encryption**: All passwords are encrypted in memory using industry-standard authenticated encryption
+- **Multi-Mode Authentication**: Supports both password-based and token-based Subsonic authentication
+- **AES-256-GCM Encryption**: All credentials (passwords/tokens) are encrypted in memory using industry-standard authenticated encryption
 - **Memory Protection**: Credentials are never stored in plain text, protecting against memory dumps and process inspection
 - **Unique Instance Keys**: Each server instance generates random 32-byte encryption keys for isolation
 - **Secure Memory Management**: Encrypted data is securely zeroed before deallocation
 - **Forward Security**: New encryption keys generated on each server restart
-- **No Password Logging**: Passwords are never exposed in server logs, debug output, or error messages
+- **No Credential Logging**: Passwords and tokens are never exposed in server logs, debug output, or error messages
 - **Secure URL Encoding**: All credentials are properly encoded using `url.Values{}` to prevent logging vulnerabilities
 - **Dynamic Validation**: Credentials are validated against the upstream Subsonic server with timeout protection
+- **Token Validation**: Real-time validation of token-based authentication against upstream server
 - **Thread-Safe Storage**: Valid encrypted credentials are stored in memory with mutex protection
 - **Automatic Cleanup**: Invalid credentials are automatically and securely removed from storage
 - **No Hardcoded Credentials**: All credentials come from authenticated client requests
+- **Client Compatibility**: Works seamlessly with modern Subsonic clients using token authentication
 
 ### Network Security
 
@@ -543,15 +562,22 @@ server.AddHook("/rest/getArtists", func(w http.ResponseWriter, r *http.Request, 
 })
 ```
 
-## Credential Management
+## Credential Management ✅ **ENHANCED WITH TOKEN SUPPORT**
 
-The proxy implements secure credential handling to ensure authenticated access to the upstream Subsonic server:
+The proxy implements secure multi-mode credential handling to ensure authenticated access to the upstream Subsonic server:
+
+### Authentication Modes
+
+- **Password-based Authentication**: Traditional `u` + `p` parameter authentication
+- **Token-based Authentication**: Modern `u` + `t` + `s` parameter authentication (recommended)
+- **Multi-Format Support**: Supports URL parameters, POST form data, and Authorization headers
+- **Client Compatibility**: Full support for modern Subsonic clients (Symfonium, DSub, etc.)
 
 ### How It Works
 
-1. **Automatic Capture**: The proxy monitors all `/rest/*` requests and extracts username/password parameters
-2. **Validation**: Credentials are validated against the upstream server using a ping request
-3. **Secure Storage**: Valid credentials are stored in memory with thread-safe access
+1. **Automatic Capture**: The proxy monitors all `/rest/*` requests and extracts authentication parameters (both password and token modes)
+2. **Multi-Mode Validation**: Credentials are validated against the upstream server using appropriate authentication method
+3. **Secure Storage**: Valid credentials are encrypted and stored in memory with thread-safe access
 4. **Background Operations**: Stored credentials are used for automated tasks like song syncing
 5. **Error Handling**: Invalid credentials are handled gracefully with proper logging
 
@@ -559,17 +585,26 @@ The proxy implements secure credential handling to ensure authenticated access t
 
 - **No Hardcoded Credentials**: All credentials come from authenticated client requests
 - **Dynamic Validation**: Credentials are validated in real-time against the upstream server
+- **Token Support**: Full support for modern token-based authentication methods
 - **Timeout Protection**: Validation requests have a 10-second timeout to prevent hanging
 - **Asynchronous Processing**: Credential validation doesn't block client requests
 - **Automatic Cleanup**: Invalid credentials are automatically removed from storage
+- **AES-256-GCM Encryption**: All stored credentials are encrypted in memory
 
 ### Client Usage
 
-Clients should provide credentials in their Subsonic API requests as usual:
+Clients can use either authentication method:
 
+**Password-based authentication:**
 ```bash
 # The proxy will automatically capture and validate these credentials
 curl "http://localhost:8080/rest/ping?u=myuser&p=mypass&c=myclient&f=json"
+```
+
+**Token-based authentication (modern clients):**
+```bash
+# The proxy supports token-based authentication from modern Subsonic clients
+curl "http://localhost:8080/rest/ping?u=myuser&t=token&s=salt&c=myclient&f=json"
 ```
 
 The proxy transparently forwards all requests to the upstream server while maintaining valid credentials for background operations.
@@ -839,7 +874,7 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=su
 │   ├── server.go        # Proxy server implementation
 │   ├── server_test.go   # Server tests
 │   └── README.md        # Server documentation
-├── credentials/         # Authentication management with timeout protection
+├── credentials/         # Multi-mode authentication (password/token) with timeout protection
 │   ├── credentials.go   # Credential validation and storage
 │   ├── credentials_test.go # Credential tests
 │   └── README.md        # Credentials documentation
