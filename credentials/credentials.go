@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,7 +83,12 @@ func (cm *Manager) ValidateAndStore(username, password string) error {
 	cm.validCredentials[username] = encryptedCred
 	cm.mutex.Unlock()
 	
-	cm.logger.WithField("username", username).Info("Credentials validated and stored")
+	// Log differently for token vs password auth
+	if strings.HasPrefix(password, "TOKEN:") {
+		cm.logger.WithField("username", username).Info("Token-based credentials validated and stored")
+	} else {
+		cm.logger.WithField("username", username).Info("Password-based credentials validated and stored")
+	}
 	return nil
 }
 
@@ -98,7 +104,27 @@ func (cm *Manager) validate(username, password string) error {
 	// Use URL query parameters to safely encode credentials
 	params := url.Values{}
 	params.Add("u", username)
-	params.Add("p", password)
+	
+	// Check if this is token-based authentication
+	if strings.HasPrefix(password, "TOKEN:") {
+		// Extract token and salt from the special format: "TOKEN:token:salt"
+		parts := strings.Split(password, ":")
+		if len(parts) != 3 {
+			return errors.ErrInvalidCredentials.WithContext("username", username).
+				WithContext("reason", "invalid token format")
+		}
+		token := parts[1]
+		salt := parts[2]
+		
+		params.Add("t", token)
+		params.Add("s", salt)
+		cm.logger.WithField("username", username).Debug("Validating token-based authentication")
+	} else {
+		// Traditional password-based authentication
+		params.Add("p", password)
+		cm.logger.WithField("username", username).Debug("Validating password-based authentication")
+	}
+	
 	params.Add("v", SubsonicAPIVersion)
 	params.Add("c", ClientName)
 	params.Add("f", "json")

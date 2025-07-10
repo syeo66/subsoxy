@@ -544,8 +544,19 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 	password = r.URL.Query().Get("p")
 	
 	if username != "" && password != "" {
-		ps.logger.Debug("Credentials extracted from URL query parameters")
+		ps.logger.Debug("Credentials extracted from URL query parameters (password-based)")
 		return username, password
+	}
+	
+	// Try token-based authentication (t + s parameters)
+	token := r.URL.Query().Get("t")
+	salt := r.URL.Query().Get("s")
+	
+	if username != "" && token != "" && salt != "" {
+		ps.logger.Debug("Token-based authentication detected - will validate with upstream")
+		// For token-based auth, we return a special marker to indicate token validation needed
+		// The validation will be done directly against the upstream server
+		return username, "TOKEN:" + token + ":" + salt
 	}
 	
 	// Try form-encoded POST data
@@ -554,8 +565,16 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 			formUsername := r.PostForm.Get("u")
 			formPassword := r.PostForm.Get("p")
 			if formUsername != "" && formPassword != "" {
-				ps.logger.Debug("Credentials extracted from POST form data")
+				ps.logger.Debug("Credentials extracted from POST form data (password-based)")
 				return formUsername, formPassword
+			}
+			
+			// Try token-based form auth
+			formToken := r.PostForm.Get("t")
+			formSalt := r.PostForm.Get("s")
+			if formUsername != "" && formToken != "" && formSalt != "" {
+				ps.logger.Debug("Token-based authentication detected in POST form")
+				return formUsername, "TOKEN:" + formToken + ":" + formSalt
 			}
 		}
 	}
