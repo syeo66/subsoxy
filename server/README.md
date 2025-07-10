@@ -183,17 +183,17 @@ Background health checks monitor connection pool status:
 ```
 
 ### Song Synchronization
-Automatically fetches songs from the upstream Subsonic server:
+Automatically fetches songs from the upstream Subsonic server with smart credential-aware timing:
 
 ```go
 func (ps *ProxyServer) syncSongs() {
     ps.syncTicker = time.NewTicker(1 * time.Hour)
     defer ps.syncTicker.Stop()
 
-    // Initial sync
-    ps.fetchAndStoreSongs()
+    // Skip initial sync - wait for credentials to be captured from client requests
+    ps.logger.Info("Song sync routine started - waiting for valid credentials from client requests")
 
-    // Periodic sync
+    // Periodic sync (only runs when credentials are available)
     for {
         select {
         case <-ps.syncTicker.C:
@@ -209,12 +209,14 @@ func (ps *ProxyServer) syncSongs() {
 ### Song Fetching Process
 ```go
 func (ps *ProxyServer) fetchAndStoreSongs() {
-    // Get valid credentials
-    username, password := ps.credentials.GetValid()
-    if username == "" || password == "" {
-        ps.logger.Warn("No valid credentials available for song syncing")
+    // Get all valid credentials for multi-user sync
+    allCredentials := ps.credentials.GetAllValid()
+    if len(allCredentials) == 0 {
+        ps.logger.Debug("Skipping song sync - no valid credentials available yet (waiting for client requests)")
         return
     }
+    
+    ps.logger.Info("Syncing songs from Subsonic API")
     
     // Construct URL with proper encoding to prevent credential exposure in logs
     baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/search3")

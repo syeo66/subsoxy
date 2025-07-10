@@ -28,7 +28,7 @@ This application uses a modular architecture with the following components:
 - **Per-User Transition Analysis**: Builds transition probabilities between songs for personalized intelligent recommendations
 - **Personalized Weighted Shuffle**: Thread-safe intelligent song shuffling with memory-efficient algorithms for large libraries based on individual user play history, preferences, and transition probabilities
 - **Thread-Safe Server Operations**: Race condition-free background synchronization with proper mutex protection and graceful shutdown handling
-- **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and authentication
+- **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and smart credential-aware timing
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **CORS Support**: Comprehensive CORS header management for web application integration with configurable origins, methods, and headers
 - **Security Headers Middleware ✅**: Advanced security headers with intelligent development mode detection, protecting against XSS, clickjacking, MIME sniffing, and other web vulnerabilities
@@ -717,7 +717,7 @@ export DB_CONN_MAX_LIFETIME=45m
 ### Multi-Tenant Features ✅ **UPDATED**
 
 - **Per-User Credential Management**: Automatically captures and validates user credentials from client requests with user isolation
-- **User-Isolated Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials, stored per user
+- **User-Isolated Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials, with smart startup timing that waits for client requests before syncing
 - **Per-User Play Tracking**: Records when songs are started, played completely, or skipped with complete user isolation
 - **User-Specific Transition Probability Analysis**: Builds transition probabilities between songs for each user independently
 - **Isolated Historical Data**: Maintains complete event history for analysis per user

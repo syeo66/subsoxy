@@ -309,6 +309,34 @@ curl "http://localhost:8080/rest/ping?u=user&p=pass&c=test&f=json"
 curl http://upstream:4533/rest/ping
 ```
 
+### Empty Songs Table ✅ **RESOLVED**
+
+**Issue**: Songs table remains empty even after server startup
+
+**Previous Behavior**: Server attempted song sync immediately on startup before any credentials were captured, causing sync failures.
+
+**Current Behavior**: ✅ **FIXED** - Smart credential-aware sync timing
+
+**Expected Log Messages:**
+```
+level=info msg="Song sync routine started - waiting for valid credentials from client requests"
+level=debug msg="Skipping song sync - no valid credentials available yet (waiting for client requests)"
+```
+
+**Resolution Steps:**
+1. **Make client request**: Send any `/rest/` request with valid credentials
+2. **Wait for next sync**: Songs will sync on the next hourly cycle after credentials are captured
+3. **Verify sync**: Check logs for `"Syncing songs from Subsonic API"` message
+
+**Example:**
+```bash
+# Capture credentials with any valid request
+curl "http://localhost:8080/rest/ping?u=username&p=password&f=json"
+
+# Songs will sync within the next hour
+# Check database: songs table will be populated after sync
+```
+
 ## Performance Issues
 
 ### High Memory Usage ✅ **OPTIMIZED**

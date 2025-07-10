@@ -31,18 +31,6 @@
 - **Connection Pool Tuning**: Fine-tune database connection pool parameters
 - **Caching Layer**: Consider adding caching for frequently accessed data
 
-### Monitoring & Observability 🟢
-- **Metrics Collection**: Add Prometheus-style metrics
-- **Health Check Endpoints**: Enhanced health checking with dependency status
-- **Structured Logging Enhancement**: Additional context and correlation IDs
-- **Performance Monitoring**: Request timing and resource usage tracking
-
-### Advanced Features 🟢
-- **Plugin System**: Extensible plugin architecture for custom functionality
-- **Configuration Hot Reload**: Dynamic configuration updates without restart
-- **Advanced Rate Limiting**: Per-user or per-endpoint rate limiting
-- **API Versioning**: Support for multiple Subsonic API versions
-
 ## Implementation Notes
 
 - **Current State**: All critical issues have been resolved

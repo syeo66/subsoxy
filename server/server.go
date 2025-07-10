@@ -383,7 +383,8 @@ func (ps *ProxyServer) syncSongs() {
 		ps.syncMutex.Unlock()
 	}()
 
-	ps.fetchAndStoreSongs()
+	// Skip initial sync - wait for credentials to be captured from client requests
+	ps.logger.Info("Song sync routine started - waiting for valid credentials from client requests")
 
 	for {
 		ps.syncMutex.RLock()
@@ -405,14 +406,14 @@ func (ps *ProxyServer) syncSongs() {
 }
 
 func (ps *ProxyServer) fetchAndStoreSongs() {
-	ps.logger.Info("Syncing songs from Subsonic API")
-	
 	// Get all valid credentials for multi-user sync
 	allCredentials := ps.credentials.GetAllValid()
 	if len(allCredentials) == 0 {
-		ps.logger.WithError(errors.ErrNoValidCredentials).Warn("No valid credentials available for song syncing")
+		ps.logger.Debug("Skipping song sync - no valid credentials available yet (waiting for client requests)")
 		return
 	}
+	
+	ps.logger.Info("Syncing songs from Subsonic API")
 	
 	ps.logger.WithField("user_count", len(allCredentials)).Info("Starting multi-user song sync")
 	
