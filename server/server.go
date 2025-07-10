@@ -266,8 +266,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(endpoint, "/rest/") {
-		username := r.URL.Query().Get("u")
-		password := r.URL.Query().Get("p")
+		username, password := ps.extractCredentials(r)
 		
 		// Validate input lengths
 		if len(username) > MaxUsernameLength {
@@ -523,6 +522,52 @@ func getSortedUsernames(credentials map[string]string) []string {
 		}
 	}
 	return usernames
+}
+
+// extractCredentials extracts username and password from various sources in the request
+func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password string) {
+	// First try URL query parameters (most common)
+	username = r.URL.Query().Get("u")
+	password = r.URL.Query().Get("p")
+	
+	if username != "" && password != "" {
+		ps.logger.Debug("Credentials extracted from URL query parameters")
+		return username, password
+	}
+	
+	// Try form-encoded POST data
+	if r.Method == "POST" {
+		if err := r.ParseForm(); err == nil {
+			formUsername := r.PostForm.Get("u")
+			formPassword := r.PostForm.Get("p")
+			if formUsername != "" && formPassword != "" {
+				ps.logger.Debug("Credentials extracted from POST form data")
+				return formUsername, formPassword
+			}
+		}
+	}
+	
+	// Try Authorization header (Basic Auth format)
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		// Handle Basic Auth: "Basic base64(username:password)"
+		if strings.HasPrefix(authHeader, "Basic ") {
+			if headerUsername, headerPassword, ok := r.BasicAuth(); ok {
+				ps.logger.Debug("Credentials extracted from Authorization header (Basic Auth)")
+				return headerUsername, headerPassword
+			}
+		}
+	}
+	
+	// Try custom headers (some clients use these)
+	if headerUsername := r.Header.Get("X-Subsonic-Username"); headerUsername != "" {
+		if headerPassword := r.Header.Get("X-Subsonic-Password"); headerPassword != "" {
+			ps.logger.Debug("Credentials extracted from X-Subsonic headers")
+			return headerUsername, headerPassword
+		}
+	}
+	
+	ps.logger.Debug("No credentials found in request")
+	return "", ""
 }
 
 func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {

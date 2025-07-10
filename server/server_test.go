@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -570,6 +571,108 @@ func TestProxyHandlerCredentialExtraction(t *testing.T) {
 			
 			// We can't easily verify if credentials were extracted without exposing internals
 			// The test mainly ensures no panics occur
+		})
+	}
+}
+
+func TestExtractCredentials(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:    "8080",
+		UpstreamURL:  "http://localhost:4533",
+		LogLevel:     "warn",
+		DatabasePath: "test.db",
+	}
+	defer os.Remove("test.db")
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	tests := []struct {
+		name             string
+		setupRequest     func() *http.Request
+		expectedUsername string
+		expectedPassword string
+	}{
+		{
+			name: "URL query parameters",
+			setupRequest: func() *http.Request {
+				req := httptest.NewRequest("GET", "/rest/ping?u=testuser&p=testpass", nil)
+				return req
+			},
+			expectedUsername: "testuser",
+			expectedPassword: "testpass",
+		},
+		{
+			name: "POST form data",
+			setupRequest: func() *http.Request {
+				form := url.Values{}
+				form.Add("u", "formuser")
+				form.Add("p", "formpass")
+				req := httptest.NewRequest("POST", "/rest/ping", strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				return req
+			},
+			expectedUsername: "formuser",
+			expectedPassword: "formpass",
+		},
+		{
+			name: "Authorization header Basic Auth",
+			setupRequest: func() *http.Request {
+				req := httptest.NewRequest("GET", "/rest/ping", nil)
+				req.SetBasicAuth("basicuser", "basicpass")
+				return req
+			},
+			expectedUsername: "basicuser",
+			expectedPassword: "basicpass",
+		},
+		{
+			name: "X-Subsonic headers",
+			setupRequest: func() *http.Request {
+				req := httptest.NewRequest("GET", "/rest/ping", nil)
+				req.Header.Set("X-Subsonic-Username", "headeruser")
+				req.Header.Set("X-Subsonic-Password", "headerpass")
+				return req
+			},
+			expectedUsername: "headeruser",
+			expectedPassword: "headerpass",
+		},
+		{
+			name: "No credentials",
+			setupRequest: func() *http.Request {
+				req := httptest.NewRequest("GET", "/rest/ping", nil)
+				return req
+			},
+			expectedUsername: "",
+			expectedPassword: "",
+		},
+		{
+			name: "URL parameters take precedence over headers",
+			setupRequest: func() *http.Request {
+				req := httptest.NewRequest("GET", "/rest/ping?u=urluser&p=urlpass", nil)
+				req.SetBasicAuth("basicuser", "basicpass")
+				req.Header.Set("X-Subsonic-Username", "headeruser")
+				req.Header.Set("X-Subsonic-Password", "headerpass")
+				return req
+			},
+			expectedUsername: "urluser",
+			expectedPassword: "urlpass",
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := tt.setupRequest()
+			username, password := server.extractCredentials(req)
+			
+			if username != tt.expectedUsername {
+				t.Errorf("Expected username %q, got %q", tt.expectedUsername, username)
+			}
+			if password != tt.expectedPassword {
+				t.Errorf("Expected password %q, got %q", tt.expectedPassword, password)
+			}
 		})
 	}
 }
