@@ -507,3 +507,120 @@ func TestGetDatabasePoolConfig(t *testing.T) {
 		t.Errorf("Expected HealthCheck false, got %v", poolConfig.HealthCheck)
 	}
 }
+
+func TestValidateSecurityHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{
+			name: "Valid security headers",
+			config: &Config{
+				SecurityHeadersEnabled: true,
+				XContentTypeOptions:    "nosniff",
+				XFrameOptions:          "DENY",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Security headers disabled",
+			config: &Config{
+				SecurityHeadersEnabled: false,
+				XContentTypeOptions:    "invalid", // Should be ignored when disabled
+				XFrameOptions:          "invalid", // Should be ignored when disabled
+			},
+			wantErr: false,
+		},
+		{
+			name: "Empty security headers",
+			config: &Config{
+				SecurityHeadersEnabled: true,
+				XContentTypeOptions:    "",
+				XFrameOptions:          "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid X-Frame-Options SAMEORIGIN",
+			config: &Config{
+				SecurityHeadersEnabled: true,
+				XFrameOptions:          "SAMEORIGIN",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid X-Content-Type-Options",
+			config: &Config{
+				SecurityHeadersEnabled: true,
+				XContentTypeOptions:    "invalid-value",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid X-Frame-Options",
+			config: &Config{
+				SecurityHeadersEnabled: true,
+				XFrameOptions:          "INVALID",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validateSecurityHeaders()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Config.validateSecurityHeaders() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsDevMode(t *testing.T) {
+	tests := []struct {
+		name              string
+		securityDevMode   bool
+		proxyPort         string
+		expected          bool
+	}{
+		{
+			name:            "Dev mode explicitly enabled",
+			securityDevMode: true,
+			proxyPort:       "9090",
+			expected:        true,
+		},
+		{
+			name:            "Default port 8080",
+			securityDevMode: false,
+			proxyPort:       "8080",
+			expected:        true,
+		},
+		{
+			name:            "Non-default port",
+			securityDevMode: false,
+			proxyPort:       "9090",
+			expected:        false,
+		},
+		{
+			name:            "Production port 443",
+			securityDevMode: false,
+			proxyPort:       "443",
+			expected:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				SecurityDevMode: tt.securityDevMode,
+				ProxyPort:      tt.proxyPort,
+			}
+			
+			result := config.IsDevMode()
+			if result != tt.expected {
+				t.Errorf("Config.IsDevMode() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}

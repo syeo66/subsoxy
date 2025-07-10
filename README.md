@@ -10,6 +10,7 @@ This application uses a modular architecture with the following components:
 - **`models/`**: Data structures and type definitions
 - **`database/`**: SQLite3 database operations with structured error handling and schema management
 - **`handlers/`**: HTTP request handlers for different Subsonic API endpoints with input validation
+- **`middleware/`**: HTTP middleware components including security headers with intelligent development mode detection
 - **`server/`**: Main proxy server logic and lifecycle management with error recovery
 - **`credentials/`**: Secure authentication and credential validation with AES-256-GCM encryption and timeout protection
 - **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning and thread safety
@@ -30,6 +31,7 @@ This application uses a modular architecture with the following components:
 - **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and authentication
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **CORS Support**: Comprehensive CORS header management for web application integration with configurable origins, methods, and headers
+- **Security Headers Middleware ✅**: Advanced security headers with intelligent development mode detection, protecting against XSS, clickjacking, MIME sniffing, and other web vulnerabilities
 - **Structured Error Handling**: Comprehensive error categorization, context, and logging for better debugging
 - **Input Validation & Security**: Comprehensive input validation, sanitization, user context validation, and log injection prevention
 - **Logging**: Structured logging with configurable levels and error context
@@ -188,6 +190,14 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-cors-allow-methods string`: CORS allowed methods, comma-separated (default: "GET,POST,PUT,DELETE,OPTIONS")
 - `-cors-allow-headers string`: CORS allowed headers, comma-separated (default: "Content-Type,Authorization,X-Requested-With")
 - `-cors-allow-credentials`: CORS allow credentials (default: false)
+- `-security-headers-enabled`: Enable security headers (default: true)
+- `-security-dev-mode`: Enable development mode (relaxed security headers for localhost) (default: false)
+- `-x-content-type-options string`: X-Content-Type-Options header value (default: nosniff)
+- `-x-frame-options string`: X-Frame-Options header value (default: DENY)
+- `-x-xss-protection string`: X-XSS-Protection header value (default: 1; mode=block)
+- `-strict-transport-security string`: Strict-Transport-Security header value (default: max-age=31536000; includeSubDomains)
+- `-content-security-policy string`: Content-Security-Policy header value (default: default-src 'self'; script-src 'self'; object-src 'none';)
+- `-referrer-policy string`: Referrer-Policy header value (default: strict-origin-when-cross-origin)
 
 #### Environment variables
 - `PORT`: Proxy server port (1-65535)
@@ -207,6 +217,14 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `CORS_ALLOW_METHODS`: CORS allowed methods, comma-separated (default: "GET,POST,PUT,DELETE,OPTIONS")
 - `CORS_ALLOW_HEADERS`: CORS allowed headers, comma-separated (default: "Content-Type,Authorization,X-Requested-With")
 - `CORS_ALLOW_CREDENTIALS`: CORS allow credentials (default: false)
+- `SECURITY_HEADERS_ENABLED`: Enable security headers (default: true)
+- `SECURITY_DEV_MODE`: Enable development mode (default: false)
+- `X_CONTENT_TYPE_OPTIONS`: X-Content-Type-Options header value (default: nosniff)
+- `X_FRAME_OPTIONS`: X-Frame-Options header value (default: DENY)
+- `X_XSS_PROTECTION`: X-XSS-Protection header value (default: 1; mode=block)
+- `STRICT_TRANSPORT_SECURITY`: Strict-Transport-Security header value (default: max-age=31536000; includeSubDomains)
+- `CONTENT_SECURITY_POLICY`: Content-Security-Policy header value (default: default-src 'self'; script-src 'self'; object-src 'none';)
+- `REFERRER_POLICY`: Referrer-Policy header value (default: strict-origin-when-cross-origin)
 
 #### Configuration Validation
 
@@ -342,6 +360,87 @@ curl -X OPTIONS -H "Origin: http://localhost:3000" -H "Access-Control-Request-Me
 - **Production**: Specify exact origins for security: `-cors-allow-origins "https://myapp.com"`
 - **Credentials**: Only enable when necessary and with specific origins
 - **Methods**: Restrict to only needed HTTP methods for tighter security
+
+## Security Headers ✅ **NEW**
+
+The server includes advanced security headers middleware that automatically protects against common web vulnerabilities while providing an excellent development experience.
+
+### Security Protection
+
+The middleware protects against:
+- **XSS Attacks**: X-XSS-Protection and Content Security Policy
+- **Clickjacking**: X-Frame-Options header
+- **MIME Sniffing**: X-Content-Type-Options header
+- **HTTPS Attacks**: Strict-Transport-Security (HTTPS only)
+- **Information Leakage**: Referrer-Policy header
+
+### Development Mode Detection
+
+Security headers automatically adapt based on the environment:
+
+**Development Mode Triggers**:
+- Server running on default port 8080
+- Requests from localhost (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`)
+- Explicit development mode: `-security-dev-mode=true`
+
+**Development Headers (Relaxed)**:
+- CSP: `default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:; img-src 'self' data: blob:;`
+- X-Frame-Options: `SAMEORIGIN` (allows dev tools)
+- No HSTS (safer for development)
+
+**Production Headers (Strict)**:
+- CSP: `default-src 'self'; script-src 'self'; object-src 'none';`
+- X-Frame-Options: `DENY` (maximum protection)
+- HSTS: `max-age=31536000; includeSubDomains` (HTTPS only)
+
+### Configuration Examples
+
+```bash
+# Default configuration (recommended)
+./subsoxy  # Security headers enabled with smart detection
+
+# Force development mode
+./subsoxy -security-dev-mode=true
+
+# Custom security headers
+./subsoxy -x-frame-options="SAMEORIGIN" -content-security-policy="default-src 'self' data:"
+
+# Disable security headers (API-only usage)
+./subsoxy -security-headers-enabled=false
+
+# Environment variable configuration
+export SECURITY_HEADERS_ENABLED=true
+export SECURITY_DEV_MODE=false
+export X_FRAME_OPTIONS="DENY"
+./subsoxy
+```
+
+### Testing Security Headers
+
+You can verify security headers with curl:
+
+```bash
+# Test development mode (localhost)
+curl -I http://localhost:8080/rest/ping
+
+# Test production mode (external hostname)
+curl -I -H "Host: example.com:9090" http://localhost:9090/rest/ping
+
+# Expected security headers:
+# X-Content-Type-Options: nosniff
+# X-Frame-Options: DENY (production) or SAMEORIGIN (development)
+# X-XSS-Protection: 1; mode=block
+# Content-Security-Policy: (varies by mode)
+# Referrer-Policy: strict-origin-when-cross-origin
+```
+
+### Production Recommendations
+
+- **Default Settings**: Security headers are enabled by default with secure settings
+- **Development**: Automatic detection provides relaxed headers for localhost
+- **Production**: Strict headers are automatically applied for external requests
+- **Custom CSP**: Customize Content Security Policy based on your application needs
+- **HTTPS**: Use HTTPS in production to enable HSTS protection
 
 ## Rate Limiting
 
@@ -732,6 +831,10 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=su
 │   ├── handlers.go      # HTTP endpoint handlers
 │   ├── handlers_test.go # Handler tests
 │   └── README.md        # Handlers documentation
+├── middleware/          # HTTP middleware components
+│   ├── security.go      # Security headers middleware
+│   ├── security_test.go # Security middleware tests
+│   └── README.md        # Middleware documentation
 ├── server/              # Main server logic with error recovery
 │   ├── server.go        # Proxy server implementation
 │   ├── server_test.go   # Server tests

@@ -31,6 +31,15 @@ const (
 	DefaultCORSAllowHeaders     = "Content-Type,Authorization,X-Requested-With"
 	DefaultCORSAllowCredentials = false
 	DefaultDirPermissions       = 0755
+	// Security headers
+	DefaultSecurityHeadersEnabled    = true
+	DefaultSecurityDevMode          = false
+	DefaultXContentTypeOptions      = "nosniff"
+	DefaultXFrameOptions            = "DENY"
+	DefaultXXSSProtection           = "1; mode=block"
+	DefaultStrictTransportSecurity  = "max-age=31536000; includeSubDomains"
+	DefaultContentSecurityPolicy    = "default-src 'self'; script-src 'self'; object-src 'none';"
+	DefaultReferrerPolicy           = "strict-origin-when-cross-origin"
 )
 
 // Validation limits
@@ -65,6 +74,15 @@ type Config struct {
 	CORSAllowMethods  []string
 	CORSAllowHeaders  []string
 	CORSAllowCredentials bool
+	// Security headers settings
+	SecurityHeadersEnabled    bool
+	SecurityDevMode          bool
+	XContentTypeOptions      string
+	XFrameOptions            string
+	XXSSProtection           string
+	StrictTransportSecurity  string
+	ContentSecurityPolicy    string
+	ReferrerPolicy           string
 }
 
 func New() (*Config, error) {
@@ -88,6 +106,15 @@ func New() (*Config, error) {
 		corsAllowMethods  = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", DefaultCORSAllowMethods), "CORS allowed methods (comma-separated)")
 		corsAllowHeaders  = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", DefaultCORSAllowHeaders), "CORS allowed headers (comma-separated)")
 		corsAllowCredentials = flag.Bool("cors-allow-credentials", getEnvBoolOrDefault("CORS_ALLOW_CREDENTIALS", DefaultCORSAllowCredentials), "CORS allow credentials")
+		// Security headers flags
+		securityHeadersEnabled   = flag.Bool("security-headers-enabled", getEnvBoolOrDefault("SECURITY_HEADERS_ENABLED", DefaultSecurityHeadersEnabled), "Enable security headers")
+		securityDevMode         = flag.Bool("security-dev-mode", getEnvBoolOrDefault("SECURITY_DEV_MODE", DefaultSecurityDevMode), "Enable development mode (relaxed security headers for localhost)")
+		xContentTypeOptions     = flag.String("x-content-type-options", getEnvOrDefault("X_CONTENT_TYPE_OPTIONS", DefaultXContentTypeOptions), "X-Content-Type-Options header value")
+		xFrameOptions           = flag.String("x-frame-options", getEnvOrDefault("X_FRAME_OPTIONS", DefaultXFrameOptions), "X-Frame-Options header value")
+		xxxxProtection          = flag.String("x-xss-protection", getEnvOrDefault("X_XSS_PROTECTION", DefaultXXSSProtection), "X-XSS-Protection header value")
+		strictTransportSecurity = flag.String("strict-transport-security", getEnvOrDefault("STRICT_TRANSPORT_SECURITY", DefaultStrictTransportSecurity), "Strict-Transport-Security header value")
+		contentSecurityPolicy   = flag.String("content-security-policy", getEnvOrDefault("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy), "Content-Security-Policy header value")
+		referrerPolicy          = flag.String("referrer-policy", getEnvOrDefault("REFERRER_POLICY", DefaultReferrerPolicy), "Referrer-Policy header value")
 	)
 	flag.Parse()
 
@@ -109,6 +136,14 @@ func New() (*Config, error) {
 		CORSAllowMethods:  parseCommaSeparatedString(*corsAllowMethods),
 		CORSAllowHeaders:  parseCommaSeparatedString(*corsAllowHeaders),
 		CORSAllowCredentials: *corsAllowCredentials,
+		SecurityHeadersEnabled:   *securityHeadersEnabled,
+		SecurityDevMode:         *securityDevMode,
+		XContentTypeOptions:     *xContentTypeOptions,
+		XFrameOptions:           *xFrameOptions,
+		XXSSProtection:          *xxxxProtection,
+		StrictTransportSecurity: *strictTransportSecurity,
+		ContentSecurityPolicy:   *contentSecurityPolicy,
+		ReferrerPolicy:          *referrerPolicy,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -145,6 +180,10 @@ func (c *Config) Validate() error {
 	}
 	
 	if err := c.validateCORS(); err != nil {
+		return err
+	}
+	
+	if err := c.validateSecurityHeaders(); err != nil {
 		return err
 	}
 	
@@ -390,4 +429,53 @@ func (c *Config) validateCORS() error {
 	}
 	
 	return nil
+}
+
+func (c *Config) validateSecurityHeaders() error {
+	// If security headers are disabled, skip validation
+	if !c.SecurityHeadersEnabled {
+		return nil
+	}
+	
+	// Validate X-Content-Type-Options
+	if c.XContentTypeOptions != "" && c.XContentTypeOptions != "nosniff" {
+		return errors.New(errors.CategoryConfig, "INVALID_X_CONTENT_TYPE_OPTIONS", "X-Content-Type-Options must be 'nosniff' or empty").
+			WithContext("x_content_type_options", c.XContentTypeOptions)
+	}
+	
+	// Validate X-Frame-Options
+	validFrameOptions := []string{"DENY", "SAMEORIGIN"}
+	if c.XFrameOptions != "" {
+		valid := false
+		for _, option := range validFrameOptions {
+			if c.XFrameOptions == option {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return errors.New(errors.CategoryConfig, "INVALID_X_FRAME_OPTIONS", "X-Frame-Options must be 'DENY', 'SAMEORIGIN', or empty").
+				WithContext("x_frame_options", c.XFrameOptions).
+				WithContext("valid_options", validFrameOptions)
+		}
+	}
+	
+	return nil
+}
+
+// IsDevMode checks if the server is running in development mode
+// Development mode is enabled when:
+// 1. SecurityDevMode is explicitly set to true, OR
+// 2. The proxy is running on default port (8080) suggesting local development
+func (c *Config) IsDevMode() bool {
+	if c.SecurityDevMode {
+		return true
+	}
+	
+	// Check if running on default development port
+	if c.ProxyPort == DefaultProxyPort {
+		return true
+	}
+	
+	return false
 }

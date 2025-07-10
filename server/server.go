@@ -22,6 +22,7 @@ import (
 	"github.com/syeo66/subsoxy/credentials"
 	"github.com/syeo66/subsoxy/handlers"
 	"github.com/syeo66/subsoxy/shuffle"
+	"github.com/syeo66/subsoxy/middleware"
 )
 
 const (
@@ -307,6 +308,16 @@ func (ps *ProxyServer) Start() error {
 	}
 
 	router := mux.NewRouter()
+	
+	// Add security headers middleware
+	if ps.config.SecurityHeadersEnabled {
+		securityMiddleware := middleware.NewSecurityHeaders(ps.config, ps.logger)
+		router.Use(securityMiddleware.Handler)
+		ps.logger.WithField("dev_mode", ps.config.IsDevMode()).Info("Security headers middleware enabled")
+	} else {
+		ps.logger.Info("Security headers middleware disabled")
+	}
+	
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
 	ps.server = &http.Server{
