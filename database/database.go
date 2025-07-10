@@ -13,6 +13,22 @@ import (
 	"github.com/syeo66/subsoxy/models"
 )
 
+// Database connection pool constants
+const (
+	DefaultMaxOpenConns    = 25
+	DefaultMaxIdleConns    = 5
+	DefaultConnMaxLifetime = 30 * time.Minute
+	DefaultConnMaxIdleTime = 5 * time.Minute
+	DefaultHealthCheck     = true
+	HealthCheckInterval    = 30 * time.Second
+)
+
+// Database operation constants
+const (
+	DefaultTransitionProbability = 0.5
+	DefaultDateString           = "1970-01-01"
+)
+
 type DB struct {
 	conn         *sql.DB
 	logger       *logrus.Logger
@@ -89,11 +105,11 @@ func NewWithPool(dbPath string, logger *logrus.Logger, poolConfig *ConnectionPoo
 // DefaultPoolConfig returns default connection pool configuration
 func DefaultPoolConfig() *ConnectionPool {
 	return &ConnectionPool{
-		MaxOpenConns:    25,  // Reasonable default for SQLite
-		MaxIdleConns:    5,   // Keep some connections idle
-		ConnMaxLifetime: 30 * time.Minute, // Rotate connections every 30 minutes
-		ConnMaxIdleTime: 5 * time.Minute,  // Close idle connections after 5 minutes
-		HealthCheck:     true,
+		MaxOpenConns:    DefaultMaxOpenConns,
+		MaxIdleConns:    DefaultMaxIdleConns,
+		ConnMaxLifetime: DefaultConnMaxLifetime,
+		ConnMaxIdleTime: DefaultConnMaxIdleTime,
+		HealthCheck:     DefaultHealthCheck,
 	}
 }
 
@@ -308,7 +324,7 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 			continue
 		}
 		
-		if lastPlayedStr != "1970-01-01" {
+		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
 		}
 		
@@ -380,7 +396,7 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 			continue
 		}
 		
-		if lastPlayedStr != "1970-01-01" {
+		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
 		}
 		
@@ -503,10 +519,10 @@ func (db *DB) updateTransitionProbabilities(userID, fromSongID, toSongID string)
 
 func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (float64, error) {
 	if userID == "" {
-		return 0.5, errors.ErrValidationFailed.WithContext("field", "userID")
+		return DefaultTransitionProbability, errors.ErrValidationFailed.WithContext("field", "userID")
 	}
 	if fromSongID == "" || toSongID == "" {
-		return 0.5, errors.ErrValidationFailed.WithContext("missing_fields", []string{"fromSongID", "toSongID"})
+		return DefaultTransitionProbability, errors.ErrValidationFailed.WithContext("missing_fields", []string{"fromSongID", "toSongID"})
 	}
 
 	var probability float64
@@ -515,9 +531,9 @@ func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (flo
 	
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return 0.5, nil // Default probability when no transition data exists
+			return DefaultTransitionProbability, nil // Default probability when no transition data exists
 		}
-		return 0.5, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probability").
+		return DefaultTransitionProbability, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probability").
 			WithContext("user_id", userID).
 			WithContext("from_song_id", fromSongID).
 			WithContext("to_song_id", toSongID)
@@ -580,7 +596,7 @@ func (db *DB) GetTransitionProbabilities(userID, fromSongID string, toSongIDs []
 	// Fill in default probabilities for songs not found
 	for _, toSongID := range toSongIDs {
 		if _, exists := probabilities[toSongID]; !exists {
-			probabilities[toSongID] = 0.5
+			probabilities[toSongID] = DefaultTransitionProbability
 		}
 	}
 
@@ -589,7 +605,7 @@ func (db *DB) GetTransitionProbabilities(userID, fromSongID string, toSongIDs []
 
 // healthCheckLoop runs periodic health checks on the database connection
 func (db *DB) healthCheckLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(HealthCheckInterval)
 	defer ticker.Stop()
 
 	for {

@@ -17,6 +17,15 @@ import (
 	"github.com/syeo66/subsoxy/errors"
 )
 
+// Encryption constants
+const (
+	AES256KeySize           = 32
+	KeyIdentificationBytes  = 8
+	HTTPClientTimeout       = 10 * time.Second
+	SubsonicAPIVersion      = "1.15.0"
+	ClientName              = "subsoxy"
+)
+
 // encryptedCredential holds encrypted password data
 type encryptedCredential struct {
 	EncryptedPassword []byte `json:"encrypted_password"`
@@ -90,13 +99,13 @@ func (cm *Manager) validate(username, password string) error {
 	params := url.Values{}
 	params.Add("u", username)
 	params.Add("p", password)
-	params.Add("v", "1.15.0")
-	params.Add("c", "subsoxy")
+	params.Add("v", SubsonicAPIVersion)
+	params.Add("c", ClientName)
 	params.Add("f", "json")
 	baseURL.RawQuery = params.Encode()
 	
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: HTTPClientTimeout,
 	}
 	
 	resp, err := client.Get(baseURL.String())
@@ -195,7 +204,7 @@ func (cm *Manager) ClearInvalid() {
 // generateEncryptionKey creates a random 32-byte key for AES-256
 func generateEncryptionKey() []byte {
 	// Use a combination of random bytes and system entropy
-	key := make([]byte, 32)
+	key := make([]byte, AES256KeySize)
 	if _, err := rand.Read(key); err != nil {
 		// Fallback to deterministic key if crypto/rand fails
 		// This should never happen in practice
@@ -252,5 +261,5 @@ func (cm *Manager) decryptPassword(cred encryptedCredential) (string, error) {
 
 // GetEncryptionInfo returns information about the encryption setup (for testing)
 func (cm *Manager) GetEncryptionInfo() string {
-	return base64.StdEncoding.EncodeToString(cm.encryptionKey[:8]) // Only first 8 bytes for identification
+	return base64.StdEncoding.EncodeToString(cm.encryptionKey[:KeyIdentificationBytes]) // Only first 8 bytes for identification
 }

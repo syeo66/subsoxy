@@ -30,6 +30,22 @@ const (
 	MaxRemoteAddrLength = 100
 )
 
+// Server operation constants
+const (
+	SongSyncInterval     = 1 * time.Hour
+	UserSyncStaggerDelay = 2 * time.Second
+	CORSMaxAge           = "86400"
+	SongSyncCount        = "10000"
+	SubsonicAPIVersion   = "1.15.0"
+	ClientName           = "subsoxy"
+)
+
+// ASCII control character constants
+const (
+	ASCIIControlCharMin = 32
+	ASCIIControlCharMax = 127
+)
+
 type ProxyServer struct {
 	config      *config.Config
 	logger      *logrus.Logger
@@ -130,7 +146,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 func sanitizeForLogging(input string) string {
 	// Remove control characters (ASCII 0-31 and 127)
 	sanitized := strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
+		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
 			return -1
 		}
 		return r
@@ -156,7 +172,7 @@ func sanitizeRemoteAddr(remoteAddr string) string {
 func sanitizeUsername(username string) string {
 	// Remove control characters
 	sanitized := strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
+		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
 			return -1
 		}
 		return r
@@ -209,7 +225,7 @@ func (ps *ProxyServer) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Set Access-Control-Max-Age for preflight cache (24 hours)
-	w.Header().Set("Access-Control-Max-Age", "86400")
+	w.Header().Set("Access-Control-Max-Age", CORSMaxAge)
 }
 
 func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +361,7 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 func (ps *ProxyServer) syncSongs() {
 	// Safely create and store the ticker
 	ps.syncMutex.Lock()
-	ps.syncTicker = time.NewTicker(1 * time.Hour)
+	ps.syncTicker = time.NewTicker(SongSyncInterval)
 	ps.syncMutex.Unlock()
 	
 	defer func() {
@@ -395,7 +411,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 		
 		// Add staggered delay to avoid overwhelming upstream server (except for first user)
 		if i > 0 {
-			delay := time.Duration(i) * 2 * time.Second
+			delay := time.Duration(i) * UserSyncStaggerDelay
 			ps.logger.WithFields(logrus.Fields{
 				"user":  sanitizeUsername(username),
 				"delay": delay,
@@ -431,10 +447,10 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	params.Add("u", username)
 	params.Add("p", password)
 	params.Add("query", "*")
-	params.Add("songCount", "10000")
+	params.Add("songCount", SongSyncCount)
 	params.Add("f", "json")
-	params.Add("v", "1.15.0")
-	params.Add("c", "subsoxy")
+	params.Add("v", SubsonicAPIVersion)
+	params.Add("c", ClientName)
 	baseURL.RawQuery = params.Encode()
 	
 	resp, err := http.Get(baseURL.String())

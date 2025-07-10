@@ -11,6 +11,40 @@ import (
 	"github.com/syeo66/subsoxy/errors"
 )
 
+// Default configuration values
+const (
+	DefaultProxyPort            = "8080"
+	DefaultUpstreamURL          = "http://localhost:4533"
+	DefaultLogLevel             = "info"
+	DefaultDatabasePath         = "subsoxy.db"
+	DefaultRateLimitRPS         = 100
+	DefaultRateLimitBurst       = 200
+	DefaultRateLimitEnabled     = true
+	DefaultDBMaxOpenConns       = 25
+	DefaultDBMaxIdleConns       = 5
+	DefaultDBConnMaxLifetime    = 30 * time.Minute
+	DefaultDBConnMaxIdleTime    = 5 * time.Minute
+	DefaultDBHealthCheck        = true
+	DefaultCORSEnabled          = true
+	DefaultCORSAllowOrigins     = "*"
+	DefaultCORSAllowMethods     = "GET,POST,PUT,DELETE,OPTIONS"
+	DefaultCORSAllowHeaders     = "Content-Type,Authorization,X-Requested-With"
+	DefaultCORSAllowCredentials = false
+	DefaultDirPermissions       = 0755
+)
+
+// Validation limits
+const (
+	MinPortNumber       = 1
+	MaxPortNumber       = 65535
+	MinRateLimitRPS     = 1
+	MinRateLimitBurst   = 1
+	MinDBMaxOpenConns   = 1
+	MinDBMaxIdleConns   = 0
+	MinDBConnLifetime   = 0
+	MinDBConnIdleTime   = 0
+)
+
 type Config struct {
 	ProxyPort         string
 	UpstreamURL       string
@@ -35,25 +69,25 @@ type Config struct {
 
 func New() (*Config, error) {
 	var (
-		port             = flag.String("port", getEnvOrDefault("PORT", "8080"), "Proxy server port")
-		upstream         = flag.String("upstream", getEnvOrDefault("UPSTREAM_URL", "http://localhost:4533"), "Upstream Subsonic server URL")
-		logLevel         = flag.String("log-level", getEnvOrDefault("LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
-		dbPath           = flag.String("db-path", getEnvOrDefault("DB_PATH", "subsoxy.db"), "Database file path")
-		rateLimitRPS     = flag.Int("rate-limit-rps", getEnvIntOrDefault("RATE_LIMIT_RPS", 100), "Rate limit requests per second")
-		rateLimitBurst   = flag.Int("rate-limit-burst", getEnvIntOrDefault("RATE_LIMIT_BURST", 200), "Rate limit burst size")
-		rateLimitEnabled = flag.Bool("rate-limit-enabled", getEnvBoolOrDefault("RATE_LIMIT_ENABLED", true), "Enable rate limiting")
+		port             = flag.String("port", getEnvOrDefault("PORT", DefaultProxyPort), "Proxy server port")
+		upstream         = flag.String("upstream", getEnvOrDefault("UPSTREAM_URL", DefaultUpstreamURL), "Upstream Subsonic server URL")
+		logLevel         = flag.String("log-level", getEnvOrDefault("LOG_LEVEL", DefaultLogLevel), "Log level (debug, info, warn, error)")
+		dbPath           = flag.String("db-path", getEnvOrDefault("DB_PATH", DefaultDatabasePath), "Database file path")
+		rateLimitRPS     = flag.Int("rate-limit-rps", getEnvIntOrDefault("RATE_LIMIT_RPS", DefaultRateLimitRPS), "Rate limit requests per second")
+		rateLimitBurst   = flag.Int("rate-limit-burst", getEnvIntOrDefault("RATE_LIMIT_BURST", DefaultRateLimitBurst), "Rate limit burst size")
+		rateLimitEnabled = flag.Bool("rate-limit-enabled", getEnvBoolOrDefault("RATE_LIMIT_ENABLED", DefaultRateLimitEnabled), "Enable rate limiting")
 		// Database connection pool flags
-		dbMaxOpenConns    = flag.Int("db-max-open-conns", getEnvIntOrDefault("DB_MAX_OPEN_CONNS", 25), "Maximum number of open database connections")
-		dbMaxIdleConns    = flag.Int("db-max-idle-conns", getEnvIntOrDefault("DB_MAX_IDLE_CONNS", 5), "Maximum number of idle database connections")
-		dbConnMaxLifetime = flag.Duration("db-conn-max-lifetime", getEnvDurationOrDefault("DB_CONN_MAX_LIFETIME", 30*time.Minute), "Maximum connection lifetime")
-		dbConnMaxIdleTime = flag.Duration("db-conn-max-idle-time", getEnvDurationOrDefault("DB_CONN_MAX_IDLE_TIME", 5*time.Minute), "Maximum connection idle time")
-		dbHealthCheck     = flag.Bool("db-health-check", getEnvBoolOrDefault("DB_HEALTH_CHECK", true), "Enable database health checks")
+		dbMaxOpenConns    = flag.Int("db-max-open-conns", getEnvIntOrDefault("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns), "Maximum number of open database connections")
+		dbMaxIdleConns    = flag.Int("db-max-idle-conns", getEnvIntOrDefault("DB_MAX_IDLE_CONNS", DefaultDBMaxIdleConns), "Maximum number of idle database connections")
+		dbConnMaxLifetime = flag.Duration("db-conn-max-lifetime", getEnvDurationOrDefault("DB_CONN_MAX_LIFETIME", DefaultDBConnMaxLifetime), "Maximum connection lifetime")
+		dbConnMaxIdleTime = flag.Duration("db-conn-max-idle-time", getEnvDurationOrDefault("DB_CONN_MAX_IDLE_TIME", DefaultDBConnMaxIdleTime), "Maximum connection idle time")
+		dbHealthCheck     = flag.Bool("db-health-check", getEnvBoolOrDefault("DB_HEALTH_CHECK", DefaultDBHealthCheck), "Enable database health checks")
 		// CORS flags
-		corsEnabled       = flag.Bool("cors-enabled", getEnvBoolOrDefault("CORS_ENABLED", true), "Enable CORS headers")
-		corsAllowOrigins  = flag.String("cors-allow-origins", getEnvOrDefault("CORS_ALLOW_ORIGINS", "*"), "CORS allowed origins (comma-separated)")
-		corsAllowMethods  = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS"), "CORS allowed methods (comma-separated)")
-		corsAllowHeaders  = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", "Content-Type,Authorization,X-Requested-With"), "CORS allowed headers (comma-separated)")
-		corsAllowCredentials = flag.Bool("cors-allow-credentials", getEnvBoolOrDefault("CORS_ALLOW_CREDENTIALS", false), "CORS allow credentials")
+		corsEnabled       = flag.Bool("cors-enabled", getEnvBoolOrDefault("CORS_ENABLED", DefaultCORSEnabled), "Enable CORS headers")
+		corsAllowOrigins  = flag.String("cors-allow-origins", getEnvOrDefault("CORS_ALLOW_ORIGINS", DefaultCORSAllowOrigins), "CORS allowed origins (comma-separated)")
+		corsAllowMethods  = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", DefaultCORSAllowMethods), "CORS allowed methods (comma-separated)")
+		corsAllowHeaders  = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", DefaultCORSAllowHeaders), "CORS allowed headers (comma-separated)")
+		corsAllowCredentials = flag.Bool("cors-allow-credentials", getEnvBoolOrDefault("CORS_ALLOW_CREDENTIALS", DefaultCORSAllowCredentials), "CORS allow credentials")
 	)
 	flag.Parse()
 
@@ -128,7 +162,7 @@ func (c *Config) validatePort() error {
 			WithContext("port", c.ProxyPort)
 	}
 	
-	if port < 1 || port > 65535 {
+	if port < MinPortNumber || port > MaxPortNumber {
 		return errors.ErrInvalidPort.WithContext("port", c.ProxyPort).
 			WithContext("range", "1-65535")
 	}
@@ -189,7 +223,7 @@ func (c *Config) validateDatabasePath() error {
 		dir := c.DatabasePath[:strings.LastIndex(c.DatabasePath, "/")]
 		if dir != "" {
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				if err := os.MkdirAll(dir, 0755); err != nil {
+				if err := os.MkdirAll(dir, DefaultDirPermissions); err != nil {
 					return errors.Wrap(err, errors.CategoryConfig, "INVALID_DATABASE_PATH", "cannot create database directory").
 						WithContext("path", c.DatabasePath).
 						WithContext("directory", dir)
@@ -202,12 +236,12 @@ func (c *Config) validateDatabasePath() error {
 }
 
 func (c *Config) validateRateLimit() error {
-	if c.RateLimitRPS < 1 {
+	if c.RateLimitRPS < MinRateLimitRPS {
 		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_RPS", "rate limit RPS must be at least 1").
 			WithContext("rps", c.RateLimitRPS)
 	}
 	
-	if c.RateLimitBurst < 1 {
+	if c.RateLimitBurst < MinRateLimitBurst {
 		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_BURST", "rate limit burst must be at least 1").
 			WithContext("burst", c.RateLimitBurst)
 	}
@@ -288,12 +322,12 @@ func parseCommaSeparatedString(input string) []string {
 }
 
 func (c *Config) validateDatabasePool() error {
-	if c.DBMaxOpenConns < 1 {
+	if c.DBMaxOpenConns < MinDBMaxOpenConns {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_OPEN_CONNS", "database max open connections must be at least 1").
 			WithContext("db_max_open_conns", c.DBMaxOpenConns)
 	}
 	
-	if c.DBMaxIdleConns < 0 {
+	if c.DBMaxIdleConns < MinDBMaxIdleConns {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_IDLE_CONNS", "database max idle connections cannot be negative").
 			WithContext("db_max_idle_conns", c.DBMaxIdleConns)
 	}
@@ -304,12 +338,12 @@ func (c *Config) validateDatabasePool() error {
 			WithContext("db_max_open_conns", c.DBMaxOpenConns)
 	}
 	
-	if c.DBConnMaxLifetime < 0 {
+	if c.DBConnMaxLifetime < MinDBConnLifetime {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_LIFETIME", "database connection max lifetime cannot be negative").
 			WithContext("db_conn_max_lifetime", c.DBConnMaxLifetime)
 	}
 	
-	if c.DBConnMaxIdleTime < 0 {
+	if c.DBConnMaxIdleTime < MinDBConnIdleTime {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_IDLE_TIME", "database connection max idle time cannot be negative").
 			WithContext("db_conn_max_idle_time", c.DBConnMaxIdleTime)
 	}

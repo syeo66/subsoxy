@@ -13,6 +13,11 @@ import (
 	"github.com/syeo66/subsoxy/server"
 )
 
+// Server shutdown constants
+const (
+	GracefulShutdownTimeout = 30 * time.Second
+)
+
 func main() {
 	cfg, err := config.New()
 	if err != nil {
@@ -58,7 +63,7 @@ func main() {
 	
 	<-quit
 	
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), GracefulShutdownTimeout)
 	defer cancel()
 	
 	if err := proxyServer.Shutdown(ctx); err != nil {

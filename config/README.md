@@ -9,7 +9,7 @@ This module handles:
 - Environment variable support with fallback
 - Comprehensive configuration validation
 - Structured error handling with helpful messages
-- Default value management
+- Default value management with named constants
 - Automatic directory creation for database paths
 
 ## Usage

@@ -17,6 +17,19 @@ const (
 	MaxInputLength = 1000
 )
 
+// Shuffle constants
+const (
+	DefaultShuffleSize = 50
+	MaxShuffleSize     = 10000
+	SubsonicAPIVersion = "1.15.0"
+)
+
+// ASCII control character constants
+const (
+	ASCIIControlCharMin = 32
+	ASCIIControlCharMax = 127
+)
+
 type Handler struct {
 	logger  *logrus.Logger
 	shuffle *shuffle.Service
@@ -33,7 +46,7 @@ func New(logger *logrus.Logger, shuffleService *shuffle.Service) *Handler {
 func SanitizeForLogging(input string) string {
 	// Remove control characters (ASCII 0-31 and 127)
 	sanitized := strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
+		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
 			return -1
 		}
 		return r
@@ -69,13 +82,13 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	}
 
 	sizeStr := r.URL.Query().Get("size")
-	size := 50
+	size := DefaultShuffleSize
 	if sizeStr != "" {
 		if parsedSize, err := strconv.Atoi(sizeStr); err == nil {
-			if parsedSize > 10000 { // Prevent extremely large requests
+			if parsedSize > MaxShuffleSize { // Prevent extremely large requests
 				validationErr := errors.ErrValidationFailed.WithContext("field", "size").
 					WithContext("value", parsedSize).
-					WithContext("max_allowed", 10000)
+					WithContext("max_allowed", MaxShuffleSize)
 				h.logger.WithError(validationErr).Warn("Size parameter too large")
 				http.Error(w, "Size parameter too large (max: 10000)", http.StatusBadRequest)
 				return true

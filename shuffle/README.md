@@ -22,16 +22,16 @@ Reduces likelihood of recently played songs **for each individual user** to enco
 ```go
 func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
     if lastPlayed.IsZero() {
-        return 2.0 // Boost for never-played songs by this user
+        return NeverPlayedWeight // Boost for never-played songs by this user
     }
     
-    daysSinceLastPlayed := time.Since(lastPlayed).Hours() / 24.0
+    daysSinceLastPlayed := time.Since(lastPlayed).Hours() / HoursPerDay
     
-    if daysSinceLastPlayed < 30 {
-        return 0.1 + (daysSinceLastPlayed/30.0)*0.9 // 0.1 to 1.0
+    if daysSinceLastPlayed < TimeDecayDaysThreshold {
+        return TimeDecayMinWeight + (daysSinceLastPlayed/TimeDecayDaysThreshold)*TimeDecayMaxWeight
     }
     
-    return 1.0 + math.Min(daysSinceLastPlayed/365.0, 1.0) // 1.0 to 2.0
+    return 1.0 + math.Min(daysSinceLastPlayed/DaysPerYear, 1.0)
 }
 ```
 
@@ -41,7 +41,7 @@ Favors songs with better play-to-skip ratios **for each specific user**.
 ```go
 func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
     if playCount == 0 && skipCount == 0 {
-        return 1.5 // Boost for new songs for this user
+        return UnplayedSongWeight // Boost for new songs for this user
     }
     
     totalEvents := playCount + skipCount
@@ -50,7 +50,7 @@ func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
     }
     
     playRatio := float64(playCount) / float64(totalEvents)
-    return 0.2 + (playRatio * 1.8) // 0.2 to 2.0 based on user's behavior
+    return PlayRatioMinWeight + (playRatio * PlayRatioMaxWeight)
 }
 ```
 
@@ -72,7 +72,7 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
         return 1.0
     }
     
-    return 0.5 + probability // 0.5 to 1.5 based on user's transition history
+    return BaseTransitionWeight + probability // Based on user's transition history
 }
 ```
 
@@ -157,16 +157,28 @@ Where:
 
 ## Configuration
 
-The algorithm uses several constants that can be tuned:
+The algorithm uses several well-defined constants for maintainable and tunable behavior:
 
 ```go
+// Algorithm selection constants
 const (
-    RecentDaysThreshold = 30.0    // Days to consider "recent"
-    NeverPlayedBoost   = 2.0      // Weight boost for new songs
-    NewSongBoost       = 1.5      // Play/skip weight for new songs
-    MinPlaySkipWeight  = 0.2      // Minimum play/skip weight
-    MaxPlaySkipWeight  = 2.0      // Maximum play/skip weight
-    MinTransitionWeight = 0.5     // Minimum transition weight
+    LargeLibraryThreshold = 5000
+    BatchSize             = 1000
+    OversampleFactor      = 3
+)
+
+// Weight calculation constants
+const (
+    NeverPlayedWeight       = 2.0
+    HoursPerDay            = 24.0
+    TimeDecayDaysThreshold = 30
+    TimeDecayMinWeight     = 0.1
+    TimeDecayMaxWeight     = 0.9
+    DaysPerYear            = 365.0
+    UnplayedSongWeight     = 1.5
+    PlayRatioMinWeight     = 0.2
+    PlayRatioMaxWeight     = 1.8
+    BaseTransitionWeight   = 0.5
     MaxTransitionWeight = 1.5     // Maximum transition weight
 )
 ```

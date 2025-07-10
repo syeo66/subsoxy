@@ -13,6 +13,27 @@ import (
 	"github.com/syeo66/subsoxy/database"
 )
 
+// Algorithm selection constants
+const (
+	LargeLibraryThreshold = 5000
+	BatchSize             = 1000
+	OversampleFactor      = 3
+)
+
+// Weight calculation constants
+const (
+	NeverPlayedWeight       = 2.0
+	HoursPerDay            = 24.0
+	TimeDecayDaysThreshold = 30
+	TimeDecayMinWeight     = 0.1
+	TimeDecayMaxWeight     = 0.9
+	DaysPerYear            = 365.0
+	UnplayedSongWeight     = 1.5
+	PlayRatioMinWeight     = 0.2
+	PlayRatioMaxWeight     = 1.8
+	BaseTransitionWeight   = 0.5
+)
+
 type Service struct {
 	db         *database.DB
 	logger     *logrus.Logger
@@ -42,7 +63,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	}
 
 	// Switch to memory-efficient algorithm for large libraries
-	if totalSongs > 5000 {
+	if totalSongs > LargeLibraryThreshold {
 		return s.getWeightedShuffledSongsOptimized(userID, count, totalSongs)
 	}
 
@@ -97,12 +118,12 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 // getWeightedShuffledSongsOptimized implements a memory-efficient shuffle algorithm
 // for large song libraries using reservoir sampling and batch processing
 func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, totalSongs int) ([]models.Song, error) {
-	const batchSize = 1000
+	const batchSize = BatchSize
 	result := make([]models.Song, 0, count)
 	
 	// Use reservoir sampling approach to avoid loading all songs
 	// We'll sample more songs than needed to account for weight distribution
-	oversampleFactor := 3
+	oversampleFactor := OversampleFactor
 	sampleSize := count * oversampleFactor
 	if sampleSize > totalSongs {
 		sampleSize = totalSongs
@@ -239,7 +260,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 	// Use provided transition probability or default to 1.0 if not available
 	transitionWeight := 1.0
 	if transitionProbability > 0 {
-		transitionWeight = 0.5 + transitionProbability
+		transitionWeight = BaseTransitionWeight + transitionProbability
 	}
 	
 	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight
@@ -258,21 +279,21 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 
 func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
 	if lastPlayed.IsZero() {
-		return 2.0
+		return NeverPlayedWeight
 	}
 	
-	daysSinceLastPlayed := time.Since(lastPlayed).Hours() / 24.0
+	daysSinceLastPlayed := time.Since(lastPlayed).Hours() / HoursPerDay
 	
-	if daysSinceLastPlayed < 30 {
-		return 0.1 + (daysSinceLastPlayed/30.0)*0.9
+	if daysSinceLastPlayed < TimeDecayDaysThreshold {
+		return TimeDecayMinWeight + (daysSinceLastPlayed/TimeDecayDaysThreshold)*TimeDecayMaxWeight
 	}
 	
-	return 1.0 + math.Min(daysSinceLastPlayed/365.0, 1.0)
+	return 1.0 + math.Min(daysSinceLastPlayed/DaysPerYear, 1.0)
 }
 
 func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
 	if playCount == 0 && skipCount == 0 {
-		return 1.5
+		return UnplayedSongWeight
 	}
 	
 	totalEvents := playCount + skipCount
@@ -281,7 +302,7 @@ func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
 	}
 	
 	playRatio := float64(playCount) / float64(totalEvents)
-	return 0.2 + (playRatio * 1.8)
+	return PlayRatioMinWeight + (playRatio * PlayRatioMaxWeight)
 }
 
 func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
@@ -298,5 +319,5 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 		return 1.0
 	}
 	
-	return 0.5 + probability
+	return BaseTransitionWeight + probability
 }
