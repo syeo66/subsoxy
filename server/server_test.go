@@ -858,3 +858,277 @@ func TestRateLimitingWithHooks(t *testing.T) {
 		t.Errorf("Expected status 429, got %d", w.Code)
 	}
 }
+
+func TestFetchAndStoreSongsMultiUser(t *testing.T) {
+	os.Remove("test_multiuser.db")
+	
+	cfg := &config.Config{
+		ProxyPort:       "8080",
+		UpstreamURL:     "http://localhost:4533",
+		LogLevel:        "warn",
+		DatabasePath:    "test_multiuser.db",
+		RateLimitRPS:    100,
+		RateLimitBurst:  200,
+		RateLimitEnabled: false,
+	}
+	defer os.Remove("test_multiuser.db")
+	
+	// Create mock upstream server that returns different songs for different users
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username := r.URL.Query().Get("u")
+		
+		if strings.Contains(r.URL.Path, "/rest/ping") {
+			// Ping endpoint - return success
+			response := map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status":  "ok",
+					"version": "1.15.0",
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else if strings.Contains(r.URL.Path, "/rest/search3") {
+			// Search endpoint - return different songs per user
+			var songs []models.Song
+			switch username {
+			case "user1":
+				songs = []models.Song{
+					{ID: "1", Title: "Song 1 User 1", Artist: "Artist 1"},
+					{ID: "2", Title: "Song 2 User 1", Artist: "Artist 1"},
+				}
+			case "user2":
+				songs = []models.Song{
+					{ID: "3", Title: "Song 1 User 2", Artist: "Artist 2"},
+					{ID: "4", Title: "Song 2 User 2", Artist: "Artist 2"},
+				}
+			case "user3":
+				songs = []models.Song{
+					{ID: "5", Title: "Song 1 User 3", Artist: "Artist 3"},
+					{ID: "6", Title: "Song 2 User 3", Artist: "Artist 3"},
+				}
+			}
+			
+			response := map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status":  "ok",
+					"version": "1.15.0",
+					"songs": map[string]interface{}{
+						"song": songs,
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer mockServer.Close()
+	
+	cfg.UpstreamURL = mockServer.URL
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	// Add multiple users with valid credentials
+	err = server.credentials.ValidateAndStore("user1", "pass1")
+	if err != nil {
+		t.Errorf("Failed to validate user1: %v", err)
+	}
+	err = server.credentials.ValidateAndStore("user2", "pass2")
+	if err != nil {
+		t.Errorf("Failed to validate user2: %v", err)
+	}
+	err = server.credentials.ValidateAndStore("user3", "pass3")
+	if err != nil {
+		t.Errorf("Failed to validate user3: %v", err)
+	}
+	
+	// Trigger multi-user sync
+	server.fetchAndStoreSongs()
+	
+	// Verify songs were stored for each user
+	user1Songs, err := server.db.GetAllSongs("user1")
+	if err != nil {
+		t.Errorf("Failed to get songs for user1: %v", err)
+	}
+	if len(user1Songs) != 2 {
+		t.Errorf("Expected 2 songs for user1, got %d", len(user1Songs))
+	}
+	
+	user2Songs, err := server.db.GetAllSongs("user2")
+	if err != nil {
+		t.Errorf("Failed to get songs for user2: %v", err)
+	}
+	if len(user2Songs) != 2 {
+		t.Errorf("Expected 2 songs for user2, got %d", len(user2Songs))
+	}
+	
+	user3Songs, err := server.db.GetAllSongs("user3")
+	if err != nil {
+		t.Errorf("Failed to get songs for user3: %v", err)
+	}
+	if len(user3Songs) != 2 {
+		t.Errorf("Expected 2 songs for user3, got %d", len(user3Songs))
+	}
+	
+	// Verify songs are different for each user
+	if len(user1Songs) > 0 && len(user2Songs) > 0 {
+		if user1Songs[0].ID == user2Songs[0].ID {
+			t.Error("User1 and User2 should have different songs")
+		}
+	}
+}
+
+func TestSyncSongsForUserError(t *testing.T) {
+	os.Remove("test_sync_error.db")
+	
+	cfg := &config.Config{
+		ProxyPort:       "8080",
+		UpstreamURL:     "http://localhost:4533",
+		LogLevel:        "warn",
+		DatabasePath:    "test_sync_error.db",
+		RateLimitRPS:    100,
+		RateLimitBurst:  200,
+		RateLimitEnabled: false,
+	}
+	defer os.Remove("test_sync_error.db")
+	
+	// Create mock upstream server that returns error for user2
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username := r.URL.Query().Get("u")
+		
+		if strings.Contains(r.URL.Path, "/rest/ping") {
+			// Ping endpoint - return success
+			response := map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status":  "ok",
+					"version": "1.15.0",
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else if strings.Contains(r.URL.Path, "/rest/search3") {
+			if username == "user2" {
+				// Return error for user2
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status": "failed",
+						"error": map[string]interface{}{
+							"code":    "10",
+							"message": "Required parameter is missing",
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			} else {
+				// Return success for other users
+				songs := []models.Song{
+					{ID: "1", Title: "Song 1", Artist: "Artist 1"},
+				}
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status":  "ok",
+						"version": "1.15.0",
+						"songs": map[string]interface{}{
+							"song": songs,
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			}
+		}
+	}))
+	defer mockServer.Close()
+	
+	cfg.UpstreamURL = mockServer.URL
+	
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+	
+	// Add multiple users with valid credentials
+	err = server.credentials.ValidateAndStore("user1", "pass1")
+	if err != nil {
+		t.Errorf("Failed to validate user1: %v", err)
+	}
+	err = server.credentials.ValidateAndStore("user2", "pass2")
+	if err != nil {
+		t.Errorf("Failed to validate user2: %v", err)
+	}
+	
+	// Trigger multi-user sync
+	server.fetchAndStoreSongs()
+	
+	// Verify songs were stored for user1 but not user2
+	user1Songs, err := server.db.GetAllSongs("user1")
+	if err != nil {
+		t.Errorf("Failed to get songs for user1: %v", err)
+	}
+	if len(user1Songs) != 1 {
+		t.Errorf("Expected 1 song for user1, got %d", len(user1Songs))
+	}
+	
+	user2Songs, err := server.db.GetAllSongs("user2")
+	if err != nil {
+		t.Errorf("Failed to get songs for user2: %v", err)
+	}
+	if len(user2Songs) != 0 {
+		t.Errorf("Expected 0 songs for user2 (sync failed), got %d", len(user2Songs))
+	}
+}
+
+func TestGetSortedUsernames(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    map[string]string
+		expected []string
+	}{
+		{
+			name:     "Empty map",
+			input:    map[string]string{},
+			expected: []string{},
+		},
+		{
+			name: "Single user",
+			input: map[string]string{
+				"user1": "pass1",
+			},
+			expected: []string{"user1"},
+		},
+		{
+			name: "Multiple users",
+			input: map[string]string{
+				"user3": "pass3",
+				"user1": "pass1",
+				"user2": "pass2",
+			},
+			expected: []string{"user1", "user2", "user3"},
+		},
+		{
+			name: "Users with special characters",
+			input: map[string]string{
+				"user_z": "pass_z",
+				"user_a": "pass_a",
+				"user_m": "pass_m",
+			},
+			expected: []string{"user_a", "user_m", "user_z"},
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := getSortedUsernames(tc.input)
+			
+			if len(result) != len(tc.expected) {
+				t.Errorf("Expected %d usernames, got %d", len(tc.expected), len(result))
+			}
+			
+			for i, expected := range tc.expected {
+				if i >= len(result) || result[i] != expected {
+					t.Errorf("Expected username at index %d to be %s, got %s", i, expected, result[i])
+				}
+			}
+		})
+	}
+}

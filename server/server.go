@@ -380,20 +380,50 @@ func (ps *ProxyServer) syncSongs() {
 func (ps *ProxyServer) fetchAndStoreSongs() {
 	ps.logger.Info("Syncing songs from Subsonic API")
 	
-	username, password := ps.credentials.GetValid()
-	if username == "" || password == "" {
+	// Get all valid credentials for multi-user sync
+	allCredentials := ps.credentials.GetAllValid()
+	if len(allCredentials) == 0 {
 		ps.logger.WithError(errors.ErrNoValidCredentials).Warn("No valid credentials available for song syncing")
 		return
 	}
 	
+	ps.logger.WithField("user_count", len(allCredentials)).Info("Starting multi-user song sync")
+	
+	// Sync songs for each user with staggered delays
+	for i, username := range getSortedUsernames(allCredentials) {
+		password := allCredentials[username]
+		
+		// Add staggered delay to avoid overwhelming upstream server (except for first user)
+		if i > 0 {
+			delay := time.Duration(i) * 2 * time.Second
+			ps.logger.WithFields(logrus.Fields{
+				"user":  sanitizeUsername(username),
+				"delay": delay,
+			}).Debug("Adding staggered delay for user sync")
+			time.Sleep(delay)
+		}
+		
+		// Sync songs for this specific user
+		if err := ps.syncSongsForUser(username, password); err != nil {
+			ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
+			// Continue with other users even if one fails
+			continue
+		}
+	}
+	
+	ps.logger.Info("Multi-user song sync completed")
+}
+
+// syncSongsForUser handles song synchronization for a single user
+func (ps *ProxyServer) syncSongsForUser(username, password string) error {
+	ps.logger.WithField("user", sanitizeUsername(username)).Info("Syncing songs for user")
+	
 	// Construct URL with proper encoding to prevent credential exposure in logs
 	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/search3")
 	if err != nil {
-		parseErr := errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL").
+		return errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL").
 			WithContext("upstream_url", ps.config.UpstreamURL).
 			WithContext("username", username)
-		ps.logger.WithError(parseErr).Error("Failed to parse upstream URL for song syncing")
-		return
 	}
 	
 	// Use URL query parameters to safely encode credentials
@@ -409,44 +439,62 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 	
 	resp, err := http.Get(baseURL.String())
 	if err != nil {
-		networkErr := errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch songs from Subsonic API").
+		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch songs from Subsonic API").
 			WithContext("url", ps.config.UpstreamURL).
 			WithContext("username", username)
-		ps.logger.WithError(networkErr).Error("Failed to fetch songs from Subsonic API")
-		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		httpErr := errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode)).
+		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode)).
 			WithContext("status_code", resp.StatusCode).
-			WithContext("url", ps.config.UpstreamURL)
-		ps.logger.WithError(httpErr).Error("Upstream server returned non-200 status")
-		return
+			WithContext("url", ps.config.UpstreamURL).
+			WithContext("username", username)
 	}
 
 	var subsonicResp models.SubsonicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&subsonicResp); err != nil {
-		decodeErr := errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode Subsonic response").
-			WithContext("url", ps.config.UpstreamURL)
-		ps.logger.WithError(decodeErr).Error("Failed to decode Subsonic response")
-		return
+		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode Subsonic response").
+			WithContext("url", ps.config.UpstreamURL).
+			WithContext("username", username)
 	}
 
 	if subsonicResp.SubsonicResponse.Status != "ok" {
 		authErr := errors.ErrUpstreamAuth.WithContext("status", subsonicResp.SubsonicResponse.Status).
 			WithContext("username", username)
-		ps.logger.WithError(authErr).Error("Subsonic API returned error status - possibly authentication failed")
-		ps.credentials.ClearInvalid()
-		return
+		ps.logger.WithError(authErr).Error("Subsonic API returned error status for user - possibly authentication failed")
+		// Note: We don't clear ALL credentials here, only handle per-user errors
+		return authErr
 	}
 
 	if err := ps.db.StoreSongs(username, subsonicResp.SubsonicResponse.Songs.Song); err != nil {
-		ps.logger.WithError(err).WithField("userID", sanitizeUsername(username)).Error("Failed to store songs")
-		return
+		return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
+			WithContext("username", username)
 	}
 
-	ps.logger.WithField("count", len(subsonicResp.SubsonicResponse.Songs.Song)).Info("Successfully synced songs")
+	ps.logger.WithFields(logrus.Fields{
+		"user":  sanitizeUsername(username),
+		"count": len(subsonicResp.SubsonicResponse.Songs.Song),
+	}).Info("Successfully synced songs for user")
+	
+	return nil
+}
+
+// getSortedUsernames returns a sorted slice of usernames for consistent ordering
+func getSortedUsernames(credentials map[string]string) []string {
+	usernames := make([]string, 0, len(credentials))
+	for username := range credentials {
+		usernames = append(usernames, username)
+	}
+	// Sort to ensure consistent ordering across sync runs
+	for i := 0; i < len(usernames)-1; i++ {
+		for j := i + 1; j < len(usernames); j++ {
+			if usernames[i] > usernames[j] {
+				usernames[i], usernames[j] = usernames[j], usernames[i]
+			}
+		}
+	}
+	return usernames
 }
 
 func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {

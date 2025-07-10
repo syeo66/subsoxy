@@ -576,3 +576,53 @@ func TestValidateInvalidResponseFormat(t *testing.T) {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
 	}
 }
+
+func TestGetAllValid(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer mockServer.Close()
+	
+	manager := New(logger, mockServer.URL)
+	
+	// Test with no credentials
+	allCreds := manager.GetAllValid()
+	if len(allCreds) != 0 {
+		t.Errorf("Expected 0 credentials, got %d", len(allCreds))
+	}
+	
+	// Store multiple users
+	manager.ValidateAndStore("user1", "pass1")
+	manager.ValidateAndStore("user2", "pass2")
+	manager.ValidateAndStore("user3", "pass3")
+	
+	// GetAllValid should return all stored credentials
+	allCreds = manager.GetAllValid()
+	if len(allCreds) != 3 {
+		t.Errorf("Expected 3 credentials, got %d", len(allCreds))
+	}
+	
+	// Verify all expected credentials are present
+	expectedCreds := map[string]string{
+		"user1": "pass1",
+		"user2": "pass2",
+		"user3": "pass3",
+	}
+	
+	for user, expectedPass := range expectedCreds {
+		if actualPass, exists := allCreds[user]; !exists {
+			t.Errorf("Expected user %s to exist", user)
+		} else if actualPass != expectedPass {
+			t.Errorf("Expected password %s for user %s, got %s", expectedPass, user, actualPass)
+		}
+	}
+}

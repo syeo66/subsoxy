@@ -152,6 +152,24 @@ func (cm *Manager) GetValid() (string, string) {
 	return "", ""
 }
 
+// GetAllValid returns all valid credentials as a map of username to password
+func (cm *Manager) GetAllValid() map[string]string {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	
+	validCreds := make(map[string]string)
+	for username, encryptedCred := range cm.validCredentials {
+		if password, err := cm.decryptPassword(encryptedCred); err == nil {
+			validCreds[username] = password
+		} else {
+			// If decryption fails, skip this credential
+			cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored password")
+		}
+	}
+	
+	return validCreds
+}
+
 func (cm *Manager) ClearInvalid() {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
