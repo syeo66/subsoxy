@@ -159,6 +159,7 @@ This application implements comprehensive security measures to protect credentia
 
 ### Recent Security Improvements
 
+- **Background Sync Authentication Fix**: ✅ **CRITICAL FIX** - Fixed token authentication in background song sync for modern Subsonic clients
 - **Input Validation & Sanitization**: ✅ **IMPLEMENTED** - Comprehensive protection against log injection, control character attacks, and DoS attempts
 - **Rate Limiting**: ✅ **IMPLEMENTED** - Complete DoS protection with configurable token bucket rate limiting
 - **Password Logging Fix**: ✅ **RESOLVED** - Eliminated password exposure in server logs during song synchronization  

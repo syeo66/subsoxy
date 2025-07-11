@@ -173,6 +173,39 @@ iftop  # or nethogs, nload
 
 ## Security Issues
 
+### Background Sync Authentication Fix ✅ **CRITICAL**
+
+**Previous Issue**: Background song sync failed for modern Subsonic clients using token-based authentication
+
+**Problem**: 
+- Background sync incorrectly sent token credentials as password parameter (`p=TOKEN:token:salt`)
+- Upstream servers expect separate token parameters (`t=token&s=salt`)
+- Authentication failures prevented song synchronization for modern clients
+
+**Fix Applied**:
+- ✅ **RESOLVED**: Updated `syncSongsForUser` function in `server/server.go` to properly handle both authentication modes
+- Added token format detection by checking for `"TOKEN:"` prefix in stored credentials
+- Implemented proper parameter parsing to extract token and salt components
+- Now uses correct authentication parameters - `t` + `s` for tokens, `p` for passwords
+
+**Verification**:
+```bash
+# Check for successful sync in logs (after client requests)
+grep "Syncing songs for user" subsoxy.log
+
+# Verify no more authentication errors during sync
+grep -E "(authentication failed|UPSTREAM_AUTH_FAILED)" subsoxy.log
+
+# Should see token-based authentication in debug logs
+./subsoxy -log-level debug | grep "Using token-based authentication for sync"
+```
+
+**Impact**: 
+- Background song synchronization now works for all modern Subsonic clients
+- Full compatibility with token-based authentication (Symfonium, DSub, etc.)
+- Maintains backward compatibility with password-based authentication
+- Weighted shuffle and play statistics now function properly for all authentication methods
+
 ### Password Logging Vulnerability (Fixed)
 
 **Previous Issue**: Passwords were exposed in server logs during song synchronization

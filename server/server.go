@@ -468,7 +468,27 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	// Use URL query parameters to safely encode credentials
 	params := url.Values{}
 	params.Add("u", username)
-	params.Add("p", password)
+	
+	// Check if this is token-based authentication
+	if strings.HasPrefix(password, "TOKEN:") {
+		// Extract token and salt from the special format: "TOKEN:token:salt"
+		parts := strings.Split(password, ":")
+		if len(parts) != 3 {
+			return errors.New(errors.CategoryCredentials, "INVALID_TOKEN_FORMAT", "invalid token format in stored credentials").
+				WithContext("username", username)
+		}
+		token := parts[1]
+		salt := parts[2]
+		
+		params.Add("t", token)
+		params.Add("s", salt)
+		ps.logger.WithField("user", sanitizeUsername(username)).Debug("Using token-based authentication for sync")
+	} else {
+		// Traditional password-based authentication
+		params.Add("p", password)
+		ps.logger.WithField("user", sanitizeUsername(username)).Debug("Using password-based authentication for sync")
+	}
+	
 	params.Add("query", "*")
 	params.Add("songCount", SongSyncCount)
 	params.Add("f", "json")
