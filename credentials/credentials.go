@@ -53,33 +53,34 @@ func New(logger *logrus.Logger, upstreamURL string) *Manager {
 	}
 }
 
-func (cm *Manager) ValidateAndStore(username, password string) error {
+func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 	if username == "" || password == "" {
 		err := errors.ErrInvalidCredentials.WithContext("reason", "empty username or password")
 		cm.logger.WithError(err).Warn("Invalid credentials provided")
-		return err
+		return false, err
 	}
 
 	cm.mutex.RLock()
 	if storedCred, exists := cm.validCredentials[username]; exists {
 		if decryptedPassword, err := cm.decryptPassword(storedCred); err == nil && decryptedPassword == password {
 			cm.mutex.RUnlock()
-			return nil
+			return false, nil // Existing credential, not new
 		}
 	}
 	cm.mutex.RUnlock()
 	
 	if err := cm.validate(username, password); err != nil {
 		cm.logger.WithError(err).WithField("username", username).Warn("Invalid credentials provided")
-		return err
+		return false, err
 	}
 
 	encryptedCred, err := cm.encryptPassword(password)
 	if err != nil {
-		return errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt password")
+		return false, errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt password")
 	}
 	
 	cm.mutex.Lock()
+	isNewCredential := len(cm.validCredentials) == 0 || cm.validCredentials[username].EncryptedPassword == nil
 	cm.validCredentials[username] = encryptedCred
 	cm.mutex.Unlock()
 	
@@ -89,7 +90,7 @@ func (cm *Manager) ValidateAndStore(username, password string) error {
 	} else {
 		cm.logger.WithField("username", username).Info("Password-based credentials validated and stored")
 	}
-	return nil
+	return isNewCredential, nil
 }
 
 func (cm *Manager) validate(username, password string) error {

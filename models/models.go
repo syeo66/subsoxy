@@ -14,6 +14,8 @@ type Song struct {
 	LastPlayed  time.Time `json:"lastPlayed"`
 	PlayCount   int       `json:"playCount"`
 	SkipCount   int       `json:"skipCount"`
+	IsDir       bool      `json:"isDir"`
+	Name        string    `json:"name"`
 }
 
 type PlayEvent struct {
@@ -37,6 +39,21 @@ type WeightedSong struct {
 	Weight float64 `json:"weight"`
 }
 
+type MusicFolder struct {
+	ID   interface{} `json:"id"`
+	Name string      `json:"name"`
+}
+
+type Artist struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type Index struct {
+	Name    string   `json:"name"`
+	Artists []Artist `json:"artist"`
+}
+
 type SubsonicResponse struct {
 	SubsonicResponse struct {
 		Status  string `json:"status"`
@@ -44,6 +61,15 @@ type SubsonicResponse struct {
 		Songs   struct {
 			Song []Song `json:"song"`
 		} `json:"songs,omitempty"`
+		MusicFolders struct {
+			MusicFolder []MusicFolder `json:"musicFolder"`
+		} `json:"musicFolders,omitempty"`
+		Indexes struct {
+			Index []Index `json:"index"`
+		} `json:"indexes,omitempty"`
+		Directory struct {
+			Child []Song `json:"child"`
+		} `json:"directory,omitempty"`
 	} `json:"subsonic-response"`
 }
 

@@ -49,7 +49,7 @@ func TestValidateAndStoreValidCredentials(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test valid credentials
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -80,7 +80,7 @@ func TestValidateAndStoreInvalidCredentials(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test invalid credentials
-	manager.ValidateAndStore("wronguser", "wrongpass")
+	_, _ = manager.ValidateAndStore("wronguser", "wrongpass")
 	
 	// Verify no credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -103,7 +103,7 @@ func TestValidateAndStoreServerError(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test server error
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify no credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -132,10 +132,10 @@ func TestValidateAndStoreAlreadyStored(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// First call should validate and store
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Second call with same credentials should not trigger validation
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Should only have made one HTTP call
 	if callCount != 1 {
@@ -156,7 +156,7 @@ func TestValidateAndStoreInvalidJSON(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test invalid JSON response
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify no credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -173,7 +173,7 @@ func TestValidateAndStoreUnreachableServer(t *testing.T) {
 	manager := New(logger, "http://localhost:99999")
 	
 	// Test connection failure
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify no credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -213,8 +213,8 @@ func TestGetValidMultipleUsers(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Store multiple users
-	manager.ValidateAndStore("user1", "pass1")
-	manager.ValidateAndStore("user2", "pass2")
+	_, _ = manager.ValidateAndStore("user1", "pass1")
+	_, _ = manager.ValidateAndStore("user2", "pass2")
 	
 	// GetValid should return one of them (implementation returns first found)
 	user, pass := manager.GetValid()
@@ -246,7 +246,7 @@ func TestClearInvalid(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Store credentials
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify credentials are stored
 	user, pass := manager.GetValid()
@@ -300,7 +300,7 @@ func TestValidateURLFormat(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test URL format
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	expectedURL := "/rest/ping?c=subsoxy&f=json&p=testpass&u=testuser&v=1.15.0"
 	if capturedURL != expectedURL {
@@ -330,7 +330,7 @@ func TestConcurrentAccess(t *testing.T) {
 	
 	// Goroutine 1: Store credentials
 	go func() {
-		manager.ValidateAndStore("user1", "pass1")
+		_, _ = manager.ValidateAndStore("user1", "pass1")
 		done <- true
 	}()
 	
@@ -438,7 +438,7 @@ func TestSecureCredentialClearing(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Store credentials
-	err := manager.ValidateAndStore("testuser", "testpass")
+	_, err := manager.ValidateAndStore("testuser", "testpass")
 	if err != nil {
 		t.Errorf("Failed to store credentials: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestMemorySecurityValidation(t *testing.T) {
 	password := "secret-password-123"
 	
 	// Store credential
-	err := manager.ValidateAndStore("testuser", password)
+	_, err := manager.ValidateAndStore("testuser", password)
 	if err != nil {
 		t.Errorf("Failed to store credentials: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestValidateInvalidResponseFormat(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 	
 	// Test invalid response format
-	manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore("testuser", "testpass")
 	
 	// Verify no credentials were stored
 	storedUser, storedPass := manager.GetValid()
@@ -601,9 +601,9 @@ func TestGetAllValid(t *testing.T) {
 	}
 	
 	// Store multiple users
-	manager.ValidateAndStore("user1", "pass1")
-	manager.ValidateAndStore("user2", "pass2")
-	manager.ValidateAndStore("user3", "pass3")
+	_, _ = manager.ValidateAndStore("user1", "pass1")
+	_, _ = manager.ValidateAndStore("user2", "pass2")
+	_, _ = manager.ValidateAndStore("user3", "pass3")
 	
 	// GetAllValid should return all stored credentials
 	allCreds = manager.GetAllValid()

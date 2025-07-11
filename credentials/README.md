@@ -46,11 +46,11 @@ credManager := credentials.New(logger, upstreamURL)
 
 ### Credential Management
 ```go
-// Validate and store password-based credentials (async)
-credManager.ValidateAndStore("username", "password")
+// Validate and store password-based credentials (async) - returns whether it's a new credential
+isNew, err := credManager.ValidateAndStore("username", "password")
 
-// Validate and store token-based credentials (async)
-credManager.ValidateAndStore("username", "TOKEN:token_value:salt_value")
+// Validate and store token-based credentials (async) - returns whether it's a new credential
+isNew, err := credManager.ValidateAndStore("username", "TOKEN:token_value:salt_value")
 
 // Get valid credentials for background operations
 username, password := credManager.GetValid()
@@ -66,11 +66,13 @@ credManager.ClearInvalid()
 
 ### Validation Process
 1. **Duplicate Check**: Verify if credentials are already stored and valid
-2. **Authentication Mode Detection**: Determine if using password-based or token-based authentication
-3. **Upstream Validation**: Make a `/rest/ping` request to the upstream server with appropriate auth parameters
-4. **Response Parsing**: Parse the JSON response to check status
-5. **Storage**: Store valid credentials (encrypted) in thread-safe map
-6. **Logging**: Log validation results for monitoring with auth mode indication
+2. **New Credential Detection**: Determine if this is a first-time credential capture
+3. **Authentication Mode Detection**: Determine if using password-based or token-based authentication
+4. **Upstream Validation**: Make a `/rest/ping` request to the upstream server with appropriate auth parameters
+5. **Response Parsing**: Parse the JSON response to check status
+6. **Storage**: Store valid credentials (encrypted) in thread-safe map
+7. **Immediate Sync Trigger ✅ NEW**: If credentials are new, trigger immediate library sync
+8. **Logging**: Log validation results for monitoring with auth mode indication
 
 ### Data Structures
 ```go
@@ -153,12 +155,21 @@ func (cm *Manager) validate(username, password string) error {
 
 ### Client Request Handling
 ```go
-// In the proxy server - now supports both auth modes
+// In the proxy server - now supports both auth modes with immediate sync
 if strings.HasPrefix(endpoint, "/rest/") {
     username, password := extractCredentials(r)  // Extracts both password and token auth
     if username != "" && password != "" {
         // Validate asynchronously to avoid blocking the request
-        go credManager.ValidateAndStore(username, password)
+        go func() {
+            isNewCredential, err := credManager.ValidateAndStore(username, password)
+            if err != nil {
+                logger.WithError(err).WithField("username", username).Warn("Failed to validate credentials")
+            } else if isNewCredential {
+                logger.WithField("username", username).Info("New credentials captured, triggering immediate sync")
+                // Trigger immediate sync for new credentials
+                server.fetchAndStoreSongs()
+            }
+        }()
     }
 }
 

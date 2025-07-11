@@ -475,7 +475,7 @@ func TestFetchAndStoreSongs(t *testing.T) {
 		server.config.UpstreamURL = mockServer.URL
 		
 		// Store valid credentials
-		server.credentials.ValidateAndStore("testuser", "testpass")
+		_, _ = server.credentials.ValidateAndStore("testuser", "testpass")
 		
 		// This would normally fetch from upstream, but we can't easily test without
 		// changing the URL or mocking the HTTP client
@@ -1033,15 +1033,15 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	
 	// Add multiple users with valid credentials
-	err = server.credentials.ValidateAndStore("user1", "pass1")
+	_, err = server.credentials.ValidateAndStore("user1", "pass1")
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	err = server.credentials.ValidateAndStore("user2", "pass2")
+	_, err = server.credentials.ValidateAndStore("user2", "pass2")
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
-	err = server.credentials.ValidateAndStore("user3", "pass3")
+	_, err = server.credentials.ValidateAndStore("user3", "pass3")
 	if err != nil {
 		t.Errorf("Failed to validate user3: %v", err)
 	}
@@ -1151,11 +1151,11 @@ func TestSyncSongsForUserError(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	
 	// Add multiple users with valid credentials
-	err = server.credentials.ValidateAndStore("user1", "pass1")
+	_, err = server.credentials.ValidateAndStore("user1", "pass1")
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	err = server.credentials.ValidateAndStore("user2", "pass2")
+	_, err = server.credentials.ValidateAndStore("user2", "pass2")
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}

@@ -183,7 +183,7 @@ Background health checks monitor connection pool status:
 ```
 
 ### Song Synchronization
-Automatically fetches songs from the upstream Subsonic server with smart credential-aware timing:
+Automatically fetches songs from the upstream Subsonic server with smart credential-aware timing and immediate sync on new credentials:
 
 ```go
 func (ps *ProxyServer) syncSongs() {
@@ -206,6 +206,24 @@ func (ps *ProxyServer) syncSongs() {
 }
 ```
 
+### Immediate Sync on New Credentials ✅ **NEW**
+
+When new credentials are captured for the first time, the system triggers an immediate sync:
+
+```go
+// In proxyHandler - credential validation
+go func() {
+    isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
+    if err != nil {
+        ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
+    } else if isNewCredential {
+        ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
+        // Trigger immediate sync for new credentials
+        ps.fetchAndStoreSongs()
+    }
+}()
+```
+
 ### Song Fetching Process
 ```go
 func (ps *ProxyServer) fetchAndStoreSongs() {
@@ -218,29 +236,74 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
     
     ps.logger.Info("Syncing songs from Subsonic API")
     
-    // Construct URL with proper encoding to prevent credential exposure in logs
-    baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/search3")
+    // Sync songs for each user with staggered delays
+    for i, username := range getSortedUsernames(allCredentials) {
+        password := allCredentials[username]
+        
+        // Add staggered delay to avoid overwhelming upstream server
+        if i > 0 {
+            time.Sleep(time.Duration(i) * 2 * time.Second)
+        }
+        
+        // Sync songs for this specific user using directory traversal
+        if err := ps.syncSongsForUser(username, password); err != nil {
+            ps.logger.WithError(err).WithField("user", username).Error("Failed to sync songs for user")
+            continue
+        }
+    }
+}
+
+func (ps *ProxyServer) syncSongsForUser(username, password string) error {
+    // Uses proper Subsonic API directory traversal:
+    // 1. getMusicFolders - Get all music folders
+    // 2. getIndexes - Get artist indexes for each folder
+    // 3. getMusicDirectory - Get albums for each artist
+    // 4. getMusicDirectory - Get songs for each album
+    
+    musicFolders, err := ps.getMusicFolders(username, password)
     if err != nil {
-        parseErr := errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL").
-            WithContext("upstream_url", ps.config.UpstreamURL).
-            WithContext("username", username)
-        ps.logger.WithError(parseErr).Error("Failed to parse upstream URL for song syncing")
-        return
+        return err
     }
     
-    // Use URL query parameters to safely encode credentials
-    params := url.Values{}
-    params.Add("u", username)
-    params.Add("p", password)
-    params.Add("query", "*")
-    params.Add("songCount", "10000")
-    params.Add("f", "json")
-    params.Add("v", "1.15.0")
-    params.Add("c", "subsoxy")
-    baseURL.RawQuery = params.Encode()
+    var allSongs []models.Song
     
-    resp, err := http.Get(baseURL.String())
-    // ... fetch and store songs
+    // Traverse each music folder
+    for _, folder := range musicFolders {
+        // Get indexes for this folder
+        indexes, err := ps.getIndexes(username, password, folder.ID)
+        if err != nil {
+            continue
+        }
+        
+        // Process each artist and album
+        for _, index := range indexes {
+            for _, artist := range index.Artists {
+                albums, err := ps.getMusicDirectory(username, password, artist.ID)
+                if err != nil {
+                    continue
+                }
+                
+                for _, album := range albums {
+                    if album.IsDir {
+                        songs, err := ps.getMusicDirectory(username, password, album.ID)
+                        if err != nil {
+                            continue
+                        }
+                        
+                        // Add songs (filter out directories)
+                        for _, song := range songs {
+                            if !song.IsDir {
+                                allSongs = append(allSongs, song)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Store all songs for this user
+    return ps.db.StoreSongs(username, allSongs)
 }
 ```
 

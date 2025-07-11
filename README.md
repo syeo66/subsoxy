@@ -29,6 +29,7 @@ This application uses a modular architecture with the following components:
 - **Personalized Weighted Shuffle**: Thread-safe intelligent song shuffling with memory-efficient algorithms for large libraries based on individual user play history, preferences, and transition probabilities
 - **Thread-Safe Server Operations**: Race condition-free background synchronization with proper mutex protection and graceful shutdown handling
 - **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and smart credential-aware timing
+- **Immediate Sync on New Credentials ✅ NEW**: Automatically triggers full library sync when new credentials are first captured, providing instant user experience
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **CORS Support**: Comprehensive CORS header management for web application integration with configurable origins, methods, and headers
 - **Security Headers Middleware ✅**: Advanced security headers with intelligent development mode detection, protecting against XSS, clickjacking, MIME sniffing, and other web vulnerabilities
@@ -579,8 +580,9 @@ The proxy implements secure multi-mode credential handling to ensure authenticat
 1. **Automatic Capture**: The proxy monitors all `/rest/*` requests and extracts authentication parameters (both password and token modes)
 2. **Multi-Mode Validation**: Credentials are validated against the upstream server using appropriate authentication method
 3. **Secure Storage**: Valid credentials are encrypted and stored in memory with thread-safe access
-4. **Background Operations**: Stored credentials are used for automated tasks like song syncing
-5. **Error Handling**: Invalid credentials are handled gracefully with proper logging
+4. **Immediate Sync Trigger ✅ NEW**: When new credentials are first captured, the system immediately triggers a full library sync instead of waiting for the hourly cycle
+5. **Background Operations**: Stored credentials are used for automated tasks like song syncing
+6. **Error Handling**: Invalid credentials are handled gracefully with proper logging
 
 ### Security Features
 
@@ -754,6 +756,8 @@ export DB_CONN_MAX_LIFETIME=45m
 
 - **Per-User Credential Management**: Automatically captures and validates user credentials from client requests with user isolation
 - **User-Isolated Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials, with smart startup timing that waits for client requests before syncing
+- **Immediate Sync on New Credentials ✅ NEW**: Automatically triggers full library sync when new credentials are first captured, providing instant user experience instead of waiting for hourly cycle
+- **Directory Traversal Sync ✅ NEW**: Uses proper Subsonic API methodology (`getMusicFolders` → `getIndexes` → `getMusicDirectory`) for reliable and complete library discovery
 - **Per-User Play Tracking**: Records when songs are started, played completely, or skipped with complete user isolation
 - **User-Specific Transition Probability Analysis**: Builds transition probabilities between songs for each user independently
 - **Isolated Historical Data**: Maintains complete event history for analysis per user
