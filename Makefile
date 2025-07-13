@@ -3,14 +3,15 @@
 # Deploy by merging main into stage
 deploy:
 	@echo "Starting deployment process..."
+	@git push
 	@git fetch origin
 	@git checkout main
 	@git pull origin main
-	@git checkout stage
+	@git switch stage
 	@git pull origin stage
 	@git merge main
-	@git push origin stage
-	@git checkout main
+	@git push
+	@git switch main
 	@echo "Deployment complete! Back on main branch."
 
 # Build the application
