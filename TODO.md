@@ -2,7 +2,22 @@
 
 ## Current Priorities
 
-### 1. **Test Coverage Gaps** 🟡 Medium Priority
+### 1. **Song Removal During Sync** 🟠 High Priority
+- **Issue**: Removed tracks from upstream server are not deleted from local database during sync
+- **Risk**: Database grows indefinitely with stale entries, "zombie songs" persist locally
+- **Current Behavior**: `INSERT OR REPLACE` only adds/updates existing upstream songs
+- **Fix**: Implement **Option B: Differential sync** strategy
+- **Implementation Plan**:
+  1. Fetch current upstream song list during sync (`syncSongsForUser()`)
+  2. Query existing local songs for the user from database
+  3. Compare lists to identify songs to add, update, and delete
+  4. Execute changes in transaction: `INSERT` new, `UPDATE` existing, `DELETE` removed
+  5. Preserve user data (play counts, skip counts, listening history) for existing songs
+- **Benefits**: Efficient, preserves user data, network friendly, handles partial failures
+- **Files**: `server/server.go:544`, `database/database.go:271`
+- **Impact**: Prevents database bloat and ensures accurate music library representation
+
+### 2. **Test Coverage Gaps** 🟡 Medium Priority
 - **Issue**: Several modules could benefit from additional test coverage
 - **Risk**: Untested edge cases and error conditions
 - **Fix**: Add comprehensive tests, especially for error scenarios and edge cases
@@ -13,7 +28,7 @@
   - Input validation boundary conditions
   - Network timeout and failure scenarios
 
-### 2. **Documentation Restructure** 🟡 Medium Priority
+### 3. **Documentation Restructure** 🟡 Medium Priority
 - **Issue**: README.md is comprehensive but could be more user-focused
 - **Risk**: Poor user experience, difficult to find essential information quickly
 - **Fix**: 
