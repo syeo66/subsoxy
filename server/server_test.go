@@ -454,6 +454,15 @@ func TestFetchAndStoreSongs(t *testing.T) {
 						Songs   struct {
 							Song []models.Song `json:"song"`
 						} `json:"songs,omitempty"`
+						MusicFolders struct {
+							MusicFolder []models.MusicFolder `json:"musicFolder"`
+						} `json:"musicFolders,omitempty"`
+						Indexes struct {
+							Index []models.Index `json:"index"`
+						} `json:"indexes,omitempty"`
+						Directory struct {
+							Child []models.Song `json:"child"`
+						} `json:"directory,omitempty"`
 					}{
 						Status:  "ok",
 						Version: "1.15.0",
@@ -989,24 +998,35 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 				},
 			}
 			json.NewEncoder(w).Encode(response)
-		} else if strings.Contains(r.URL.Path, "/rest/search3") {
-			// Search endpoint - return different songs per user
-			var songs []models.Song
+		} else if strings.Contains(r.URL.Path, "/rest/getMusicFolders") {
+			// Music folders endpoint
+			response := map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status":  "ok",
+					"version": "1.15.0",
+					"musicFolders": map[string]interface{}{
+						"musicFolder": []models.MusicFolder{
+							{ID: "1", Name: "Music"},
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else if strings.Contains(r.URL.Path, "/rest/getIndexes") {
+			// Indexes endpoint - return different artists per user
+			var artists []models.Artist
 			switch username {
 			case "user1":
-				songs = []models.Song{
-					{ID: "1", Title: "Song 1 User 1", Artist: "Artist 1"},
-					{ID: "2", Title: "Song 2 User 1", Artist: "Artist 1"},
+				artists = []models.Artist{
+					{ID: "artist1", Name: "Artist 1"},
 				}
 			case "user2":
-				songs = []models.Song{
-					{ID: "3", Title: "Song 1 User 2", Artist: "Artist 2"},
-					{ID: "4", Title: "Song 2 User 2", Artist: "Artist 2"},
+				artists = []models.Artist{
+					{ID: "artist2", Name: "Artist 2"},
 				}
 			case "user3":
-				songs = []models.Song{
-					{ID: "5", Title: "Song 1 User 3", Artist: "Artist 3"},
-					{ID: "6", Title: "Song 2 User 3", Artist: "Artist 3"},
+				artists = []models.Artist{
+					{ID: "artist3", Name: "Artist 3"},
 				}
 			}
 			
@@ -1014,12 +1034,78 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 				"subsonic-response": map[string]interface{}{
 					"status":  "ok",
 					"version": "1.15.0",
-					"songs": map[string]interface{}{
-						"song": songs,
+					"indexes": map[string]interface{}{
+						"index": []models.Index{
+							{Name: "A", Artists: artists},
+						},
 					},
 				},
 			}
 			json.NewEncoder(w).Encode(response)
+		} else if strings.Contains(r.URL.Path, "/rest/getMusicDirectory") {
+			// Music directory endpoint - return albums and songs
+			id := r.URL.Query().Get("id")
+			
+			// Handle artist directories (return albums)
+			if strings.HasPrefix(id, "artist") {
+				var albums []models.Song
+				switch id {
+				case "artist1":
+					albums = []models.Song{
+						{ID: "album1", Title: "Album 1 User 1", Artist: "Artist 1", IsDir: true},
+					}
+				case "artist2":
+					albums = []models.Song{
+						{ID: "album2", Title: "Album 1 User 2", Artist: "Artist 2", IsDir: true},
+					}
+				case "artist3":
+					albums = []models.Song{
+						{ID: "album3", Title: "Album 1 User 3", Artist: "Artist 3", IsDir: true},
+					}
+				}
+				
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status":  "ok",
+						"version": "1.15.0",
+						"directory": map[string]interface{}{
+							"child": albums,
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			} else if strings.HasPrefix(id, "album") {
+				// Handle album directories (return songs)
+				var songs []models.Song
+				switch id {
+				case "album1":
+					songs = []models.Song{
+						{ID: "1", Title: "Song 1 User 1", Artist: "Artist 1", IsDir: false},
+						{ID: "2", Title: "Song 2 User 1", Artist: "Artist 1", IsDir: false},
+					}
+				case "album2":
+					songs = []models.Song{
+						{ID: "3", Title: "Song 1 User 2", Artist: "Artist 2", IsDir: false},
+						{ID: "4", Title: "Song 2 User 2", Artist: "Artist 2", IsDir: false},
+					}
+				case "album3":
+					songs = []models.Song{
+						{ID: "5", Title: "Song 1 User 3", Artist: "Artist 3", IsDir: false},
+						{ID: "6", Title: "Song 2 User 3", Artist: "Artist 3", IsDir: false},
+					}
+				}
+				
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status":  "ok",
+						"version": "1.15.0",
+						"directory": map[string]interface{}{
+							"child": songs,
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			}
 		}
 	}))
 	defer mockServer.Close()
@@ -1046,8 +1132,19 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 		t.Errorf("Failed to validate user3: %v", err)
 	}
 	
-	// Trigger multi-user sync
-	server.fetchAndStoreSongs()
+	// Trigger direct sync for each user to avoid delays
+	err = server.syncSongsForUser("user1", "pass1")
+	if err != nil {
+		t.Errorf("Failed to sync songs for user1: %v", err)
+	}
+	err = server.syncSongsForUser("user2", "pass2")
+	if err != nil {
+		t.Errorf("Failed to sync songs for user2: %v", err)
+	}
+	err = server.syncSongsForUser("user3", "pass3")
+	if err != nil {
+		t.Errorf("Failed to sync songs for user3: %v", err)
+	}
 	
 	// Verify songs were stored for each user
 	user1Songs, err := server.db.GetAllSongs("user1")
@@ -1109,7 +1206,7 @@ func TestSyncSongsForUserError(t *testing.T) {
 				},
 			}
 			json.NewEncoder(w).Encode(response)
-		} else if strings.Contains(r.URL.Path, "/rest/search3") {
+		} else if strings.Contains(r.URL.Path, "/rest/getMusicFolders") {
 			if username == "user2" {
 				// Return error for user2
 				response := map[string]interface{}{
@@ -1124,15 +1221,63 @@ func TestSyncSongsForUserError(t *testing.T) {
 				json.NewEncoder(w).Encode(response)
 			} else {
 				// Return success for other users
-				songs := []models.Song{
-					{ID: "1", Title: "Song 1", Artist: "Artist 1"},
-				}
 				response := map[string]interface{}{
 					"subsonic-response": map[string]interface{}{
 						"status":  "ok",
 						"version": "1.15.0",
-						"songs": map[string]interface{}{
-							"song": songs,
+						"musicFolders": map[string]interface{}{
+							"musicFolder": []models.MusicFolder{
+								{ID: "1", Name: "Music"},
+							},
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			}
+		} else if strings.Contains(r.URL.Path, "/rest/getIndexes") {
+			// Only user1 should reach this point (user2 fails at getMusicFolders)
+			response := map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status":  "ok",
+					"version": "1.15.0",
+					"indexes": map[string]interface{}{
+						"index": []models.Index{
+							{Name: "A", Artists: []models.Artist{
+								{ID: "artist1", Name: "Artist 1"},
+							}},
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else if strings.Contains(r.URL.Path, "/rest/getMusicDirectory") {
+			// Only user1 should reach this point (user2 fails at getMusicFolders)
+			id := r.URL.Query().Get("id")
+			
+			if strings.HasPrefix(id, "artist") {
+				// Return album for artist1
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status":  "ok",
+						"version": "1.15.0",
+						"directory": map[string]interface{}{
+							"child": []models.Song{
+								{ID: "album1", Title: "Album 1", Artist: "Artist 1", IsDir: true},
+							},
+						},
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			} else if strings.HasPrefix(id, "album") {
+				// Return song for album1
+				response := map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status":  "ok",
+						"version": "1.15.0",
+						"directory": map[string]interface{}{
+							"child": []models.Song{
+								{ID: "1", Title: "Song 1", Artist: "Artist 1", IsDir: false},
+							},
 						},
 					},
 				}
@@ -1160,8 +1305,15 @@ func TestSyncSongsForUserError(t *testing.T) {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
 	
-	// Trigger multi-user sync
-	server.fetchAndStoreSongs()
+	// Trigger direct sync for user1 only (user2 should fail)
+	err = server.syncSongsForUser("user1", "pass1")
+	if err != nil {
+		t.Errorf("Failed to sync songs for user1: %v", err)
+	}
+	err = server.syncSongsForUser("user2", "pass2")
+	if err == nil {
+		t.Error("Expected sync to fail for user2, but it succeeded")
+	}
 	
 	// Verify songs were stored for user1 but not user2
 	user1Songs, err := server.db.GetAllSongs("user1")

@@ -25,6 +25,8 @@ type Song struct {
     LastPlayed  time.Time `json:"lastPlayed"`
     PlayCount   int       `json:"playCount"`
     SkipCount   int       `json:"skipCount"`
+    IsDir       bool      `json:"isDir"`       // Indicates if this is a directory (album)
+    Name        string    `json:"name"`        // Alternative name field for directories
 }
 ```
 
@@ -75,7 +77,46 @@ type SubsonicResponse struct {
         Songs   struct {
             Song []Song `json:"song"`
         } `json:"songs,omitempty"`
+        MusicFolders struct {
+            MusicFolder []MusicFolder `json:"musicFolder"`
+        } `json:"musicFolders,omitempty"`
+        Indexes struct {
+            Index []Index `json:"index"`
+        } `json:"indexes,omitempty"`
+        Directory struct {
+            Child []Song `json:"child"`
+        } `json:"directory,omitempty"`
     } `json:"subsonic-response"`
+}
+```
+
+### MusicFolder
+Represents a music folder in the Subsonic API.
+
+```go
+type MusicFolder struct {
+    ID   interface{} `json:"id"`
+    Name string      `json:"name"`
+}
+```
+
+### Artist
+Represents an artist.
+
+```go
+type Artist struct {
+    ID   string `json:"id"`
+    Name string `json:"name"`
+}
+```
+
+### Index
+Represents an artist index grouping.
+
+```go
+type Index struct {
+    Name    string   `json:"name"`
+    Artists []Artist `json:"artist"`
 }
 ```
 

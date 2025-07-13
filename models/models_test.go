@@ -175,6 +175,15 @@ func TestSubsonicResponseStructure(t *testing.T) {
 			Songs   struct {
 				Song []Song `json:"song"`
 			} `json:"songs,omitempty"`
+			MusicFolders struct {
+				MusicFolder []MusicFolder `json:"musicFolder"`
+			} `json:"musicFolders,omitempty"`
+			Indexes struct {
+				Index []Index `json:"index"`
+			} `json:"indexes,omitempty"`
+			Directory struct {
+				Child []Song `json:"child"`
+			} `json:"directory,omitempty"`
 		}{
 			Status:  "ok",
 			Version: "1.15.0",
@@ -205,6 +214,15 @@ func TestSubsonicResponseJSONSerialization(t *testing.T) {
 			Songs   struct {
 				Song []Song `json:"song"`
 			} `json:"songs,omitempty"`
+			MusicFolders struct {
+				MusicFolder []MusicFolder `json:"musicFolder"`
+			} `json:"musicFolders,omitempty"`
+			Indexes struct {
+				Index []Index `json:"index"`
+			} `json:"indexes,omitempty"`
+			Directory struct {
+				Child []Song `json:"child"`
+			} `json:"directory,omitempty"`
 		}{
 			Status:  "ok",
 			Version: "1.15.0",

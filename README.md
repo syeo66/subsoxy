@@ -903,7 +903,7 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=su
 # Install dependencies
 go mod tidy
 
-# Run tests
+# Run tests - all tests pass with comprehensive coverage
 go test ./...
 
 # Build the application
