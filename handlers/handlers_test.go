@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -681,5 +682,279 @@ func TestHandleShuffleWithURLParams(t *testing.T) {
 	
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+// Input validation boundary condition tests
+
+func TestValidateSongIDBoundaryConditions(t *testing.T) {
+	tests := []struct {
+		name     string
+		songID   string
+		expected bool
+	}{
+		{
+			name:     "Empty string",
+			songID:   "",
+			expected: false,
+		},
+		{
+			name:     "Single character",
+			songID:   "a",
+			expected: true,
+		},
+		{
+			name:     "Max length (255 chars)",
+			songID:   strings.Repeat("a", 255),
+			expected: true,
+		},
+		{
+			name:     "Over max length (256 chars)",
+			songID:   strings.Repeat("a", 256),
+			expected: false,
+		},
+		{
+			name:     "Much over max length (1000 chars)",
+			songID:   strings.Repeat("a", 1000),
+			expected: false,
+		},
+		{
+			name:     "Special characters",
+			songID:   "song-123_abc.mp3",
+			expected: true,
+		},
+		{
+			name:     "Unicode characters",
+			songID:   "歌曲-123",
+			expected: true,
+		},
+		{
+			name:     "Control characters",
+			songID:   "song\x01\x02\x03",
+			expected: true, // ValidateSongID doesn't filter control chars, only length
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ValidateSongID(tt.songID) == nil
+			if result != tt.expected {
+				t.Errorf("ValidateSongID(%q) = %v, expected %v", tt.songID, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeForLoggingBoundaryConditions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "Normal text",
+			input:    "normal text",
+			expected: "normal text",
+		},
+		{
+			name:     "All control characters",
+			input:    "\x00\x01\x02\x1F\x7F",
+			expected: "",
+		},
+		{
+			name:     "Mixed control and normal",
+			input:    "hello\x00world\x01test",
+			expected: "helloworldtest",
+		},
+		{
+			name:     "Newline and tab",
+			input:    "line1\nline2\ttest",
+			expected: "line1line2test",
+		},
+		{
+			name:     "Very long string with control chars",
+			input:    strings.Repeat("a", 500) + "\x01\x02" + strings.Repeat("b", 500),
+			expected: strings.Repeat("a", 500) + strings.Repeat("b", 500),
+		},
+		{
+			name:     "Unicode characters (should be preserved)",
+			input:    "测试文本🎵",
+			expected: "测试文本🎵",
+		},
+		{
+			name:     "Only whitespace (should be preserved)",
+			input:    "   \t   ",
+			expected: "      ", // tabs converted to spaces, regular spaces preserved
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := SanitizeForLogging(tt.input)
+			if result != tt.expected {
+				t.Errorf("SanitizeForLogging(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestShuffleSizeBoundaryConditions(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_boundary.db"
+	defer os.Remove(dbPath)
+	
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	shuffleService := shuffle.New(db, logger)
+	handler := New(logger, shuffleService)
+
+	tests := []struct {
+		name           string
+		sizeParam      string
+		expectedStatus int
+		shouldHandle   bool
+	}{
+		{
+			name:           "Zero size",
+			sizeParam:      "0",
+			expectedStatus: http.StatusOK,
+			shouldHandle:   true,
+		},
+		{
+			name:           "Negative size",
+			sizeParam:      "-1",
+			expectedStatus: http.StatusOK, // Negative sizes are handled gracefully
+			shouldHandle:   true,
+		},
+		{
+			name:           "Very large size",
+			sizeParam:      "999999",
+			expectedStatus: http.StatusBadRequest, // Very large sizes are rejected
+			shouldHandle:   true,
+		},
+		{
+			name:           "Non-numeric size",
+			sizeParam:      "abc",
+			expectedStatus: http.StatusBadRequest,
+			shouldHandle:   true,
+		},
+		{
+			name:           "Float size",
+			sizeParam:      "10.5",
+			expectedStatus: http.StatusBadRequest,
+			shouldHandle:   true,
+		},
+		{
+			name:           "Empty size",
+			sizeParam:      "",
+			expectedStatus: http.StatusOK, // Should use default
+			shouldHandle:   true,
+		},
+		{
+			name:           "Size with leading zeros",
+			sizeParam:      "0010",
+			expectedStatus: http.StatusOK,
+			shouldHandle:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/rest/getRandomSongs?u=testuser&p=testpass"
+			if tt.sizeParam != "" {
+				reqURL += "&size=" + tt.sizeParam
+			}
+			
+			req := httptest.NewRequest("GET", reqURL, nil)
+			w := httptest.NewRecorder()
+			
+			handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+			
+			if handled != tt.shouldHandle {
+				t.Errorf("Expected handled=%v, got %v", tt.shouldHandle, handled)
+			}
+			
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			}
+		})
+	}
+}
+
+func TestHandlerUserParameterBoundaryConditions(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	
+	dbPath := "test_user_boundary.db"
+	defer os.Remove(dbPath)
+	
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	
+	shuffleService := shuffle.New(db, logger)
+	handler := New(logger, shuffleService)
+
+	tests := []struct {
+		name           string
+		userParam      string
+		expectedStatus int
+	}{
+		{
+			name:           "Empty user",
+			userParam:      "",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "Very long username",
+			userParam:      strings.Repeat("a", 1000),
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Unicode username",
+			userParam:      "用户名",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Special characters in username",
+			userParam:      "user@domain.com",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Username with control characters",
+			userParam:      "user\x01\x02",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/rest/getRandomSongs?p=testpass&size=10"
+			if tt.userParam != "" {
+				reqURL += "&u=" + url.QueryEscape(tt.userParam)
+			}
+			
+			req := httptest.NewRequest("GET", reqURL, nil)
+			w := httptest.NewRecorder()
+			
+			handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+			
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			}
+		})
 	}
 }

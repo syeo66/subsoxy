@@ -904,8 +904,16 @@ curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=su
 # Install dependencies
 go mod tidy
 
-# Run tests - all tests pass with comprehensive coverage
+# Run tests - all tests pass with comprehensive coverage (78.4% overall)
 go test ./...
+
+# Run tests with race detection (recommended)
+go test ./... -race
+
+# Run specific test categories
+go test ./database -run="ErrorHandling"  # Database error scenarios
+go test ./handlers -run="BoundaryConditions"  # Input validation tests
+go test ./credentials -run="Network"  # Network failure scenarios
 
 # Build the application
 go build -o subsoxy

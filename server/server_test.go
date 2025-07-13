@@ -1387,3 +1387,166 @@ func TestGetSortedUsernames(t *testing.T) {
 		})
 	}
 }
+
+// CORS functionality tests
+
+func TestSetCORSHeaders(t *testing.T) {
+	tests := []struct {
+		name                    string
+		corsConfig             config.Config
+		requestOrigin          string
+		expectedOrigin         string
+		expectedMethods        string
+		expectedHeaders        string
+		expectedCredentials    string
+		expectedMaxAge         string
+	}{
+		{
+			name: "Wildcard origin",
+			corsConfig: config.Config{
+				CORSEnabled:         true,
+				CORSAllowOrigins:    []string{"*"},
+				CORSAllowMethods:    []string{"GET", "POST"},
+				CORSAllowHeaders:    []string{"Content-Type", "Authorization"},
+				CORSAllowCredentials: false,
+			},
+			requestOrigin:       "https://example.com",
+			expectedOrigin:      "*",
+			expectedMethods:     "GET, POST",
+			expectedHeaders:     "Content-Type, Authorization",
+			expectedCredentials: "",
+			expectedMaxAge:      "86400",
+		},
+		{
+			name: "Specific allowed origin",
+			corsConfig: config.Config{
+				CORSEnabled:         true,
+				CORSAllowOrigins:    []string{"https://example.com", "https://test.com"},
+				CORSAllowMethods:    []string{"GET", "POST", "PUT"},
+				CORSAllowHeaders:    []string{"Content-Type"},
+				CORSAllowCredentials: true,
+			},
+			requestOrigin:       "https://example.com",
+			expectedOrigin:      "https://example.com",
+			expectedMethods:     "GET, POST, PUT",
+			expectedHeaders:     "Content-Type",
+			expectedCredentials: "true",
+			expectedMaxAge:      "86400",
+		},
+		{
+			name: "Origin not in allowed list",
+			corsConfig: config.Config{
+				CORSEnabled:         true,
+				CORSAllowOrigins:    []string{"https://example.com"},
+				CORSAllowMethods:    []string{"GET"},
+				CORSAllowHeaders:    []string{"Content-Type"},
+				CORSAllowCredentials: false,
+			},
+			requestOrigin:       "https://malicious.com",
+			expectedOrigin:      "",
+			expectedMethods:     "GET",
+			expectedHeaders:     "Content-Type",
+			expectedCredentials: "",
+			expectedMaxAge:      "86400",
+		},
+		{
+			name: "Empty CORS configuration",
+			corsConfig: config.Config{
+				CORSEnabled:         true,
+				CORSAllowOrigins:    []string{},
+				CORSAllowMethods:    []string{},
+				CORSAllowHeaders:    []string{},
+				CORSAllowCredentials: false,
+			},
+			requestOrigin:       "https://example.com",
+			expectedOrigin:      "",
+			expectedMethods:     "",
+			expectedHeaders:     "",
+			expectedCredentials: "",
+			expectedMaxAge:      "86400",
+		},
+		{
+			name: "No origin header in request",
+			corsConfig: config.Config{
+				CORSEnabled:         true,
+				CORSAllowOrigins:    []string{"https://example.com"},
+				CORSAllowMethods:    []string{"GET"},
+				CORSAllowHeaders:    []string{"Content-Type"},
+				CORSAllowCredentials: false,
+			},
+			requestOrigin:       "",
+			expectedOrigin:      "",
+			expectedMethods:     "GET",
+			expectedHeaders:     "Content-Type",
+			expectedCredentials: "",
+			expectedMaxAge:      "86400",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a temporary database for testing
+			cfg := &tt.corsConfig
+			cfg.DatabasePath = "test_cors.db"
+			cfg.ProxyPort = "8080"
+			cfg.UpstreamURL = "http://localhost:4533"
+			cfg.LogLevel = "info"
+			defer os.Remove("test_cors.db")
+
+			server, err := New(cfg)
+			if err != nil {
+				t.Fatalf("Failed to create server: %v", err)
+			}
+			defer server.Shutdown(context.Background())
+
+			// Create a test request
+			req := httptest.NewRequest("GET", "/test", nil)
+			if tt.requestOrigin != "" {
+				req.Header.Set("Origin", tt.requestOrigin)
+			}
+
+			// Create a response recorder
+			w := httptest.NewRecorder()
+
+			// Call setCORSHeaders
+			server.setCORSHeaders(w, req)
+
+			// Check the response headers
+			if tt.expectedOrigin != "" {
+				if got := w.Header().Get("Access-Control-Allow-Origin"); got != tt.expectedOrigin {
+					t.Errorf("Access-Control-Allow-Origin = %v, expected %v", got, tt.expectedOrigin)
+				}
+			} else {
+				if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+					t.Errorf("Access-Control-Allow-Origin should be empty, got %v", got)
+				}
+			}
+
+			if tt.expectedMethods != "" {
+				if got := w.Header().Get("Access-Control-Allow-Methods"); got != tt.expectedMethods {
+					t.Errorf("Access-Control-Allow-Methods = %v, expected %v", got, tt.expectedMethods)
+				}
+			}
+
+			if tt.expectedHeaders != "" {
+				if got := w.Header().Get("Access-Control-Allow-Headers"); got != tt.expectedHeaders {
+					t.Errorf("Access-Control-Allow-Headers = %v, expected %v", got, tt.expectedHeaders)
+				}
+			}
+
+			if tt.expectedCredentials != "" {
+				if got := w.Header().Get("Access-Control-Allow-Credentials"); got != tt.expectedCredentials {
+					t.Errorf("Access-Control-Allow-Credentials = %v, expected %v", got, tt.expectedCredentials)
+				}
+			} else {
+				if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+					t.Errorf("Access-Control-Allow-Credentials should be empty, got %v", got)
+				}
+			}
+
+			if got := w.Header().Get("Access-Control-Max-Age"); got != tt.expectedMaxAge {
+				t.Errorf("Access-Control-Max-Age = %v, expected %v", got, tt.expectedMaxAge)
+			}
+		})
+	}
+}

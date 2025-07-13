@@ -624,3 +624,204 @@ func TestIsDevMode(t *testing.T) {
 		})
 	}
 }
+
+// Additional test coverage for uncovered functions
+
+func TestGetEnvIntOrDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		key          string
+		defaultValue int
+		envValue     string
+		expected     int
+	}{
+		{
+			name:         "Valid integer environment variable",
+			key:          "TEST_INT",
+			defaultValue: 42,
+			envValue:     "100",
+			expected:     100,
+		},
+		{
+			name:         "Invalid integer environment variable",
+			key:          "TEST_INT_INVALID",
+			defaultValue: 42,
+			envValue:     "not-a-number",
+			expected:     42,
+		},
+		{
+			name:         "Missing environment variable",
+			key:          "TEST_INT_MISSING",
+			defaultValue: 42,
+			envValue:     "",
+			expected:     42,
+		},
+		{
+			name:         "Zero value",
+			key:          "TEST_INT_ZERO",
+			defaultValue: 42,
+			envValue:     "0",
+			expected:     0,
+		},
+		{
+			name:         "Negative value",
+			key:          "TEST_INT_NEGATIVE",
+			defaultValue: 42,
+			envValue:     "-10",
+			expected:     -10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean up any existing environment variable
+			os.Unsetenv(tt.key)
+			
+			// Set environment variable if specified
+			if tt.envValue != "" {
+				os.Setenv(tt.key, tt.envValue)
+				defer os.Unsetenv(tt.key)
+			}
+
+			result := getEnvIntOrDefault(tt.key, tt.defaultValue)
+			if result != tt.expected {
+				t.Errorf("getEnvIntOrDefault() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetEnvBoolOrDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		key          string
+		defaultValue bool
+		envValue     string
+		expected     bool
+	}{
+		{
+			name:         "Valid true boolean environment variable",
+			key:          "TEST_BOOL_TRUE",
+			defaultValue: false,
+			envValue:     "true",
+			expected:     true,
+		},
+		{
+			name:         "Valid false boolean environment variable",
+			key:          "TEST_BOOL_FALSE",
+			defaultValue: true,
+			envValue:     "false",
+			expected:     false,
+		},
+		{
+			name:         "Invalid boolean environment variable",
+			key:          "TEST_BOOL_INVALID",
+			defaultValue: true,
+			envValue:     "maybe",
+			expected:     true,
+		},
+		{
+			name:         "Missing environment variable",
+			key:          "TEST_BOOL_MISSING",
+			defaultValue: false,
+			envValue:     "",
+			expected:     false,
+		},
+		{
+			name:         "1 as true",
+			key:          "TEST_BOOL_ONE",
+			defaultValue: false,
+			envValue:     "1",
+			expected:     true,
+		},
+		{
+			name:         "0 as false",
+			key:          "TEST_BOOL_ZERO",
+			defaultValue: true,
+			envValue:     "0",
+			expected:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean up any existing environment variable
+			os.Unsetenv(tt.key)
+			
+			// Set environment variable if specified
+			if tt.envValue != "" {
+				os.Setenv(tt.key, tt.envValue)
+				defer os.Unsetenv(tt.key)
+			}
+
+			result := getEnvBoolOrDefault(tt.key, tt.defaultValue)
+			if result != tt.expected {
+				t.Errorf("getEnvBoolOrDefault() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseCommaSeparatedString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: []string{},
+		},
+		{
+			name:     "Single value",
+			input:    "value1",
+			expected: []string{"value1"},
+		},
+		{
+			name:     "Multiple values",
+			input:    "value1,value2,value3",
+			expected: []string{"value1", "value2", "value3"},
+		},
+		{
+			name:     "Values with spaces",
+			input:    "value1, value2 , value3",
+			expected: []string{"value1", "value2", "value3"},
+		},
+		{
+			name:     "Empty values in list",
+			input:    "value1,,value3",
+			expected: []string{"value1", "", "value3"},
+		},
+		{
+			name:     "Only commas",
+			input:    ",,",
+			expected: []string{"", "", ""},
+		},
+		{
+			name:     "Trailing comma",
+			input:    "value1,value2,",
+			expected: []string{"value1", "value2", ""},
+		},
+		{
+			name:     "Leading comma",
+			input:    ",value1,value2",
+			expected: []string{"", "value1", "value2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseCommaSeparatedString(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("parseCommaSeparatedString() length = %v, expected %v", len(result), len(tt.expected))
+				return
+			}
+			for i, v := range result {
+				if v != tt.expected[i] {
+					t.Errorf("parseCommaSeparatedString()[%d] = %v, expected %v", i, v, tt.expected[i])
+				}
+			}
+		})
+	}
+}

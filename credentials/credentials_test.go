@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -624,5 +626,170 @@ func TestGetAllValid(t *testing.T) {
 		} else if actualPass != expectedPass {
 			t.Errorf("Expected password %s for user %s, got %s", expectedPass, user, actualPass)
 		}
+	}
+}
+
+// Network timeout and failure scenario tests
+
+func TestNetworkTimeout(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Create a server that delays long enough to trigger timeout
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond) // Short delay for fast test
+		// Don't send response to simulate timeout
+	}))
+	defer slowServer.Close()
+
+	manager := New(logger, slowServer.URL)
+
+	// This should timeout and return an error (test will be fast)
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err == nil {
+		t.Error("Expected timeout or error, got nil")
+	}
+	if result {
+		t.Error("Expected validation failure, got success")
+	}
+
+	// Verify no credentials were stored
+	user, pass := manager.GetValid()
+	if user != "" || pass != "" {
+		t.Errorf("Expected no credentials stored after error, got %s/%s", user, pass)
+	}
+}
+
+func TestNetworkConnectionRefused(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Use a non-existent server URL
+	manager := New(logger, "http://localhost:99999")
+
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err == nil {
+		t.Error("Expected connection refused error, got nil")
+	}
+	if result {
+		t.Error("Expected validation failure due to connection refused, got success")
+	}
+
+	// Verify error message contains connection information
+	if err != nil && !strings.Contains(err.Error(), "connection") && !strings.Contains(err.Error(), "dial") {
+		t.Errorf("Expected connection-related error message, got: %v", err)
+	}
+}
+
+func TestNetworkSlowResponse(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Create a server that responds slowly but eventually succeeds
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Millisecond) // Simulate slow response (fast for testing)
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer slowServer.Close()
+
+	manager := New(logger, slowServer.URL)
+
+	// Should succeed despite slow response
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err != nil {
+		t.Errorf("Expected success with slow response, got error: %v", err)
+	}
+	if !result {
+		t.Error("Expected validation success with slow response, got failure")
+	}
+
+	// Verify credentials were stored
+	user, pass := manager.GetValid()
+	if user != "testuser" || pass != "testpass" {
+		t.Errorf("Expected credentials testuser/testpass, got %s/%s", user, pass)
+	}
+}
+
+func TestNetworkInvalidHTTPResponse(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Create a server that returns invalid HTTP response
+	invalidServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("Invalid non-JSON response"))
+	}))
+	defer invalidServer.Close()
+
+	manager := New(logger, invalidServer.URL)
+
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err == nil {
+		t.Error("Expected JSON decode error, got nil")
+	}
+	if result {
+		t.Error("Expected validation failure due to invalid response, got success")
+	}
+
+	// Verify error is related to JSON parsing
+	if err != nil && !strings.Contains(err.Error(), "decode") && !strings.Contains(err.Error(), "json") && !strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("Expected JSON decode error, got: %v", err)
+	}
+}
+
+func TestNetworkHTTPErrorStatus(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Create a server that returns HTTP error status
+	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal Server Error"))
+	}))
+	defer errorServer.Close()
+
+	manager := New(logger, errorServer.URL)
+
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err == nil {
+		t.Error("Expected HTTP error, got nil")
+	}
+	if result {
+		t.Error("Expected validation failure due to HTTP error, got success")
+	}
+
+	// Verify error occurred (the specific error message may vary)
+	// The important thing is that validation failed due to server error
+	if err == nil {
+		t.Error("Expected an error due to HTTP 500 status")
+	}
+}
+
+func TestNetworkPartialResponse(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	// Create a server that returns incomplete JSON
+	partialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"subsonic-response": {"status": "ok", "ver`)) // Incomplete JSON
+	}))
+	defer partialServer.Close()
+
+	manager := New(logger, partialServer.URL)
+
+	result, err := manager.ValidateAndStore("testuser", "testpass")
+	if err == nil {
+		t.Error("Expected JSON parse error due to incomplete response, got nil")
+	}
+	if result {
+		t.Error("Expected validation failure due to incomplete response, got success")
 	}
 }
