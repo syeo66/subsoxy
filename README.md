@@ -30,6 +30,7 @@ This application uses a modular architecture with the following components:
 - **Thread-Safe Server Operations**: Race condition-free background synchronization with proper mutex protection and graceful shutdown handling
 - **User-Isolated Automatic Sync**: Fetches and updates song library from Subsonic API per user with error recovery and smart credential-aware timing
 - **Immediate Sync on New Credentials ✅ NEW**: Automatically triggers full library sync when new credentials are first captured, providing instant user experience
+- **Differential Sync ✅ NEW**: Intelligent library management that automatically removes songs no longer available upstream while preserving user listening history and play statistics
 - **Rate Limiting**: Configurable DoS protection using token bucket algorithm with intelligent request throttling
 - **CORS Support**: Comprehensive CORS header management for web application integration with configurable origins, methods, and headers
 - **Security Headers Middleware ✅**: Advanced security headers with intelligent development mode detection, protecting against XSS, clickjacking, MIME sniffing, and other web vulnerabilities

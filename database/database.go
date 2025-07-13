@@ -413,6 +413,91 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 	return songs, nil
 }
 
+// GetExistingSongIDs returns a map of all existing song IDs for a user
+func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	rows, err := db.conn.Query(`SELECT id FROM songs WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query existing song IDs").
+			WithContext("userID", userID)
+	}
+	defer rows.Close()
+
+	songIDs := make(map[string]bool)
+	for rows.Next() {
+		var songID string
+		if err := rows.Scan(&songID); err != nil {
+			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song ID")
+			continue
+		}
+		songIDs[songID] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song ID iteration").
+			WithContext("userID", userID)
+	}
+
+	return songIDs, nil
+}
+
+// DeleteSongs removes songs by ID for a user while preserving user data integrity
+func (db *DB) DeleteSongs(userID string, songIDs []string) error {
+	if userID == "" {
+		return errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if len(songIDs) == 0 {
+		return nil // Nothing to delete
+	}
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction")
+	}
+	defer tx.Rollback()
+
+	// Delete from songs table
+	stmt, err := tx.Prepare(`DELETE FROM songs WHERE user_id = ? AND id = ?`)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to prepare song delete statement")
+	}
+	defer stmt.Close()
+
+	var failedSongs []string
+	for _, songID := range songIDs {
+		_, err := stmt.Exec(userID, songID)
+		if err != nil {
+			db.logger.WithError(err).WithFields(logrus.Fields{
+				"songID": songID,
+				"userID": userID,
+			}).Error("Failed to delete song")
+			failedSongs = append(failedSongs, songID)
+			continue
+		}
+	}
+
+	// Note: We intentionally preserve play_events and song_transitions as historical data
+	// This maintains user listening history even if songs are removed from the library
+
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction").
+			WithContext("failed_songs", failedSongs).
+			WithContext("userID", userID)
+	}
+
+	db.logger.WithFields(logrus.Fields{
+		"userID":      userID,
+		"deleted":     len(songIDs) - len(failedSongs),
+		"failed":      len(failedSongs),
+		"total":       len(songIDs),
+	}).Info("Completed song deletion")
+
+	return nil
+}
+
 func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *string) error {
 	if userID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "userID")

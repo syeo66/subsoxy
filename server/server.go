@@ -541,15 +541,52 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		}
 	}
 	
+	// Implement differential sync - get existing songs to determine what to add/update/delete
+	existingSongIDs, err := ps.db.GetExistingSongIDs(username)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "EXISTING_SONGS_FAILED", "failed to get existing song IDs").
+			WithContext("username", username)
+	}
+	
+	// Create a map of current upstream songs for efficient lookup
+	upstreamSongIDs := make(map[string]bool)
+	for _, song := range allSongs {
+		upstreamSongIDs[song.ID] = true
+	}
+	
+	// Determine songs to delete (exist locally but not upstream)
+	var songsToDelete []string
+	for existingSongID := range existingSongIDs {
+		if !upstreamSongIDs[existingSongID] {
+			songsToDelete = append(songsToDelete, existingSongID)
+		}
+	}
+	
+	// Delete removed songs first
+	if len(songsToDelete) > 0 {
+		if err := ps.db.DeleteSongs(username, songsToDelete); err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "DELETE_FAILED", "failed to delete removed songs").
+				WithContext("username", username).
+				WithContext("songs_to_delete", len(songsToDelete))
+		}
+		ps.logger.WithFields(logrus.Fields{
+			"user":    sanitizeUsername(username),
+			"deleted": len(songsToDelete),
+		}).Info("Removed songs no longer in upstream library")
+	}
+	
+	// Store/update current upstream songs (preserves existing play counts)
 	if err := ps.db.StoreSongs(username, allSongs); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
 			WithContext("username", username)
 	}
 
 	ps.logger.WithFields(logrus.Fields{
-		"user":  sanitizeUsername(username),
-		"count": len(allSongs),
-	}).Info("Successfully synced songs for user")
+		"user":    sanitizeUsername(username),
+		"total":   len(allSongs),
+		"deleted": len(songsToDelete),
+		"added":   len(allSongs) - (len(existingSongIDs) - len(songsToDelete)),
+	}).Info("Successfully completed differential sync for user")
 	
 	return nil
 }

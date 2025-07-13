@@ -115,6 +115,13 @@ err := db.StoreSongs(userID, songs)
 userID := "alice"
 songs, err := db.GetAllSongs(userID)
 
+// Get existing song IDs for differential sync (NEW)
+existingIDs, err := db.GetExistingSongIDs(userID)
+
+// Delete songs that no longer exist upstream (NEW)
+songsToDelete := []string{"song1", "song2"}
+err := db.DeleteSongs(userID, songsToDelete)
+
 // Each user gets their own isolated song library
 bobSongs, err := db.GetAllSongs("bob")  // Completely separate from alice's songs
 ```
@@ -231,6 +238,14 @@ Context: {"field": "songID"}
 - Uses `INSERT OR REPLACE` to handle duplicates
 - Preserves existing play/skip counts when updating song metadata
 - Batch processing with transactions for performance
+
+### Differential Sync ✅ **NEW**
+- **GetExistingSongIDs()**: Efficiently retrieves all existing song IDs for a user as a map for O(1) lookup
+- **DeleteSongs()**: Removes songs by ID while preserving historical play events and transition data
+- **Data Preservation**: Maintains user listening history even when songs are removed from the library
+- **Historical Integrity**: Intentionally preserves play_events and song_transitions as historical records
+- **Transaction Safety**: All operations use transactions to ensure atomicity and consistency
+- **Comprehensive Logging**: Detailed logging of deletion operations with success/failure statistics
 
 ### Event Recording
 - Automatically updates song statistics (play_count, skip_count, last_played)

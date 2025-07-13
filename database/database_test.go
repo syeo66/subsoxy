@@ -1216,3 +1216,290 @@ func TestHealthCheckDisabled(t *testing.T) {
 		t.Fatalf("Failed to close database: %v", err)
 	}
 }
+
+func TestGetExistingSongIDs(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	songs := []models.Song{
+		{ID: "song1", Title: "Test Song 1", Artist: "Test Artist", Album: "Test Album", Duration: 180},
+		{ID: "song2", Title: "Test Song 2", Artist: "Test Artist", Album: "Test Album", Duration: 200},
+		{ID: "song3", Title: "Test Song 3", Artist: "Test Artist", Album: "Test Album", Duration: 220},
+	}
+
+	// Store initial songs
+	err = db.StoreSongs(userID, songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Test getting existing song IDs
+	existingIDs, err := db.GetExistingSongIDs(userID)
+	if err != nil {
+		t.Fatalf("Failed to get existing song IDs: %v", err)
+	}
+
+	// Verify all songs are present
+	if len(existingIDs) != 3 {
+		t.Errorf("Expected 3 existing song IDs, got %d", len(existingIDs))
+	}
+
+	expectedIDs := []string{"song1", "song2", "song3"}
+	for _, id := range expectedIDs {
+		if !existingIDs[id] {
+			t.Errorf("Expected song ID %s to exist", id)
+		}
+	}
+
+	// Test with empty user ID
+	_, err = db.GetExistingSongIDs("")
+	if err == nil {
+		t.Error("Expected error for empty user ID")
+	}
+
+	// Test with non-existent user
+	emptyIDs, err := db.GetExistingSongIDs("nonexistent")
+	if err != nil {
+		t.Fatalf("Failed to get existing song IDs for non-existent user: %v", err)
+	}
+	if len(emptyIDs) != 0 {
+		t.Errorf("Expected 0 song IDs for non-existent user, got %d", len(emptyIDs))
+	}
+}
+
+func TestDeleteSongs(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	songs := []models.Song{
+		{ID: "song1", Title: "Test Song 1", Artist: "Test Artist", Album: "Test Album", Duration: 180},
+		{ID: "song2", Title: "Test Song 2", Artist: "Test Artist", Album: "Test Album", Duration: 200},
+		{ID: "song3", Title: "Test Song 3", Artist: "Test Artist", Album: "Test Album", Duration: 220},
+		{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 240},
+	}
+
+	// Store initial songs
+	err = db.StoreSongs(userID, songs)
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Record some play events to test preservation of historical data
+	err = db.RecordPlayEvent(userID, "song1", "play", nil)
+	if err != nil {
+		t.Fatalf("Failed to record play event: %v", err)
+	}
+	err = db.RecordPlayEvent(userID, "song2", "skip", nil)
+	if err != nil {
+		t.Fatalf("Failed to record skip event: %v", err)
+	}
+
+	// Delete songs 2 and 3
+	songsToDelete := []string{"song2", "song3"}
+	err = db.DeleteSongs(userID, songsToDelete)
+	if err != nil {
+		t.Fatalf("Failed to delete songs: %v", err)
+	}
+
+	// Verify songs are deleted
+	existingIDs, err := db.GetExistingSongIDs(userID)
+	if err != nil {
+		t.Fatalf("Failed to get existing song IDs: %v", err)
+	}
+
+	if len(existingIDs) != 2 {
+		t.Errorf("Expected 2 remaining songs, got %d", len(existingIDs))
+	}
+
+	if !existingIDs["song1"] {
+		t.Error("Expected song1 to still exist")
+	}
+	if !existingIDs["song4"] {
+		t.Error("Expected song4 to still exist")
+	}
+	if existingIDs["song2"] {
+		t.Error("Expected song2 to be deleted")
+	}
+	if existingIDs["song3"] {
+		t.Error("Expected song3 to be deleted")
+	}
+
+	// Verify play events are preserved (historical data)
+	allSongs, err := db.GetAllSongs(userID)
+	if err != nil {
+		t.Fatalf("Failed to get all songs: %v", err)
+	}
+
+	var song1 *models.Song
+	for i := range allSongs {
+		if allSongs[i].ID == "song1" {
+			song1 = &allSongs[i]
+			break
+		}
+	}
+
+	if song1 == nil {
+		t.Fatal("song1 not found")
+	}
+
+	// song1 should still have its play count
+	if song1.PlayCount != 1 {
+		t.Errorf("Expected song1 to have play count 1, got %d", song1.PlayCount)
+	}
+
+	// Test edge cases
+	// Test with empty user ID
+	err = db.DeleteSongs("", []string{"song1"})
+	if err == nil {
+		t.Error("Expected error for empty user ID")
+	}
+
+	// Test with empty song list (should not error)
+	err = db.DeleteSongs(userID, []string{})
+	if err != nil {
+		t.Errorf("Unexpected error for empty song list: %v", err)
+	}
+
+	// Test with non-existent songs (should not error)
+	err = db.DeleteSongs(userID, []string{"nonexistent1", "nonexistent2"})
+	if err != nil {
+		t.Errorf("Unexpected error for non-existent songs: %v", err)
+	}
+}
+
+func TestDifferentialSyncWorkflow(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	
+	// Initial sync with 4 songs
+	initialSongs := []models.Song{
+		{ID: "song1", Title: "Test Song 1", Artist: "Test Artist", Album: "Test Album", Duration: 180},
+		{ID: "song2", Title: "Test Song 2", Artist: "Test Artist", Album: "Test Album", Duration: 200},
+		{ID: "song3", Title: "Test Song 3", Artist: "Test Artist", Album: "Test Album", Duration: 220},
+		{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 240},
+	}
+
+	err = db.StoreSongs(userID, initialSongs)
+	if err != nil {
+		t.Fatalf("Failed to store initial songs: %v", err)
+	}
+
+	// Record some user activity
+	err = db.RecordPlayEvent(userID, "song1", "play", nil)
+	if err != nil {
+		t.Fatalf("Failed to record play event: %v", err)
+	}
+	err = db.RecordPlayEvent(userID, "song2", "skip", nil)
+	if err != nil {
+		t.Fatalf("Failed to record skip event: %v", err)
+	}
+
+	// Simulate differential sync: songs 2 and 3 removed, song 5 added, song 1 and 4 remain
+	upstreamSongs := []models.Song{
+		{ID: "song1", Title: "Test Song 1 Updated", Artist: "Test Artist", Album: "Test Album", Duration: 180}, // Updated title
+		{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 240},          // Unchanged
+		{ID: "song5", Title: "Test Song 5", Artist: "Test Artist", Album: "Test Album", Duration: 260},          // New song
+	}
+
+	// Step 1: Get existing song IDs
+	existingIDs, err := db.GetExistingSongIDs(userID)
+	if err != nil {
+		t.Fatalf("Failed to get existing song IDs: %v", err)
+	}
+
+	// Step 2: Determine songs to delete
+	upstreamIDs := make(map[string]bool)
+	for _, song := range upstreamSongs {
+		upstreamIDs[song.ID] = true
+	}
+
+	var songsToDelete []string
+	for existingID := range existingIDs {
+		if !upstreamIDs[existingID] {
+			songsToDelete = append(songsToDelete, existingID)
+		}
+	}
+
+	// Step 3: Delete removed songs
+	if len(songsToDelete) > 0 {
+		err = db.DeleteSongs(userID, songsToDelete)
+		if err != nil {
+			t.Fatalf("Failed to delete songs: %v", err)
+		}
+	}
+
+	// Step 4: Store/update current songs
+	err = db.StoreSongs(userID, upstreamSongs)
+	if err != nil {
+		t.Fatalf("Failed to store upstream songs: %v", err)
+	}
+
+	// Verify final state
+	finalSongs, err := db.GetAllSongs(userID)
+	if err != nil {
+		t.Fatalf("Failed to get final songs: %v", err)
+	}
+
+	if len(finalSongs) != 3 {
+		t.Errorf("Expected 3 final songs, got %d", len(finalSongs))
+	}
+
+	// Verify specific songs
+	songMap := make(map[string]models.Song)
+	for _, song := range finalSongs {
+		songMap[song.ID] = song
+	}
+
+	// song1 should exist with preserved play count and updated title
+	if song1, exists := songMap["song1"]; !exists {
+		t.Error("Expected song1 to exist")
+	} else {
+		if song1.PlayCount != 1 {
+			t.Errorf("Expected song1 to have preserved play count 1, got %d", song1.PlayCount)
+		}
+		if song1.Title != "Test Song 1 Updated" {
+			t.Errorf("Expected song1 to have updated title, got %s", song1.Title)
+		}
+	}
+
+	// song4 should exist unchanged
+	if _, exists := songMap["song4"]; !exists {
+		t.Error("Expected song4 to exist")
+	}
+
+	// song5 should exist as new song
+	if song5, exists := songMap["song5"]; !exists {
+		t.Error("Expected song5 to exist")
+	} else {
+		if song5.PlayCount != 0 {
+			t.Errorf("Expected song5 to have play count 0, got %d", song5.PlayCount)
+		}
+	}
+
+	// song2 and song3 should not exist
+	if _, exists := songMap["song2"]; exists {
+		t.Error("Expected song2 to be deleted")
+	}
+	if _, exists := songMap["song3"]; exists {
+		t.Error("Expected song3 to be deleted")
+	}
+
+	// Verify deletion counts
+	expectedDeleted := []string{"song2", "song3"}
+	if len(songsToDelete) != len(expectedDeleted) {
+		t.Errorf("Expected %d songs to be deleted, got %d", len(expectedDeleted), len(songsToDelete))
+	}
+}
