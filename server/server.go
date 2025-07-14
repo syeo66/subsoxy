@@ -14,20 +14,20 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
-	
+
 	"github.com/syeo66/subsoxy/config"
-	"github.com/syeo66/subsoxy/errors"
-	"github.com/syeo66/subsoxy/models"
-	"github.com/syeo66/subsoxy/database"
 	"github.com/syeo66/subsoxy/credentials"
+	"github.com/syeo66/subsoxy/database"
+	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/handlers"
-	"github.com/syeo66/subsoxy/shuffle"
 	"github.com/syeo66/subsoxy/middleware"
+	"github.com/syeo66/subsoxy/models"
+	"github.com/syeo66/subsoxy/shuffle"
 )
 
 const (
-	MaxEndpointLength = 1000
-	MaxUsernameLength = 100
+	MaxEndpointLength   = 1000
+	MaxUsernameLength   = 100
 	MaxRemoteAddrLength = 100
 )
 
@@ -47,19 +47,19 @@ const (
 )
 
 type ProxyServer struct {
-	config      *config.Config
-	logger      *logrus.Logger
-	proxy       *httputil.ReverseProxy
-	hooks       map[string][]models.Hook
-	db          *database.DB
-	credentials *credentials.Manager
-	handlers    *handlers.Handler
-	shuffle     *shuffle.Service
-	server      *http.Server
-	syncTicker  *time.Ticker
-	syncMutex   sync.RWMutex
+	config       *config.Config
+	logger       *logrus.Logger
+	proxy        *httputil.ReverseProxy
+	hooks        map[string][]models.Hook
+	db           *database.DB
+	credentials  *credentials.Manager
+	handlers     *handlers.Handler
+	shuffle      *shuffle.Service
+	server       *http.Server
+	syncTicker   *time.Ticker
+	syncMutex    sync.RWMutex
 	shutdownChan chan struct{}
-	rateLimiter *rate.Limiter
+	rateLimiter  *rate.Limiter
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -78,7 +78,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
-	
+
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
@@ -102,11 +102,11 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	logger.WithFields(logrus.Fields{
-		"max_open_conns":      cfg.DBMaxOpenConns,
-		"max_idle_conns":      cfg.DBMaxIdleConns,
-		"conn_max_lifetime":   cfg.DBConnMaxLifetime,
-		"conn_max_idle_time":  cfg.DBConnMaxIdleTime,
-		"health_check":        cfg.DBHealthCheck,
+		"max_open_conns":     cfg.DBMaxOpenConns,
+		"max_idle_conns":     cfg.DBMaxIdleConns,
+		"conn_max_lifetime":  cfg.DBConnMaxLifetime,
+		"conn_max_idle_time": cfg.DBConnMaxIdleTime,
+		"health_check":       cfg.DBHealthCheck,
 	}).Info("Database connection pool configured")
 
 	credManager := credentials.New(logger, cfg.UpstreamURL)
@@ -125,16 +125,16 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	server := &ProxyServer{
-		config:      cfg,
-		logger:      logger,
-		proxy:       proxy,
-		hooks:       make(map[string][]models.Hook),
-		db:          db,
-		credentials: credManager,
-		handlers:    handlersService,
-		shuffle:     shuffleService,
+		config:       cfg,
+		logger:       logger,
+		proxy:        proxy,
+		hooks:        make(map[string][]models.Hook),
+		db:           db,
+		credentials:  credManager,
+		handlers:     handlersService,
+		shuffle:      shuffleService,
 		shutdownChan: make(chan struct{}),
-		rateLimiter: rateLimiter,
+		rateLimiter:  rateLimiter,
 	}
 
 	go server.syncSongs()
@@ -151,12 +151,12 @@ func sanitizeForLogging(input string) string {
 		}
 		return r
 	}, input)
-	
+
 	// Limit length to prevent resource exhaustion
 	if len(sanitized) > MaxEndpointLength {
 		sanitized = sanitized[:MaxEndpointLength] + "..."
 	}
-	
+
 	return sanitized
 }
 
@@ -177,12 +177,12 @@ func sanitizeUsername(username string) string {
 		}
 		return r
 	}, username)
-	
+
 	// Limit length
 	if len(sanitized) > MaxUsernameLength {
 		sanitized = sanitized[:MaxUsernameLength] + "..."
 	}
-	
+
 	return sanitized
 }
 
@@ -193,7 +193,7 @@ func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 // setCORSHeaders sets CORS headers based on configuration
 func (ps *ProxyServer) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
-	
+
 	// Set Access-Control-Allow-Origin
 	if len(ps.config.CORSAllowOrigins) > 0 {
 		if ps.config.CORSAllowOrigins[0] == "*" {
@@ -208,44 +208,44 @@ func (ps *ProxyServer) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Set Access-Control-Allow-Methods
 	if len(ps.config.CORSAllowMethods) > 0 {
 		w.Header().Set("Access-Control-Allow-Methods", strings.Join(ps.config.CORSAllowMethods, ", "))
 	}
-	
+
 	// Set Access-Control-Allow-Headers
 	if len(ps.config.CORSAllowHeaders) > 0 {
 		w.Header().Set("Access-Control-Allow-Headers", strings.Join(ps.config.CORSAllowHeaders, ", "))
 	}
-	
+
 	// Set Access-Control-Allow-Credentials
 	if ps.config.CORSAllowCredentials {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
-	
+
 	// Set Access-Control-Max-Age for preflight cache (24 hours)
 	w.Header().Set("Access-Control-Max-Age", CORSMaxAge)
 }
 
 func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	endpoint := r.URL.Path
-	
+
 	// Add CORS headers if enabled
 	if ps.config.CORSEnabled {
 		ps.setCORSHeaders(w, r)
-		
+
 		// Handle preflight OPTIONS requests
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 	}
-	
+
 	// Sanitize inputs for logging
 	sanitizedEndpoint := sanitizeForLogging(endpoint)
 	sanitizedRemoteAddr := sanitizeRemoteAddr(r.RemoteAddr)
-	
+
 	ps.logger.WithFields(logrus.Fields{
 		"method":   r.Method,
 		"endpoint": sanitizedEndpoint,
@@ -258,7 +258,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 				"endpoint": sanitizedEndpoint,
 				"remote":   sanitizedRemoteAddr,
 			}).Warn("Rate limit exceeded")
-			
+
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -266,16 +266,16 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(endpoint, "/rest/") {
 		username, password := ps.extractCredentials(r)
-		
+
 		// Validate input lengths
 		if len(username) > MaxUsernameLength {
 			ps.logger.WithFields(logrus.Fields{
 				"username_length": len(username),
-				"max_length": MaxUsernameLength,
+				"max_length":      MaxUsernameLength,
 			}).Warn("Username too long, truncating")
 			username = username[:MaxUsernameLength]
 		}
-		
+
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
 			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
 			go func() {
@@ -291,13 +291,13 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			// Log details about request without exposing any credential information
 			ps.logger.WithFields(logrus.Fields{
-				"has_username": username != "",
-				"has_password": password != "",
-				"endpoint": sanitizedEndpoint,
-				"method": r.Method,
-				"content_type": r.Header.Get("Content-Type"),
+				"has_username":  username != "",
+				"has_password":  password != "",
+				"endpoint":      sanitizedEndpoint,
+				"method":        r.Method,
+				"content_type":  r.Header.Get("Content-Type"),
 				"authorization": r.Header.Get("Authorization") != "",
-				"user_agent": r.Header.Get("User-Agent"),
+				"user_agent":    r.Header.Get("User-Agent"),
 			}).Debug("No credentials found in request")
 		}
 	}
@@ -323,7 +323,7 @@ func (ps *ProxyServer) Start() error {
 	}
 
 	router := mux.NewRouter()
-	
+
 	// Add security headers middleware
 	if ps.config.SecurityHeadersEnabled {
 		securityMiddleware := middleware.NewSecurityHeaders(ps.config, ps.logger)
@@ -332,7 +332,7 @@ func (ps *ProxyServer) Start() error {
 	} else {
 		ps.logger.Info("Security headers middleware disabled")
 	}
-	
+
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
 	ps.server = &http.Server{
@@ -357,29 +357,29 @@ func (ps *ProxyServer) Start() error {
 
 func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	ps.logger.Info("Shutting down proxy server...")
-	
+
 	close(ps.shutdownChan)
-	
+
 	// Safely stop the sync ticker
 	ps.syncMutex.RLock()
 	if ps.syncTicker != nil {
 		ps.syncTicker.Stop()
 	}
 	ps.syncMutex.RUnlock()
-	
+
 	if ps.db != nil {
 		if err := ps.db.Close(); err != nil {
 			ps.logger.WithError(err).Error("Failed to close database connection")
 		}
 	}
-	
+
 	if ps.server != nil {
 		if err := ps.server.Shutdown(ctx); err != nil {
 			ps.logger.WithError(err).Error("Failed to shutdown HTTP server")
 			return errors.Wrap(err, errors.CategoryServer, "SHUTDOWN_FAILED", "failed to shutdown HTTP server")
 		}
 	}
-	
+
 	ps.logger.Info("Proxy server shut down successfully")
 	return nil
 }
@@ -389,7 +389,7 @@ func (ps *ProxyServer) syncSongs() {
 	ps.syncMutex.Lock()
 	ps.syncTicker = time.NewTicker(SongSyncInterval)
 	ps.syncMutex.Unlock()
-	
+
 	defer func() {
 		ps.syncMutex.Lock()
 		if ps.syncTicker != nil {
@@ -405,11 +405,11 @@ func (ps *ProxyServer) syncSongs() {
 		ps.syncMutex.RLock()
 		ticker := ps.syncTicker
 		ps.syncMutex.RUnlock()
-		
+
 		if ticker == nil {
 			return
 		}
-		
+
 		select {
 		case <-ticker.C:
 			ps.fetchAndStoreSongs()
@@ -427,15 +427,15 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 		ps.logger.Debug("Skipping song sync - no valid credentials available yet (waiting for client requests)")
 		return
 	}
-	
+
 	ps.logger.Info("Syncing songs from Subsonic API")
-	
+
 	ps.logger.WithField("user_count", len(allCredentials)).Info("Starting multi-user song sync")
-	
+
 	// Sync songs for each user with staggered delays
 	for i, username := range getSortedUsernames(allCredentials) {
 		password := allCredentials[username]
-		
+
 		// Add staggered delay to avoid overwhelming upstream server (except for first user)
 		if i > 0 {
 			delay := time.Duration(i) * UserSyncStaggerDelay
@@ -445,7 +445,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 			}).Debug("Adding staggered delay for user sync")
 			time.Sleep(delay)
 		}
-		
+
 		// Sync songs for this specific user
 		if err := ps.syncSongsForUser(username, password); err != nil {
 			ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
@@ -453,82 +453,82 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 			continue
 		}
 	}
-	
+
 	ps.logger.Info("Multi-user song sync completed")
 }
 
 // syncSongsForUser handles song synchronization for a single user using directory traversal
 func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	ps.logger.WithField("user", sanitizeUsername(username)).Info("Syncing songs for user")
-	
+
 	// First, get all music folders
 	musicFolders, err := ps.getMusicFolders(username, password)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryNetwork, "MUSIC_FOLDERS_FAILED", "failed to get music folders").
 			WithContext("username", username)
 	}
-	
+
 	var allSongs []models.Song
-	
+
 	// Traverse each music folder
 	for _, folder := range musicFolders {
 		// Convert folder ID to string
 		folderID := fmt.Sprintf("%v", folder.ID)
-		
+
 		ps.logger.WithFields(logrus.Fields{
-			"user": sanitizeUsername(username),
-			"folder_id": folderID,
+			"user":        sanitizeUsername(username),
+			"folder_id":   folderID,
 			"folder_name": folder.Name,
 		}).Debug("Processing music folder")
-		
+
 		// Get indexes for this folder to get artists
 		indexes, err := ps.getIndexes(username, password, folderID)
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
-				"user": sanitizeUsername(username),
+				"user":      sanitizeUsername(username),
 				"folder_id": folderID,
 			}).Warn("Failed to get indexes for folder, skipping")
 			continue
 		}
-		
+
 		// Process each artist
 		for _, index := range indexes {
 			for _, artist := range index.Artists {
 				ps.logger.WithFields(logrus.Fields{
-					"user": sanitizeUsername(username),
-					"artist_id": artist.ID,
+					"user":        sanitizeUsername(username),
+					"artist_id":   artist.ID,
 					"artist_name": artist.Name,
 				}).Debug("Processing artist")
-				
+
 				// Get albums for this artist
 				albums, err := ps.getMusicDirectory(username, password, artist.ID)
 				if err != nil {
 					ps.logger.WithError(err).WithFields(logrus.Fields{
-						"user": sanitizeUsername(username),
+						"user":      sanitizeUsername(username),
 						"artist_id": artist.ID,
 					}).Warn("Failed to get albums for artist, skipping")
 					continue
 				}
-				
+
 				// Process each album
 				for _, album := range albums {
 					if album.IsDir {
 						ps.logger.WithFields(logrus.Fields{
-							"user": sanitizeUsername(username),
-							"album_id": album.ID,
+							"user":        sanitizeUsername(username),
+							"album_id":    album.ID,
 							"album_title": album.Title,
 						}).Debug("Processing album")
-						
+
 						// Get songs for this album
 						songs, err := ps.getMusicDirectory(username, password, album.ID)
 						if err != nil {
 							ps.logger.WithError(err).WithFields(logrus.Fields{
-								"user": sanitizeUsername(username),
+								"user":     sanitizeUsername(username),
 								"album_id": album.ID,
 							}).Warn("Failed to get songs for album, skipping")
 							continue
 						}
-						
+
 						// Add songs (filter out directories)
 						for _, song := range songs {
 							if !song.IsDir {
@@ -540,20 +540,20 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 			}
 		}
 	}
-	
+
 	// Implement differential sync - get existing songs to determine what to add/update/delete
 	existingSongIDs, err := ps.db.GetExistingSongIDs(username)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "EXISTING_SONGS_FAILED", "failed to get existing song IDs").
 			WithContext("username", username)
 	}
-	
+
 	// Create a map of current upstream songs for efficient lookup
 	upstreamSongIDs := make(map[string]bool)
 	for _, song := range allSongs {
 		upstreamSongIDs[song.ID] = true
 	}
-	
+
 	// Determine songs to delete (exist locally but not upstream)
 	var songsToDelete []string
 	for existingSongID := range existingSongIDs {
@@ -561,7 +561,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 			songsToDelete = append(songsToDelete, existingSongID)
 		}
 	}
-	
+
 	// Delete removed songs first
 	if len(songsToDelete) > 0 {
 		if err := ps.db.DeleteSongs(username, songsToDelete); err != nil {
@@ -574,7 +574,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 			"deleted": len(songsToDelete),
 		}).Info("Removed songs no longer in upstream library")
 	}
-	
+
 	// Store/update current upstream songs (preserves existing play counts)
 	if err := ps.db.StoreSongs(username, allSongs); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
@@ -587,7 +587,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		"deleted": len(songsToDelete),
 		"added":   len(allSongs) - (len(existingSongIDs) - len(songsToDelete)),
 	}).Info("Successfully completed differential sync for user")
-	
+
 	return nil
 }
 
@@ -597,29 +597,29 @@ func (ps *ProxyServer) getMusicFolders(username, password string) ([]models.Musi
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
 	}
-	
+
 	params := ps.buildAuthParams(username, password)
 	baseURL.RawQuery = params.Encode()
-	
+
 	resp, err := http.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music folders")
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
-	
+
 	var response models.SubsonicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
 	}
-	
+
 	if response.SubsonicResponse.Status != "ok" {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
 	}
-	
+
 	return response.SubsonicResponse.MusicFolders.MusicFolder, nil
 }
 
@@ -629,32 +629,32 @@ func (ps *ProxyServer) getIndexes(username, password, musicFolderId string) ([]m
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
 	}
-	
+
 	params := ps.buildAuthParams(username, password)
 	if musicFolderId != "" {
 		params.Add("musicFolderId", musicFolderId)
 	}
 	baseURL.RawQuery = params.Encode()
-	
+
 	resp, err := http.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch indexes")
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
-	
+
 	var response models.SubsonicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
 	}
-	
+
 	if response.SubsonicResponse.Status != "ok" {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
 	}
-	
+
 	return response.SubsonicResponse.Indexes.Index, nil
 }
 
@@ -664,30 +664,30 @@ func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]model
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
 	}
-	
+
 	params := ps.buildAuthParams(username, password)
 	params.Add("id", id)
 	baseURL.RawQuery = params.Encode()
-	
+
 	resp, err := http.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music directory")
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
-	
+
 	var response models.SubsonicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
 	}
-	
+
 	if response.SubsonicResponse.Status != "ok" {
 		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
 	}
-	
+
 	return response.SubsonicResponse.Directory.Child, nil
 }
 
@@ -695,7 +695,7 @@ func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]model
 func (ps *ProxyServer) buildAuthParams(username, password string) url.Values {
 	params := url.Values{}
 	params.Add("u", username)
-	
+
 	// Check if this is token-based authentication
 	if strings.HasPrefix(password, "TOKEN:") {
 		// Extract token and salt from the special format: "TOKEN:token:salt"
@@ -708,11 +708,11 @@ func (ps *ProxyServer) buildAuthParams(username, password string) url.Values {
 		// Traditional password-based authentication
 		params.Add("p", password)
 	}
-	
+
 	params.Add("f", "json")
 	params.Add("v", SubsonicAPIVersion)
 	params.Add("c", ClientName)
-	
+
 	return params
 }
 
@@ -738,23 +738,23 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 	// First try URL query parameters (most common)
 	username = r.URL.Query().Get("u")
 	password = r.URL.Query().Get("p")
-	
+
 	if username != "" && password != "" {
 		ps.logger.Debug("Credentials extracted from URL query parameters (password-based)")
 		return username, password
 	}
-	
+
 	// Try token-based authentication (t + s parameters)
 	token := r.URL.Query().Get("t")
 	salt := r.URL.Query().Get("s")
-	
+
 	if username != "" && token != "" && salt != "" {
 		ps.logger.Debug("Token-based authentication detected - will validate with upstream")
 		// For token-based auth, we return a special marker to indicate token validation needed
 		// The validation will be done directly against the upstream server
 		return username, "TOKEN:" + token + ":" + salt
 	}
-	
+
 	// Try form-encoded POST data
 	if r.Method == "POST" {
 		if err := r.ParseForm(); err == nil {
@@ -764,7 +764,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 				ps.logger.Debug("Credentials extracted from POST form data (password-based)")
 				return formUsername, formPassword
 			}
-			
+
 			// Try token-based form auth
 			formToken := r.PostForm.Get("t")
 			formSalt := r.PostForm.Get("s")
@@ -774,7 +774,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 			}
 		}
 	}
-	
+
 	// Try Authorization header (Basic Auth format)
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 		// Handle Basic Auth: "Basic base64(username:password)"
@@ -785,7 +785,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 			}
 		}
 	}
-	
+
 	// Try custom headers (some clients use these)
 	if headerUsername := r.Header.Get("X-Subsonic-Username"); headerUsername != "" {
 		if headerPassword := r.Header.Get("X-Subsonic-Password"); headerPassword != "" {
@@ -793,7 +793,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 			return headerUsername, headerPassword
 		}
 	}
-	
+
 	ps.logger.Debug("No credentials found in request")
 	return "", ""
 }

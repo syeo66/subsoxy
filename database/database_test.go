@@ -16,17 +16,17 @@ import (
 func TestNew(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel) // Reduce noise in tests
-	
+
 	// Test with valid database path
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	if db.conn == nil {
 		t.Error("Database connection should not be nil")
 	}
@@ -38,10 +38,10 @@ func TestNew(t *testing.T) {
 func TestNewWithInvalidPath(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	// Test with invalid database path (directory that doesn't exist)
 	dbPath := "/nonexistent/path/test.db"
-	
+
 	_, err := New(dbPath, logger)
 	if err == nil {
 		t.Error("Expected error when creating database with invalid path")
@@ -51,20 +51,20 @@ func TestNewWithInvalidPath(t *testing.T) {
 func TestClose(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	
+
 	err = db.Close()
 	if err != nil {
 		t.Errorf("Failed to close database: %v", err)
 	}
-	
+
 	// Test that database is actually closed
 	err = db.conn.Ping()
 	if err == nil {
@@ -75,16 +75,16 @@ func TestClose(t *testing.T) {
 func TestCreateTables(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Check that tables were created
 	tables := []string{"songs", "play_events", "song_transitions"}
 	for _, table := range tables {
@@ -97,7 +97,7 @@ func TestCreateTables(t *testing.T) {
 			t.Errorf("Table %s should exist", table)
 		}
 	}
-	
+
 	// Check that indexes were created
 	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp", "idx_song_transitions_from"}
 	for _, index := range indexes {
@@ -115,16 +115,16 @@ func TestCreateTables(t *testing.T) {
 func TestStoreSongs(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	songs := []models.Song{
 		{
 			ID:       "1",
@@ -141,12 +141,12 @@ func TestStoreSongs(t *testing.T) {
 			Duration: 250,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Verify songs were stored
 	var count int
 	err = db.conn.QueryRow("SELECT COUNT(*) FROM songs").Scan(&count)
@@ -161,16 +161,16 @@ func TestStoreSongs(t *testing.T) {
 func TestStoreSongsReplace(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// First, store a song
 	songs := []models.Song{
 		{
@@ -181,12 +181,12 @@ func TestStoreSongsReplace(t *testing.T) {
 			Duration: 300,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Update the song with new information
 	updatedSongs := []models.Song{
 		{
@@ -197,12 +197,12 @@ func TestStoreSongsReplace(t *testing.T) {
 			Duration: 350,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", updatedSongs)
 	if err != nil {
 		t.Errorf("Failed to update songs: %v", err)
 	}
-	
+
 	// Verify song was updated
 	var title string
 	err = db.conn.QueryRow("SELECT title FROM songs WHERE id = ?", "1").Scan(&title)
@@ -217,16 +217,16 @@ func TestStoreSongsReplace(t *testing.T) {
 func TestGetAllSongs(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{
@@ -244,22 +244,22 @@ func TestGetAllSongs(t *testing.T) {
 			Duration: 250,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Retrieve all songs
 	retrievedSongs, err := db.GetAllSongs("testuser")
 	if err != nil {
 		t.Errorf("Failed to get all songs: %v", err)
 	}
-	
+
 	if len(retrievedSongs) != 2 {
 		t.Errorf("Expected 2 songs, got %d", len(retrievedSongs))
 	}
-	
+
 	// Verify song data
 	for i, song := range retrievedSongs {
 		if song.ID != songs[i].ID {
@@ -280,21 +280,21 @@ func TestGetAllSongs(t *testing.T) {
 func TestGetAllSongsEmpty(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	songs, err := db.GetAllSongs("testuser")
 	if err != nil {
 		t.Errorf("Failed to get all songs: %v", err)
 	}
-	
+
 	if len(songs) != 0 {
 		t.Errorf("Expected 0 songs, got %d", len(songs))
 	}
@@ -303,16 +303,16 @@ func TestGetAllSongsEmpty(t *testing.T) {
 func TestRecordPlayEvent(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store a test song first
 	songs := []models.Song{
 		{
@@ -323,18 +323,18 @@ func TestRecordPlayEvent(t *testing.T) {
 			Duration: 300,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record a play event
 	err = db.RecordPlayEvent("testuser", "1", "play", nil)
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
 	}
-	
+
 	// Verify event was recorded
 	var count int
 	err = db.conn.QueryRow("SELECT COUNT(*) FROM play_events WHERE song_id = ? AND event_type = ?", "1", "play").Scan(&count)
@@ -344,7 +344,7 @@ func TestRecordPlayEvent(t *testing.T) {
 	if count != 1 {
 		t.Errorf("Expected 1 play event, got %d", count)
 	}
-	
+
 	// Verify play count was updated
 	var playCount int
 	err = db.conn.QueryRow("SELECT play_count FROM songs WHERE id = ?", "1").Scan(&playCount)
@@ -359,16 +359,16 @@ func TestRecordPlayEvent(t *testing.T) {
 func TestRecordSkipEvent(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store a test song first
 	songs := []models.Song{
 		{
@@ -379,18 +379,18 @@ func TestRecordSkipEvent(t *testing.T) {
 			Duration: 300,
 		},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record a skip event
 	err = db.RecordPlayEvent("testuser", "1", "skip", nil)
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
-	
+
 	// Verify skip count was updated
 	var skipCount int
 	err = db.conn.QueryRow("SELECT skip_count FROM songs WHERE id = ?", "1").Scan(&skipCount)
@@ -405,34 +405,34 @@ func TestRecordSkipEvent(t *testing.T) {
 func TestRecordPlayEventWithPreviousSong(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record play event with previous song
 	previousSong := "1"
 	err = db.RecordPlayEvent("testuser", "2", "play", &previousSong)
 	if err != nil {
 		t.Errorf("Failed to record play event with previous song: %v", err)
 	}
-	
+
 	// Verify previous song was recorded
 	var recordedPreviousSong sql.NullString
 	err = db.conn.QueryRow("SELECT previous_song FROM play_events WHERE song_id = ?", "2").Scan(&recordedPreviousSong)
@@ -447,33 +447,33 @@ func TestRecordPlayEventWithPreviousSong(t *testing.T) {
 func TestRecordTransition(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record a transition (play)
 	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	// Verify transition was recorded
 	var playCount int
 	err = db.conn.QueryRow("SELECT play_count FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&playCount)
@@ -488,33 +488,33 @@ func TestRecordTransition(t *testing.T) {
 func TestRecordTransitionSkip(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record a transition (skip)
 	err = db.RecordTransition("testuser", "1", "2", "skip")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	// Verify skip count was recorded
 	var skipCount int
 	err = db.conn.QueryRow("SELECT skip_count FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&skipCount)
@@ -529,50 +529,50 @@ func TestRecordTransitionSkip(t *testing.T) {
 func TestUpdateTransitionProbabilities(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record multiple transitions
 	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	err = db.RecordTransition("testuser", "1", "2", "skip")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	// Verify probability calculation (2 plays, 1 skip = 2/3 = 0.6667)
 	var probability float64
 	err = db.conn.QueryRow("SELECT probability FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&probability)
 	if err != nil {
 		t.Errorf("Failed to get transition probability: %v", err)
 	}
-	
+
 	expected := float64(2) / float64(3)
 	if probability < expected-0.01 || probability > expected+0.01 {
 		t.Errorf("Expected transition probability %.4f, got %.4f", expected, probability)
@@ -582,27 +582,27 @@ func TestUpdateTransitionProbabilities(t *testing.T) {
 func TestGetTransitionProbability(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Errorf("Failed to store songs: %v", err)
 	}
-	
+
 	// Test getting probability for non-existent transition (should return 0.5 and no error)
 	prob, err := db.GetTransitionProbability("testuser", "1", "2")
 	if err != nil {
@@ -611,13 +611,13 @@ func TestGetTransitionProbability(t *testing.T) {
 	if prob != 0.5 {
 		t.Errorf("Expected default probability 0.5, got %f", prob)
 	}
-	
+
 	// Record a transition and test again
 	err = db.RecordTransition("testuser", "1", "2", "play")
 	if err != nil {
 		t.Errorf("Failed to record transition: %v", err)
 	}
-	
+
 	prob, err = db.GetTransitionProbability("testuser", "1", "2")
 	if err != nil {
 		t.Errorf("Failed to get transition probability: %v", err)
@@ -630,16 +630,16 @@ func TestGetTransitionProbability(t *testing.T) {
 func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Test getting probability for non-existent songs (should return 0.5 and no error)
 	prob, err := db.GetTransitionProbability("testuser", "nonexistent1", "nonexistent2")
 	if err != nil {
@@ -663,7 +663,7 @@ func TestGetTransitionProbabilityNonExistent(t *testing.T) {
 
 func TestDefaultPoolConfig(t *testing.T) {
 	config := DefaultPoolConfig()
-	
+
 	if config.MaxOpenConns != 25 {
 		t.Errorf("Expected MaxOpenConns 25, got %d", config.MaxOpenConns)
 	}
@@ -684,10 +684,10 @@ func TestDefaultPoolConfig(t *testing.T) {
 func TestNewWithPool(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test_pool.db"
 	defer os.Remove(dbPath)
-	
+
 	poolConfig := &ConnectionPool{
 		MaxOpenConns:    10,
 		MaxIdleConns:    3,
@@ -695,13 +695,13 @@ func TestNewWithPool(t *testing.T) {
 		ConnMaxIdleTime: 2 * time.Minute,
 		HealthCheck:     false, // Disable for test to avoid goroutine
 	}
-	
+
 	db, err := NewWithPool(dbPath, logger, poolConfig)
 	if err != nil {
 		t.Fatalf("Failed to create database with pool: %v", err)
 	}
 	defer db.Close()
-	
+
 	if db.pool.MaxOpenConns != 10 {
 		t.Errorf("Expected MaxOpenConns 10, got %d", db.pool.MaxOpenConns)
 	}
@@ -716,16 +716,16 @@ func TestNewWithPool(t *testing.T) {
 func TestUpdatePoolConfig(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test_update.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Test valid config update
 	newConfig := &ConnectionPool{
 		MaxOpenConns:    15,
@@ -734,33 +734,33 @@ func TestUpdatePoolConfig(t *testing.T) {
 		ConnMaxIdleTime: 3 * time.Minute,
 		HealthCheck:     false,
 	}
-	
+
 	err = db.UpdatePoolConfig(newConfig)
 	if err != nil {
 		t.Errorf("Failed to update pool config: %v", err)
 	}
-	
+
 	if db.pool.MaxOpenConns != 15 {
 		t.Errorf("Expected MaxOpenConns 15, got %d", db.pool.MaxOpenConns)
 	}
-	
+
 	// Test invalid config (max idle > max open)
 	invalidConfig := &ConnectionPool{
 		MaxOpenConns: 10,
 		MaxIdleConns: 15, // Invalid: > MaxOpenConns
 	}
-	
+
 	err = db.UpdatePoolConfig(invalidConfig)
 	if err == nil {
 		t.Error("Expected error for invalid pool config")
 	}
-	
+
 	// Test invalid config (zero max open)
 	invalidConfig2 := &ConnectionPool{
 		MaxOpenConns: 0, // Invalid
 		MaxIdleConns: 1,
 	}
-	
+
 	err = db.UpdatePoolConfig(invalidConfig2)
 	if err == nil {
 		t.Error("Expected error for zero max open connections")
@@ -770,18 +770,18 @@ func TestUpdatePoolConfig(t *testing.T) {
 func TestGetConnectionStats(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test_stats.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	stats := db.GetConnectionStats()
-	
+
 	// Basic validation that stats are being tracked
 	if stats.OpenConnections < 0 {
 		t.Errorf("OpenConnections should not be negative, got %d", stats.OpenConnections)
@@ -794,19 +794,19 @@ func TestGetConnectionStats(t *testing.T) {
 func TestPerformHealthCheck(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test_health.db"
 	defer os.Remove(dbPath)
-	
+
 	db, err := New(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Perform health check manually
 	db.performHealthCheck()
-	
+
 	stats := db.GetConnectionStats()
 	if stats.HealthChecks == 0 {
 		t.Error("Expected health check count to be > 0")
@@ -819,10 +819,10 @@ func TestPerformHealthCheck(t *testing.T) {
 func TestConcurrentDatabaseAccess(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	dbPath := "test_concurrent.db"
 	defer os.Remove(dbPath)
-	
+
 	// Use a smaller pool for testing concurrency
 	poolConfig := &ConnectionPool{
 		MaxOpenConns:    5,
@@ -831,35 +831,35 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 		ConnMaxIdleTime: 10 * time.Second,
 		HealthCheck:     false, // Disable to avoid interfering with test
 	}
-	
+
 	db, err := NewWithPool(dbPath, logger, poolConfig)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Store test songs first
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
 		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
 		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 280},
 	}
-	
+
 	err = db.StoreSongs("testuser", songs)
 	if err != nil {
 		t.Fatalf("Failed to store test songs: %v", err)
 	}
-	
+
 	// Run concurrent operations
 	var wg sync.WaitGroup
 	numGoroutines := 10
 	operationsPerGoroutine := 5
-	
+
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < operationsPerGoroutine; j++ {
 				// Mix of different database operations
 				switch j % 4 {
@@ -896,10 +896,10 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 			}
 		}(i)
 	}
-	
+
 	// Wait for all goroutines to complete
 	wg.Wait()
-	
+
 	// Verify that operations completed successfully
 	allSongs, err := db.GetAllSongs("testuser")
 	if err != nil {
@@ -908,7 +908,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 	if len(allSongs) != 3 {
 		t.Errorf("Expected 3 songs after concurrent test, got %d", len(allSongs))
 	}
-	
+
 	// Check that some play events were recorded
 	totalPlayCount := 0
 	for _, song := range allSongs {
@@ -917,7 +917,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 	if totalPlayCount == 0 {
 		t.Error("Expected some play events to be recorded during concurrent test")
 	}
-	
+
 	t.Logf("Concurrent test completed successfully with %d total plays", totalPlayCount)
 }
 
@@ -931,9 +931,9 @@ func TestGetSongCount(t *testing.T) {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	userID := "testuser"
-	
+
 	// Test with no songs
 	count, err := db.GetSongCount(userID)
 	if err != nil {
@@ -942,19 +942,19 @@ func TestGetSongCount(t *testing.T) {
 	if count != 0 {
 		t.Errorf("Expected 0 songs, got %d", count)
 	}
-	
+
 	// Add some songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
 		{ID: "2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
 		{ID: "3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
 	}
-	
+
 	err = db.StoreSongs(userID, songs)
 	if err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
-	
+
 	// Test with songs
 	count, err = db.GetSongCount(userID)
 	if err != nil {
@@ -963,7 +963,7 @@ func TestGetSongCount(t *testing.T) {
 	if count != 3 {
 		t.Errorf("Expected 3 songs, got %d", count)
 	}
-	
+
 	// Test with empty user ID
 	_, err = db.GetSongCount("")
 	if err == nil {
@@ -977,9 +977,9 @@ func TestGetSongsBatch(t *testing.T) {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	userID := "testuser"
-	
+
 	// Add test songs
 	songs := []models.Song{
 		{ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
@@ -988,12 +988,12 @@ func TestGetSongsBatch(t *testing.T) {
 		{ID: "4", Title: "Song 4", Artist: "Artist 4", Album: "Album 4", Duration: 240},
 		{ID: "5", Title: "Song 5", Artist: "Artist 5", Album: "Album 5", Duration: 260},
 	}
-	
+
 	err = db.StoreSongs(userID, songs)
 	if err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
-	
+
 	// Test getting first batch
 	batch, err := db.GetSongsBatch(userID, 2, 0)
 	if err != nil {
@@ -1002,7 +1002,7 @@ func TestGetSongsBatch(t *testing.T) {
 	if len(batch) != 2 {
 		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
 	}
-	
+
 	// Test getting second batch
 	batch, err = db.GetSongsBatch(userID, 2, 2)
 	if err != nil {
@@ -1011,7 +1011,7 @@ func TestGetSongsBatch(t *testing.T) {
 	if len(batch) != 2 {
 		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
 	}
-	
+
 	// Test getting last batch (partial)
 	batch, err = db.GetSongsBatch(userID, 2, 4)
 	if err != nil {
@@ -1020,19 +1020,19 @@ func TestGetSongsBatch(t *testing.T) {
 	if len(batch) != 1 {
 		t.Errorf("Expected 1 song in batch, got %d", len(batch))
 	}
-	
+
 	// Test with empty user ID
 	_, err = db.GetSongsBatch("", 2, 0)
 	if err == nil {
 		t.Error("Expected error for empty user ID")
 	}
-	
+
 	// Test with invalid limit
 	_, err = db.GetSongsBatch(userID, 0, 0)
 	if err == nil {
 		t.Error("Expected error for zero limit")
 	}
-	
+
 	// Test with invalid offset
 	_, err = db.GetSongsBatch(userID, 2, -1)
 	if err == nil {
@@ -1046,11 +1046,11 @@ func TestGetTransitionProbabilities(t *testing.T) {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	userID := "testuser"
 	fromSongID := "song1"
 	toSongIDs := []string{"song2", "song3", "song4"}
-	
+
 	// Add some songs first
 	songs := []models.Song{
 		{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
@@ -1058,74 +1058,74 @@ func TestGetTransitionProbabilities(t *testing.T) {
 		{ID: "song3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
 		{ID: "song4", Title: "Song 4", Artist: "Artist 4", Album: "Album 4", Duration: 240},
 	}
-	
+
 	err = db.StoreSongs(userID, songs)
 	if err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
-	
+
 	// Record some transitions
 	err = db.RecordTransition(userID, fromSongID, "song2", "play")
 	if err != nil {
 		t.Fatalf("Failed to record transition: %v", err)
 	}
-	
+
 	err = db.RecordTransition(userID, fromSongID, "song3", "skip")
 	if err != nil {
 		t.Fatalf("Failed to record transition: %v", err)
 	}
-	
+
 	// Update probabilities - this is done automatically by RecordTransition
 	// so we just need to trigger it by recording multiple transitions
 	err = db.RecordTransition(userID, fromSongID, "song2", "play")
 	if err != nil {
 		t.Fatalf("Failed to record second transition: %v", err)
 	}
-	
+
 	// Test getting batch probabilities
 	probabilities, err := db.GetTransitionProbabilities(userID, fromSongID, toSongIDs)
 	if err != nil {
 		t.Fatalf("Failed to get transition probabilities: %v", err)
 	}
-	
+
 	if len(probabilities) != 3 {
 		t.Errorf("Expected 3 probabilities, got %d", len(probabilities))
 	}
-	
+
 	// Check that we got probabilities for all requested songs
 	for _, toSongID := range toSongIDs {
 		if _, exists := probabilities[toSongID]; !exists {
 			t.Errorf("Missing probability for song %s", toSongID)
 		}
 	}
-	
+
 	// song2 should have been played, so probability > 0.5
 	if probabilities["song2"] <= 0.5 {
 		t.Errorf("Expected probability > 0.5 for song2, got %f", probabilities["song2"])
 	}
-	
+
 	// song3 should have been skipped, so probability < 0.5
 	if probabilities["song3"] >= 0.5 {
 		t.Errorf("Expected probability < 0.5 for song3, got %f", probabilities["song3"])
 	}
-	
+
 	// song4 should have default probability of 0.5
 	if probabilities["song4"] != 0.5 {
 		t.Errorf("Expected probability 0.5 for song4, got %f", probabilities["song4"])
 	}
-	
+
 	// Test with empty user ID
 	_, err = db.GetTransitionProbabilities("", fromSongID, toSongIDs)
 	if err == nil {
 		t.Error("Expected error for empty user ID")
 	}
-	
+
 	// Test with empty from song ID
 	_, err = db.GetTransitionProbabilities(userID, "", toSongIDs)
 	if err == nil {
 		t.Error("Expected error for empty from song ID")
 	}
-	
+
 	// Test with empty to song IDs
 	probabilities, err = db.GetTransitionProbabilities(userID, fromSongID, []string{})
 	if err != nil {
@@ -1139,7 +1139,7 @@ func TestGetTransitionProbabilities(t *testing.T) {
 func TestHealthCheckShutdown(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	// Create database with health check enabled
 	poolConfig := &ConnectionPool{
 		MaxOpenConns:    5,
@@ -1148,26 +1148,26 @@ func TestHealthCheckShutdown(t *testing.T) {
 		ConnMaxIdleTime: 5 * time.Minute,
 		HealthCheck:     true,
 	}
-	
+
 	db, err := NewWithPool(":memory:", logger, poolConfig)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	
+
 	// Give the health check goroutine time to start
 	time.Sleep(100 * time.Millisecond)
-	
+
 	// Verify shutdown channel is initialized
 	if db.shutdownChan == nil {
 		t.Error("Shutdown channel should be initialized")
 	}
-	
+
 	// Close the database - this should signal the health check goroutine to stop
 	err = db.Close()
 	if err != nil {
 		t.Fatalf("Failed to close database: %v", err)
 	}
-	
+
 	// Verify shutdown channel is closed
 	select {
 	case <-db.shutdownChan:
@@ -1175,14 +1175,14 @@ func TestHealthCheckShutdown(t *testing.T) {
 	default:
 		t.Error("Shutdown channel should be closed after database close")
 	}
-	
+
 	// Give time for goroutine to exit
 	time.Sleep(200 * time.Millisecond)
-	
-	// Verify that the health check goroutine has stopped by checking that 
+
+	// Verify that the health check goroutine has stopped by checking that
 	// no new health checks are performed (this is implicit - if the goroutine
 	// was still running, it would continue updating statistics)
-	
+
 	// Test that calling Close() multiple times doesn't panic
 	err = db.Close()
 	if err != nil {
@@ -1193,7 +1193,7 @@ func TestHealthCheckShutdown(t *testing.T) {
 func TestHealthCheckDisabled(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	
+
 	// Create database with health check disabled
 	poolConfig := &ConnectionPool{
 		MaxOpenConns:    5,
@@ -1202,18 +1202,18 @@ func TestHealthCheckDisabled(t *testing.T) {
 		ConnMaxIdleTime: 5 * time.Minute,
 		HealthCheck:     false,
 	}
-	
+
 	db, err := NewWithPool(":memory:", logger, poolConfig)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Verify shutdown channel is still initialized even when health check is disabled
 	if db.shutdownChan == nil {
 		t.Error("Shutdown channel should be initialized even when health check is disabled")
 	}
-	
+
 	// Close should work normally
 	err = db.Close()
 	if err != nil {
@@ -1387,7 +1387,7 @@ func TestDifferentialSyncWorkflow(t *testing.T) {
 	defer db.Close()
 
 	userID := "testuser"
-	
+
 	// Initial sync with 4 songs
 	initialSongs := []models.Song{
 		{ID: "song1", Title: "Test Song 1", Artist: "Test Artist", Album: "Test Album", Duration: 180},
@@ -1414,8 +1414,8 @@ func TestDifferentialSyncWorkflow(t *testing.T) {
 	// Simulate differential sync: songs 2 and 3 removed, song 5 added, song 1 and 4 remain
 	upstreamSongs := []models.Song{
 		{ID: "song1", Title: "Test Song 1 Updated", Artist: "Test Artist", Album: "Test Album", Duration: 180}, // Updated title
-		{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 240},          // Unchanged
-		{ID: "song5", Title: "Test Song 5", Artist: "Test Artist", Album: "Test Album", Duration: 260},          // New song
+		{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 240},         // Unchanged
+		{ID: "song5", Title: "Test Song 5", Artist: "Test Artist", Album: "Test Album", Duration: 260},         // New song
 	}
 
 	// Step 1: Get existing song IDs
@@ -1885,7 +1885,7 @@ func TestSQLInjectionResistance(t *testing.T) {
 
 	// Test with potential SQL injection in user ID
 	maliciousUserID := "'; DROP TABLE songs; --"
-	
+
 	// These operations should not cause SQL injection
 	_, err = db.GetAllSongs(maliciousUserID)
 	if err != nil && !strings.Contains(err.Error(), "validation") {

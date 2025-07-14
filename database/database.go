@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	_ "github.com/mattn/go-sqlite3"
-	
+	"github.com/sirupsen/logrus"
+
 	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/models"
 )
@@ -26,7 +26,7 @@ const (
 // Database operation constants
 const (
 	DefaultTransitionProbability = 0.5
-	DefaultDateString           = "1970-01-01"
+	DefaultDateString            = "1970-01-01"
 )
 
 type DB struct {
@@ -50,13 +50,13 @@ type ConnectionPool struct {
 
 // ConnectionStats tracks connection pool statistics
 type ConnectionStats struct {
-	OpenConnections int
-	IdleConnections int
-	ConnectionsInUse int
-	TotalConnections int
+	OpenConnections   int
+	IdleConnections   int
+	ConnectionsInUse  int
+	TotalConnections  int
 	FailedConnections int
-	HealthChecks     int
-	LastHealthCheck  time.Time
+	HealthChecks      int
+	LastHealthCheck   time.Time
 }
 
 func New(dbPath string, logger *logrus.Logger) (*DB, error) {
@@ -317,25 +317,25 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	for rows.Next() {
 		var song models.Song
 		var lastPlayedStr string
-		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, 
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
 			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount)
 		if err != nil {
 			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song")
 			continue
 		}
-		
+
 		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
 		}
-		
+
 		songs = append(songs, song)
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song iteration").
 			WithContext("userID", userID)
 	}
-	
+
 	return songs, nil
 }
 
@@ -385,7 +385,7 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 	for rows.Next() {
 		var song models.Song
 		var lastPlayedStr string
-		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, 
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
 			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
@@ -395,21 +395,21 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 			}).Error("Failed to scan song in batch")
 			continue
 		}
-		
+
 		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
 		}
-		
+
 		songs = append(songs, song)
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song batch iteration").
 			WithContext("userID", userID).
 			WithContext("limit", limit).
 			WithContext("offset", offset)
 	}
-	
+
 	return songs, nil
 }
 
@@ -489,10 +489,10 @@ func (db *DB) DeleteSongs(userID string, songIDs []string) error {
 	}
 
 	db.logger.WithFields(logrus.Fields{
-		"userID":      userID,
-		"deleted":     len(songIDs) - len(failedSongs),
-		"failed":      len(failedSongs),
-		"total":       len(songIDs),
+		"userID":  userID,
+		"deleted": len(songIDs) - len(failedSongs),
+		"failed":  len(failedSongs),
+		"total":   len(songIDs),
 	}).Info("Completed song deletion")
 
 	return nil
@@ -510,7 +510,7 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 	}
 
 	now := time.Now()
-	
+
 	// Use a transaction to ensure atomicity
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -613,7 +613,7 @@ func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (flo
 	var probability float64
 	err := db.conn.QueryRow(`SELECT COALESCE(probability, 0.5) FROM song_transitions 
 		WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?`, userID, fromSongID, toSongID).Scan(&probability)
-	
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return DefaultTransitionProbability, nil // Default probability when no transition data exists
@@ -623,7 +623,7 @@ func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (flo
 			WithContext("from_song_id", fromSongID).
 			WithContext("to_song_id", toSongID)
 	}
-	
+
 	return probability, nil
 }
 
@@ -644,17 +644,17 @@ func (db *DB) GetTransitionProbabilities(userID, fromSongID string, toSongIDs []
 	placeholders := make([]string, len(toSongIDs))
 	args := make([]interface{}, 0, len(toSongIDs)+2)
 	args = append(args, userID, fromSongID)
-	
+
 	for i, toSongID := range toSongIDs {
 		placeholders[i] = "?"
 		args = append(args, toSongID)
 	}
-	
+
 	query := `SELECT to_song_id, COALESCE(probability, 0.5) as probability 
 		FROM song_transitions 
-		WHERE user_id = ? AND from_song_id = ? AND to_song_id IN (` + 
+		WHERE user_id = ? AND from_song_id = ? AND to_song_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	
+
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probabilities").
@@ -726,9 +726,9 @@ func (db *DB) performHealthCheck() {
 	db.pool.stats.TotalConnections = int(stats.MaxOpenConnections)
 
 	db.logger.WithFields(logrus.Fields{
-		"open_connections": stats.OpenConnections,
-		"idle_connections": stats.Idle,
-		"connections_in_use": stats.InUse,
+		"open_connections":     stats.OpenConnections,
+		"idle_connections":     stats.Idle,
+		"connections_in_use":   stats.InUse,
 		"max_open_connections": stats.MaxOpenConnections,
 	}).Debug("Database health check completed")
 }
@@ -781,11 +781,11 @@ func (db *DB) UpdatePoolConfig(config *ConnectionPool) error {
 	db.pool.HealthCheck = config.HealthCheck
 
 	db.logger.WithFields(logrus.Fields{
-		"max_open_conns": config.MaxOpenConns,
-		"max_idle_conns": config.MaxIdleConns,
-		"conn_max_lifetime": config.ConnMaxLifetime,
+		"max_open_conns":     config.MaxOpenConns,
+		"max_idle_conns":     config.MaxIdleConns,
+		"conn_max_lifetime":  config.ConnMaxLifetime,
 		"conn_max_idle_time": config.ConnMaxIdleTime,
-		"health_check": config.HealthCheck,
+		"health_check":       config.HealthCheck,
 	}).Info("Database connection pool configuration updated")
 
 	return nil

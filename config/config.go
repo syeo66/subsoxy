@@ -32,36 +32,36 @@ const (
 	DefaultCORSAllowCredentials = false
 	DefaultDirPermissions       = 0755
 	// Security headers
-	DefaultSecurityHeadersEnabled    = true
-	DefaultSecurityDevMode          = false
-	DefaultXContentTypeOptions      = "nosniff"
-	DefaultXFrameOptions            = "DENY"
-	DefaultXXSSProtection           = "1; mode=block"
-	DefaultStrictTransportSecurity  = "max-age=31536000; includeSubDomains"
-	DefaultContentSecurityPolicy    = "default-src 'self'; script-src 'self'; object-src 'none';"
-	DefaultReferrerPolicy           = "strict-origin-when-cross-origin"
+	DefaultSecurityHeadersEnabled  = true
+	DefaultSecurityDevMode         = false
+	DefaultXContentTypeOptions     = "nosniff"
+	DefaultXFrameOptions           = "DENY"
+	DefaultXXSSProtection          = "1; mode=block"
+	DefaultStrictTransportSecurity = "max-age=31536000; includeSubDomains"
+	DefaultContentSecurityPolicy   = "default-src 'self'; script-src 'self'; object-src 'none';"
+	DefaultReferrerPolicy          = "strict-origin-when-cross-origin"
 )
 
 // Validation limits
 const (
-	MinPortNumber       = 1
-	MaxPortNumber       = 65535
-	MinRateLimitRPS     = 1
-	MinRateLimitBurst   = 1
-	MinDBMaxOpenConns   = 1
-	MinDBMaxIdleConns   = 0
-	MinDBConnLifetime   = 0
-	MinDBConnIdleTime   = 0
+	MinPortNumber     = 1
+	MaxPortNumber     = 65535
+	MinRateLimitRPS   = 1
+	MinRateLimitBurst = 1
+	MinDBMaxOpenConns = 1
+	MinDBMaxIdleConns = 0
+	MinDBConnLifetime = 0
+	MinDBConnIdleTime = 0
 )
 
 type Config struct {
-	ProxyPort         string
-	UpstreamURL       string
-	LogLevel          string
-	DatabasePath      string
-	RateLimitRPS      int
-	RateLimitBurst    int
-	RateLimitEnabled  bool
+	ProxyPort        string
+	UpstreamURL      string
+	LogLevel         string
+	DatabasePath     string
+	RateLimitRPS     int
+	RateLimitBurst   int
+	RateLimitEnabled bool
 	// Database connection pool settings
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
@@ -69,20 +69,20 @@ type Config struct {
 	DBConnMaxIdleTime time.Duration
 	DBHealthCheck     bool
 	// CORS settings
-	CORSEnabled       bool
-	CORSAllowOrigins  []string
-	CORSAllowMethods  []string
-	CORSAllowHeaders  []string
+	CORSEnabled          bool
+	CORSAllowOrigins     []string
+	CORSAllowMethods     []string
+	CORSAllowHeaders     []string
 	CORSAllowCredentials bool
 	// Security headers settings
-	SecurityHeadersEnabled    bool
-	SecurityDevMode          bool
-	XContentTypeOptions      string
-	XFrameOptions            string
-	XXSSProtection           string
-	StrictTransportSecurity  string
-	ContentSecurityPolicy    string
-	ReferrerPolicy           string
+	SecurityHeadersEnabled  bool
+	SecurityDevMode         bool
+	XContentTypeOptions     string
+	XFrameOptions           string
+	XXSSProtection          string
+	StrictTransportSecurity string
+	ContentSecurityPolicy   string
+	ReferrerPolicy          string
 }
 
 func New() (*Config, error) {
@@ -101,13 +101,13 @@ func New() (*Config, error) {
 		dbConnMaxIdleTime = flag.Duration("db-conn-max-idle-time", getEnvDurationOrDefault("DB_CONN_MAX_IDLE_TIME", DefaultDBConnMaxIdleTime), "Maximum connection idle time")
 		dbHealthCheck     = flag.Bool("db-health-check", getEnvBoolOrDefault("DB_HEALTH_CHECK", DefaultDBHealthCheck), "Enable database health checks")
 		// CORS flags
-		corsEnabled       = flag.Bool("cors-enabled", getEnvBoolOrDefault("CORS_ENABLED", DefaultCORSEnabled), "Enable CORS headers")
-		corsAllowOrigins  = flag.String("cors-allow-origins", getEnvOrDefault("CORS_ALLOW_ORIGINS", DefaultCORSAllowOrigins), "CORS allowed origins (comma-separated)")
-		corsAllowMethods  = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", DefaultCORSAllowMethods), "CORS allowed methods (comma-separated)")
-		corsAllowHeaders  = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", DefaultCORSAllowHeaders), "CORS allowed headers (comma-separated)")
+		corsEnabled          = flag.Bool("cors-enabled", getEnvBoolOrDefault("CORS_ENABLED", DefaultCORSEnabled), "Enable CORS headers")
+		corsAllowOrigins     = flag.String("cors-allow-origins", getEnvOrDefault("CORS_ALLOW_ORIGINS", DefaultCORSAllowOrigins), "CORS allowed origins (comma-separated)")
+		corsAllowMethods     = flag.String("cors-allow-methods", getEnvOrDefault("CORS_ALLOW_METHODS", DefaultCORSAllowMethods), "CORS allowed methods (comma-separated)")
+		corsAllowHeaders     = flag.String("cors-allow-headers", getEnvOrDefault("CORS_ALLOW_HEADERS", DefaultCORSAllowHeaders), "CORS allowed headers (comma-separated)")
 		corsAllowCredentials = flag.Bool("cors-allow-credentials", getEnvBoolOrDefault("CORS_ALLOW_CREDENTIALS", DefaultCORSAllowCredentials), "CORS allow credentials")
 		// Security headers flags
-		securityHeadersEnabled   = flag.Bool("security-headers-enabled", getEnvBoolOrDefault("SECURITY_HEADERS_ENABLED", DefaultSecurityHeadersEnabled), "Enable security headers")
+		securityHeadersEnabled  = flag.Bool("security-headers-enabled", getEnvBoolOrDefault("SECURITY_HEADERS_ENABLED", DefaultSecurityHeadersEnabled), "Enable security headers")
 		securityDevMode         = flag.Bool("security-dev-mode", getEnvBoolOrDefault("SECURITY_DEV_MODE", DefaultSecurityDevMode), "Enable development mode (relaxed security headers for localhost)")
 		xContentTypeOptions     = flag.String("x-content-type-options", getEnvOrDefault("X_CONTENT_TYPE_OPTIONS", DefaultXContentTypeOptions), "X-Content-Type-Options header value")
 		xFrameOptions           = flag.String("x-frame-options", getEnvOrDefault("X_FRAME_OPTIONS", DefaultXFrameOptions), "X-Frame-Options header value")
@@ -119,24 +119,24 @@ func New() (*Config, error) {
 	flag.Parse()
 
 	config := &Config{
-		ProxyPort:         *port,
-		UpstreamURL:       *upstream,
-		LogLevel:          *logLevel,
-		DatabasePath:      *dbPath,
-		RateLimitRPS:      *rateLimitRPS,
-		RateLimitBurst:    *rateLimitBurst,
-		RateLimitEnabled:  *rateLimitEnabled,
-		DBMaxOpenConns:    *dbMaxOpenConns,
-		DBMaxIdleConns:    *dbMaxIdleConns,
-		DBConnMaxLifetime: *dbConnMaxLifetime,
-		DBConnMaxIdleTime: *dbConnMaxIdleTime,
-		DBHealthCheck:     *dbHealthCheck,
-		CORSEnabled:       *corsEnabled,
-		CORSAllowOrigins:  parseCommaSeparatedString(*corsAllowOrigins),
-		CORSAllowMethods:  parseCommaSeparatedString(*corsAllowMethods),
-		CORSAllowHeaders:  parseCommaSeparatedString(*corsAllowHeaders),
-		CORSAllowCredentials: *corsAllowCredentials,
-		SecurityHeadersEnabled:   *securityHeadersEnabled,
+		ProxyPort:               *port,
+		UpstreamURL:             *upstream,
+		LogLevel:                *logLevel,
+		DatabasePath:            *dbPath,
+		RateLimitRPS:            *rateLimitRPS,
+		RateLimitBurst:          *rateLimitBurst,
+		RateLimitEnabled:        *rateLimitEnabled,
+		DBMaxOpenConns:          *dbMaxOpenConns,
+		DBMaxIdleConns:          *dbMaxIdleConns,
+		DBConnMaxLifetime:       *dbConnMaxLifetime,
+		DBConnMaxIdleTime:       *dbConnMaxIdleTime,
+		DBHealthCheck:           *dbHealthCheck,
+		CORSEnabled:             *corsEnabled,
+		CORSAllowOrigins:        parseCommaSeparatedString(*corsAllowOrigins),
+		CORSAllowMethods:        parseCommaSeparatedString(*corsAllowMethods),
+		CORSAllowHeaders:        parseCommaSeparatedString(*corsAllowHeaders),
+		CORSAllowCredentials:    *corsAllowCredentials,
+		SecurityHeadersEnabled:  *securityHeadersEnabled,
 		SecurityDevMode:         *securityDevMode,
 		XContentTypeOptions:     *xContentTypeOptions,
 		XFrameOptions:           *xFrameOptions,
@@ -158,35 +158,35 @@ func (c *Config) Validate() error {
 	if err := c.validatePort(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateUpstreamURL(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateLogLevel(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateDatabasePath(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateRateLimit(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateDatabasePool(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateCORS(); err != nil {
 		return err
 	}
-	
+
 	if err := c.validateSecurityHeaders(); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -194,18 +194,18 @@ func (c *Config) validatePort() error {
 	if c.ProxyPort == "" {
 		return errors.ErrInvalidPort.WithContext("port", c.ProxyPort)
 	}
-	
+
 	port, err := strconv.Atoi(c.ProxyPort)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryConfig, "INVALID_PORT", "port must be a number").
 			WithContext("port", c.ProxyPort)
 	}
-	
+
 	if port < MinPortNumber || port > MaxPortNumber {
 		return errors.ErrInvalidPort.WithContext("port", c.ProxyPort).
 			WithContext("range", "1-65535")
 	}
-	
+
 	return nil
 }
 
@@ -213,24 +213,24 @@ func (c *Config) validateUpstreamURL() error {
 	if c.UpstreamURL == "" {
 		return errors.ErrInvalidUpstreamURL.WithContext("url", c.UpstreamURL)
 	}
-	
+
 	parsedURL, err := url.Parse(c.UpstreamURL)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryConfig, "INVALID_UPSTREAM_URL", "invalid upstream URL format").
 			WithContext("url", c.UpstreamURL)
 	}
-	
+
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return errors.ErrInvalidUpstreamURL.WithContext("url", c.UpstreamURL).
 			WithContext("scheme", parsedURL.Scheme).
 			WithContext("allowed_schemes", []string{"http", "https"})
 	}
-	
+
 	if parsedURL.Host == "" {
 		return errors.ErrInvalidUpstreamURL.WithContext("url", c.UpstreamURL).
 			WithContext("reason", "missing host")
 	}
-	
+
 	return nil
 }
 
@@ -238,16 +238,16 @@ func (c *Config) validateLogLevel() error {
 	if c.LogLevel == "" {
 		return errors.ErrInvalidLogLevel.WithContext("level", c.LogLevel)
 	}
-	
+
 	validLevels := []string{"debug", "info", "warn", "error"}
 	level := strings.ToLower(c.LogLevel)
-	
+
 	for _, validLevel := range validLevels {
 		if level == validLevel {
 			return nil
 		}
 	}
-	
+
 	return errors.ErrInvalidLogLevel.WithContext("level", c.LogLevel).
 		WithContext("valid_levels", validLevels)
 }
@@ -256,7 +256,7 @@ func (c *Config) validateDatabasePath() error {
 	if c.DatabasePath == "" {
 		return errors.ErrInvalidDatabasePath.WithContext("path", c.DatabasePath)
 	}
-	
+
 	// Check if the directory exists (create if it doesn't exist)
 	if strings.Contains(c.DatabasePath, "/") {
 		dir := c.DatabasePath[:strings.LastIndex(c.DatabasePath, "/")]
@@ -270,7 +270,7 @@ func (c *Config) validateDatabasePath() error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -279,18 +279,18 @@ func (c *Config) validateRateLimit() error {
 		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_RPS", "rate limit RPS must be at least 1").
 			WithContext("rps", c.RateLimitRPS)
 	}
-	
+
 	if c.RateLimitBurst < MinRateLimitBurst {
 		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_BURST", "rate limit burst must be at least 1").
 			WithContext("burst", c.RateLimitBurst)
 	}
-	
+
 	if c.RateLimitBurst < c.RateLimitRPS {
 		return errors.New(errors.CategoryConfig, "INVALID_RATE_LIMIT_BURST", "rate limit burst must be at least equal to RPS").
 			WithContext("burst", c.RateLimitBurst).
 			WithContext("rps", c.RateLimitRPS)
 	}
-	
+
 	return nil
 }
 
@@ -365,28 +365,28 @@ func (c *Config) validateDatabasePool() error {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_OPEN_CONNS", "database max open connections must be at least 1").
 			WithContext("db_max_open_conns", c.DBMaxOpenConns)
 	}
-	
+
 	if c.DBMaxIdleConns < MinDBMaxIdleConns {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_IDLE_CONNS", "database max idle connections cannot be negative").
 			WithContext("db_max_idle_conns", c.DBMaxIdleConns)
 	}
-	
+
 	if c.DBMaxIdleConns > c.DBMaxOpenConns {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_MAX_IDLE_CONNS", "database max idle connections cannot exceed max open connections").
 			WithContext("db_max_idle_conns", c.DBMaxIdleConns).
 			WithContext("db_max_open_conns", c.DBMaxOpenConns)
 	}
-	
+
 	if c.DBConnMaxLifetime < MinDBConnLifetime {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_LIFETIME", "database connection max lifetime cannot be negative").
 			WithContext("db_conn_max_lifetime", c.DBConnMaxLifetime)
 	}
-	
+
 	if c.DBConnMaxIdleTime < MinDBConnIdleTime {
 		return errors.New(errors.CategoryConfig, "INVALID_DB_CONN_MAX_IDLE_TIME", "database connection max idle time cannot be negative").
 			WithContext("db_conn_max_idle_time", c.DBConnMaxIdleTime)
 	}
-	
+
 	return nil
 }
 
@@ -395,25 +395,25 @@ func (c *Config) validateCORS() error {
 	if !c.CORSEnabled {
 		return nil
 	}
-	
+
 	// Validate origins - empty list is invalid if CORS is enabled
 	if len(c.CORSAllowOrigins) == 0 {
 		return errors.New(errors.CategoryConfig, "INVALID_CORS_ORIGINS", "CORS origins cannot be empty when CORS is enabled").
 			WithContext("cors_enabled", c.CORSEnabled)
 	}
-	
+
 	// Validate methods - must have at least one method
 	if len(c.CORSAllowMethods) == 0 {
 		return errors.New(errors.CategoryConfig, "INVALID_CORS_METHODS", "CORS methods cannot be empty when CORS is enabled").
 			WithContext("cors_enabled", c.CORSEnabled)
 	}
-	
+
 	// Validate that methods are reasonable HTTP methods
 	validMethods := map[string]bool{
-		"GET": true, "POST": true, "PUT": true, "DELETE": true, 
+		"GET": true, "POST": true, "PUT": true, "DELETE": true,
 		"OPTIONS": true, "HEAD": true, "PATCH": true,
 	}
-	
+
 	for _, method := range c.CORSAllowMethods {
 		upperMethod := strings.ToUpper(method)
 		if !validMethods[upperMethod] {
@@ -422,12 +422,12 @@ func (c *Config) validateCORS() error {
 				WithContext("valid_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"})
 		}
 	}
-	
+
 	// Validate headers - empty list is allowed
 	if len(c.CORSAllowHeaders) == 0 {
 		// Headers can be empty, that's fine
 	}
-	
+
 	return nil
 }
 
@@ -436,13 +436,13 @@ func (c *Config) validateSecurityHeaders() error {
 	if !c.SecurityHeadersEnabled {
 		return nil
 	}
-	
+
 	// Validate X-Content-Type-Options
 	if c.XContentTypeOptions != "" && c.XContentTypeOptions != "nosniff" {
 		return errors.New(errors.CategoryConfig, "INVALID_X_CONTENT_TYPE_OPTIONS", "X-Content-Type-Options must be 'nosniff' or empty").
 			WithContext("x_content_type_options", c.XContentTypeOptions)
 	}
-	
+
 	// Validate X-Frame-Options
 	validFrameOptions := []string{"DENY", "SAMEORIGIN"}
 	if c.XFrameOptions != "" {
@@ -459,7 +459,7 @@ func (c *Config) validateSecurityHeaders() error {
 				WithContext("valid_options", validFrameOptions)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -471,11 +471,11 @@ func (c *Config) IsDevMode() bool {
 	if c.SecurityDevMode {
 		return true
 	}
-	
+
 	// Check if running on default development port
 	if c.ProxyPort == DefaultProxyPort {
 		return true
 	}
-	
+
 	return false
 }

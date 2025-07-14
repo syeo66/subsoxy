@@ -41,17 +41,17 @@ func (e *SubsoxyError) Is(target error) bool {
 	if target == nil {
 		return false
 	}
-	
+
 	// Check if target is a SubsoxyError with matching category and code
 	if targetErr, ok := target.(*SubsoxyError); ok {
 		return e.Category == targetErr.Category && e.Code == targetErr.Code
 	}
-	
+
 	// Check if the underlying cause matches
 	if e.Cause != nil {
 		return errors.Is(e.Cause, target)
 	}
-	
+
 	return false
 }
 
@@ -60,18 +60,18 @@ func (e *SubsoxyError) As(target interface{}) bool {
 	if target == nil {
 		return false
 	}
-	
+
 	// Check if target is a pointer to SubsoxyError
 	if targetPtr, ok := target.(**SubsoxyError); ok {
 		*targetPtr = e
 		return true
 	}
-	
+
 	// Delegate to underlying cause if it exists
 	if e.Cause != nil {
 		return errors.As(e.Cause, target)
 	}
-	
+
 	return false
 }
 
@@ -106,9 +106,9 @@ func Wrap(err error, category, code, message string) *SubsoxyError {
 
 // Config errors
 var (
-	ErrInvalidPort        = New(CategoryConfig, "INVALID_PORT", "invalid port number")
-	ErrInvalidUpstreamURL = New(CategoryConfig, "INVALID_UPSTREAM_URL", "invalid upstream URL")
-	ErrInvalidLogLevel    = New(CategoryConfig, "INVALID_LOG_LEVEL", "invalid log level")
+	ErrInvalidPort         = New(CategoryConfig, "INVALID_PORT", "invalid port number")
+	ErrInvalidUpstreamURL  = New(CategoryConfig, "INVALID_UPSTREAM_URL", "invalid upstream URL")
+	ErrInvalidLogLevel     = New(CategoryConfig, "INVALID_LOG_LEVEL", "invalid log level")
 	ErrInvalidDatabasePath = New(CategoryConfig, "INVALID_DATABASE_PATH", "invalid database path")
 )
 
@@ -123,10 +123,10 @@ var (
 
 // Credentials errors
 var (
-	ErrInvalidCredentials = New(CategoryCredentials, "INVALID_CREDENTIALS", "invalid credentials")
+	ErrInvalidCredentials    = New(CategoryCredentials, "INVALID_CREDENTIALS", "invalid credentials")
 	ErrCredentialsValidation = New(CategoryCredentials, "VALIDATION_FAILED", "credential validation failed")
-	ErrNoValidCredentials = New(CategoryCredentials, "NO_VALID_CREDENTIALS", "no valid credentials available")
-	ErrUpstreamAuth       = New(CategoryCredentials, "UPSTREAM_AUTH_FAILED", "upstream authentication failed")
+	ErrNoValidCredentials    = New(CategoryCredentials, "NO_VALID_CREDENTIALS", "no valid credentials available")
+	ErrUpstreamAuth          = New(CategoryCredentials, "UPSTREAM_AUTH_FAILED", "upstream authentication failed")
 )
 
 // Server errors

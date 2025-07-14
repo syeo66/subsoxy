@@ -40,7 +40,7 @@ func (s *SecurityHeaders) Handler(next http.Handler) http.Handler {
 
 		// Check if we're in development mode
 		isDevMode := s.isDevModeRequest(r)
-		
+
 		if isDevMode {
 			s.logger.Debug("Applying development mode security headers")
 			s.addDevelopmentHeaders(w)
@@ -63,7 +63,7 @@ func (s *SecurityHeaders) isDevModeRequest(r *http.Request) bool {
 	// Check if request is coming from localhost
 	host := r.Host
 	remoteAddr := r.RemoteAddr
-	
+
 	// Extract just the host part (remove port if present)
 	// Handle IPv6 addresses in brackets like [::1]:8080
 	if strings.HasPrefix(host, "[") {
@@ -73,7 +73,7 @@ func (s *SecurityHeaders) isDevModeRequest(r *http.Request) bool {
 	} else if colonIndex := strings.LastIndex(host, ":"); colonIndex != -1 {
 		host = host[:colonIndex]
 	}
-	
+
 	// Check for localhost patterns
 	localhostPatterns := []string{
 		"localhost",
@@ -81,13 +81,13 @@ func (s *SecurityHeaders) isDevModeRequest(r *http.Request) bool {
 		"::1",
 		"0.0.0.0",
 	}
-	
+
 	for _, pattern := range localhostPatterns {
 		if host == pattern || strings.HasPrefix(remoteAddr, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -163,6 +163,6 @@ func (s *SecurityHeaders) addProductionHeaders(w http.ResponseWriter) {
 func (s *SecurityHeaders) isHTTPS() bool {
 	// Simple heuristic: check if we're running on standard HTTPS port
 	// In a production environment, this could be enhanced with TLS detection
-	return strings.Contains(s.config.ProxyPort, "443") || 
-		   strings.Contains(s.config.UpstreamURL, "https://")
+	return strings.Contains(s.config.ProxyPort, "443") ||
+		strings.Contains(s.config.UpstreamURL, "https://")
 }

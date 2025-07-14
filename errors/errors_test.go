@@ -13,13 +13,13 @@ func TestSubsoxyError(t *testing.T) {
 		expected string
 	}{
 		{
-			name: "Error without cause",
-			err:  New(CategoryConfig, "TEST_CODE", "test message"),
+			name:     "Error without cause",
+			err:      New(CategoryConfig, "TEST_CODE", "test message"),
 			expected: "[config:TEST_CODE] test message",
 		},
 		{
-			name: "Error with cause",
-			err:  Wrap(fmt.Errorf("original error"), CategoryDatabase, "TEST_CODE", "test message"),
+			name:     "Error with cause",
+			err:      Wrap(fmt.Errorf("original error"), CategoryDatabase, "TEST_CODE", "test message"),
 			expected: "[database:TEST_CODE] test message: original error",
 		},
 	}
@@ -137,20 +137,20 @@ func TestErrorIs(t *testing.T) {
 	baseErr := New(CategoryConfig, "TEST_CODE", "test message")
 	sameErr := New(CategoryConfig, "TEST_CODE", "different message")
 	differentErr := New(CategoryConfig, "DIFFERENT_CODE", "test message")
-	
+
 	// Test Is() method
 	if !Is(baseErr, sameErr) {
 		t.Error("Expected Is() to return true for same category and code")
 	}
-	
+
 	if Is(baseErr, differentErr) {
 		t.Error("Expected Is() to return false for different code")
 	}
-	
+
 	// Test with wrapped errors
 	originalErr := errors.New("original")
 	wrappedErr := Wrap(originalErr, CategoryDatabase, "WRAP_CODE", "wrapped")
-	
+
 	if !Is(wrappedErr, originalErr) {
 		t.Error("Expected Is() to find original error in wrapped error")
 	}
@@ -159,29 +159,29 @@ func TestErrorIs(t *testing.T) {
 func TestErrorAs(t *testing.T) {
 	baseErr := New(CategoryConfig, "TEST_CODE", "test message")
 	baseErr.WithContext("key", "value")
-	
+
 	// Test As() method
 	var subsoxyErr *SubsoxyError
 	if !As(baseErr, &subsoxyErr) {
 		t.Error("Expected As() to return true for SubsoxyError")
 	}
-	
+
 	if subsoxyErr.Code != "TEST_CODE" {
 		t.Errorf("Expected code TEST_CODE, got %s", subsoxyErr.Code)
 	}
-	
+
 	if subsoxyErr.Context["key"] != "value" {
 		t.Errorf("Expected context value, got %v", subsoxyErr.Context["key"])
 	}
-	
+
 	// Test with wrapped errors
 	originalErr := fmt.Errorf("original error")
 	wrappedErr := Wrap(originalErr, CategoryDatabase, "WRAP_CODE", "wrapped")
-	
+
 	if !As(wrappedErr, &subsoxyErr) {
 		t.Error("Expected As() to return true for wrapped SubsoxyError")
 	}
-	
+
 	if subsoxyErr.Code != "WRAP_CODE" {
 		t.Errorf("Expected code WRAP_CODE, got %s", subsoxyErr.Code)
 	}
@@ -190,36 +190,36 @@ func TestErrorAs(t *testing.T) {
 func TestHelperFunctions(t *testing.T) {
 	baseErr := New(CategoryConfig, "TEST_CODE", "test message")
 	baseErr.WithContext("key", "value")
-	
+
 	// Test IsCategory
 	if !IsCategory(baseErr, CategoryConfig) {
 		t.Error("Expected IsCategory to return true")
 	}
-	
+
 	if IsCategory(baseErr, CategoryDatabase) {
 		t.Error("Expected IsCategory to return false")
 	}
-	
+
 	// Test GetErrorCode
 	if GetErrorCode(baseErr) != "TEST_CODE" {
 		t.Errorf("Expected code TEST_CODE, got %s", GetErrorCode(baseErr))
 	}
-	
+
 	// Test GetErrorContext
 	ctx := GetErrorContext(baseErr)
 	if ctx == nil {
 		t.Error("Expected context to be non-nil")
 	}
-	
+
 	if ctx["key"] != "value" {
 		t.Errorf("Expected context value, got %v", ctx["key"])
 	}
-	
+
 	// Test IsCode
 	if !IsCode(baseErr, "TEST_CODE") {
 		t.Error("Expected IsCode to return true")
 	}
-	
+
 	if IsCode(baseErr, "DIFFERENT_CODE") {
 		t.Error("Expected IsCode to return false")
 	}
@@ -230,25 +230,25 @@ func TestErrorChains(t *testing.T) {
 	rootErr := errors.New("root cause")
 	middleErr := Wrap(rootErr, CategoryDatabase, "MIDDLE_CODE", "middle error")
 	topErr := Wrap(middleErr, CategoryServer, "TOP_CODE", "top error")
-	
+
 	// Test HasCategory
 	if !HasCategory(topErr, CategoryDatabase) {
 		t.Error("Expected HasCategory to find database category in chain")
 	}
-	
+
 	if !HasCategory(topErr, CategoryServer) {
 		t.Error("Expected HasCategory to find server category in chain")
 	}
-	
+
 	if HasCategory(topErr, CategoryConfig) {
 		t.Error("Expected HasCategory to not find config category in chain")
 	}
-	
+
 	// Test GetRootCause
 	if GetRootCause(topErr) != rootErr {
 		t.Error("Expected GetRootCause to return root error")
 	}
-	
+
 	// Test with non-wrapped error
 	singleErr := New(CategoryConfig, "SINGLE_CODE", "single error")
 	if GetRootCause(singleErr) != singleErr {
@@ -261,18 +261,18 @@ func TestErrorChainsWithStandardErrors(t *testing.T) {
 	stdErr := fmt.Errorf("standard error")
 	wrappedStdErr := fmt.Errorf("wrapped: %w", stdErr)
 	subsoxyErr := Wrap(wrappedStdErr, CategoryNetwork, "NETWORK_CODE", "network error")
-	
+
 	// Test that we can still find the original standard error
 	if !Is(subsoxyErr, stdErr) {
 		t.Error("Expected Is() to find standard error in chain")
 	}
-	
+
 	// Test As() with different SubsoxyError
 	var targetErr *SubsoxyError
 	if !As(subsoxyErr, &targetErr) {
 		t.Error("Expected As() to return true for SubsoxyError")
 	}
-	
+
 	if targetErr.Code != "NETWORK_CODE" {
 		t.Errorf("Expected code NETWORK_CODE, got %s", targetErr.Code)
 	}

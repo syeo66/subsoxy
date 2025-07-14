@@ -7,14 +7,14 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
-	
+
 	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
 const (
 	MaxSongIDLength = 255
-	MaxInputLength = 1000
+	MaxInputLength  = 1000
 )
 
 // Shuffle constants
@@ -51,12 +51,12 @@ func SanitizeForLogging(input string) string {
 		}
 		return r
 	}, input)
-	
+
 	// Limit length to prevent resource exhaustion
 	if len(sanitized) > MaxInputLength {
 		sanitized = sanitized[:MaxInputLength] + "..."
 	}
-	
+
 	return sanitized
 }
 
@@ -104,14 +104,14 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 			return true
 		}
 	}
-	
+
 	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size)
 	if err != nil {
 		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
 	}
-	
+
 	response := map[string]interface{}{
 		"subsonic-response": map[string]interface{}{
 			"status":  "ok",
@@ -121,7 +121,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 			},
 		},
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
@@ -132,13 +132,13 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
 	}
-	
+
 	h.logger.WithFields(logrus.Fields{
-		"size": size,
+		"size":     size,
 		"returned": len(songs),
-		"userID": SanitizeForLogging(userID),
+		"userID":   SanitizeForLogging(userID),
 	}).Info("Served weighted shuffle request")
-	
+
 	return true
 }
 
@@ -155,13 +155,13 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string)) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
-	
+
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
 			Warn("Stream request missing user ID")
 		return false
 	}
-	
+
 	if songID != "" {
 		if err := ValidateSongID(songID); err != nil {
 			h.logger.WithError(err).Warn("Invalid song ID in stream request")
@@ -183,27 +183,27 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 	submission := r.URL.Query().Get("submission")
-	
+
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
 			Warn("Scrobble request missing user ID")
 		return false
 	}
-	
+
 	if songID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Scrobble request missing song ID")
 		return false
 	}
-	
+
 	if err := ValidateSongID(songID); err != nil {
 		h.logger.WithError(err).Warn("Invalid song ID in scrobble request")
 		return false
 	}
-	
+
 	sanitizedSongID := SanitizeForLogging(songID)
 	sanitizedUserID := SanitizeForLogging(userID)
-	
+
 	if submission == "true" {
 		recordFunc(userID, songID, "play", nil)
 		setLastPlayed(userID, songID)
@@ -218,7 +218,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 			"song_id": sanitizedSongID,
 			"user_id": sanitizedUserID,
 		}).Debug("Recorded skip event")
-		
+
 		if submission == "" {
 			h.logger.WithFields(logrus.Fields{
 				"song_id": sanitizedSongID,
@@ -226,6 +226,6 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 			}).Debug("Scrobble request missing submission parameter, treating as skip")
 		}
 	}
-	
+
 	return false
 }

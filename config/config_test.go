@@ -41,7 +41,7 @@ func TestGetEnvOrDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clean up any existing environment variable
 			os.Unsetenv(tt.key)
-			
+
 			// Set environment variable if specified
 			if tt.envValue != "" {
 				os.Setenv(tt.key, tt.envValue)
@@ -60,7 +60,7 @@ func TestNewConfig(t *testing.T) {
 	// Note: We can't easily test flag parsing in unit tests because
 	// flag.Parse() can only be called once per program execution.
 	// In real usage, the New() function works correctly.
-	
+
 	// Test environment variable functionality directly
 	t.Run("getEnvOrDefault with environment variables", func(t *testing.T) {
 		// Save original environment variables
@@ -465,7 +465,7 @@ func TestGetEnvDurationOrDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clean up any existing environment variable
 			os.Unsetenv(tt.key)
-			
+
 			// Set environment variable if specified
 			if tt.envValue != "" {
 				os.Setenv(tt.key, tt.envValue)
@@ -579,10 +579,10 @@ func TestValidateSecurityHeaders(t *testing.T) {
 
 func TestIsDevMode(t *testing.T) {
 	tests := []struct {
-		name              string
-		securityDevMode   bool
-		proxyPort         string
-		expected          bool
+		name            string
+		securityDevMode bool
+		proxyPort       string
+		expected        bool
 	}{
 		{
 			name:            "Dev mode explicitly enabled",
@@ -614,9 +614,9 @@ func TestIsDevMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
 				SecurityDevMode: tt.securityDevMode,
-				ProxyPort:      tt.proxyPort,
+				ProxyPort:       tt.proxyPort,
 			}
-			
+
 			result := config.IsDevMode()
 			if result != tt.expected {
 				t.Errorf("Config.IsDevMode() = %v, expected %v", result, tt.expected)
@@ -676,7 +676,7 @@ func TestGetEnvIntOrDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clean up any existing environment variable
 			os.Unsetenv(tt.key)
-			
+
 			// Set environment variable if specified
 			if tt.envValue != "" {
 				os.Setenv(tt.key, tt.envValue)
@@ -747,7 +747,7 @@ func TestGetEnvBoolOrDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clean up any existing environment variable
 			os.Unsetenv(tt.key)
-			
+
 			// Set environment variable if specified
 			if tt.envValue != "" {
 				os.Setenv(tt.key, tt.envValue)

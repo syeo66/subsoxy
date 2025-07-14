@@ -10,14 +10,14 @@ import (
 
 func TestSongStructure(t *testing.T) {
 	song := Song{
-		ID:          "123",
-		Title:       "Test Song",
-		Artist:      "Test Artist",
-		Album:       "Test Album",
-		Duration:    300,
-		LastPlayed:  time.Now(),
-		PlayCount:   5,
-		SkipCount:   2,
+		ID:         "123",
+		Title:      "Test Song",
+		Artist:     "Test Artist",
+		Album:      "Test Album",
+		Duration:   300,
+		LastPlayed: time.Now(),
+		PlayCount:  5,
+		SkipCount:  2,
 	}
 
 	if song.ID != "123" {
@@ -46,14 +46,14 @@ func TestSongStructure(t *testing.T) {
 func TestSongJSONSerialization(t *testing.T) {
 	now := time.Now()
 	song := Song{
-		ID:          "123",
-		Title:       "Test Song",
-		Artist:      "Test Artist",
-		Album:       "Test Album",
-		Duration:    300,
-		LastPlayed:  now,
-		PlayCount:   5,
-		SkipCount:   2,
+		ID:         "123",
+		Title:      "Test Song",
+		Artist:     "Test Artist",
+		Album:      "Test Album",
+		Duration:   300,
+		LastPlayed: now,
+		PlayCount:  5,
+		SkipCount:  2,
 	}
 
 	jsonData, err := json.Marshal(song)
@@ -280,7 +280,7 @@ func TestHookFunction(t *testing.T) {
 
 func TestEventTypeValues(t *testing.T) {
 	validEventTypes := []string{"play", "skip", "start"}
-	
+
 	for _, eventType := range validEventTypes {
 		event := PlayEvent{
 			ID:        1,
@@ -288,7 +288,7 @@ func TestEventTypeValues(t *testing.T) {
 			EventType: eventType,
 			Timestamp: time.Now(),
 		}
-		
+
 		if event.EventType != eventType {
 			t.Errorf("PlayEvent.EventType = %s, want %s", event.EventType, eventType)
 		}

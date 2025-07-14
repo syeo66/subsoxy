@@ -24,7 +24,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to create config: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	proxyServer, err := server.New(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create proxy server: %v\n", err)
@@ -60,12 +60,12 @@ func main() {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	
+
 	<-quit
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), GracefulShutdownTimeout)
 	defer cancel()
-	
+
 	if err := proxyServer.Shutdown(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to shutdown proxy server gracefully: %v\n", err)
 		os.Exit(1)
