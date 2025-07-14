@@ -43,6 +43,22 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 
 ## Multi-Tenant Usage
 
+### Format Support ✅ **NEW**
+The endpoint now supports both JSON and XML output formats via the `f` parameter:
+
+```bash
+# JSON format (default)
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy"
+
+# JSON format (explicit)
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy&f=json"
+
+# XML format ✅ **NEW**
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy&f=xml"
+```
+
+### Usage Examples
+
 ```bash
 # Get 50 user-specific weighted-shuffled songs (REQUIRED user parameter)
 curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy&f=json"
@@ -50,8 +66,11 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=password&c=subsoxy&f=j
 # Different user gets different personalized recommendations
 curl "http://localhost:8080/rest/getRandomSongs?u=bob&p=password&c=subsoxy&f=json"
 
-# Get 100 user-specific weighted-shuffled songs
-curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=subsoxy&f=json"
+# Get 100 user-specific weighted-shuffled songs in XML format
+curl "http://localhost:8080/rest/getRandomSongs?size=100&u=alice&p=password&c=subsoxy&f=xml"
+
+# Token-based authentication with XML output
+curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy&f=xml"
 ```
 
 ## Multi-Tenancy Benefits

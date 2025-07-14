@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -954,6 +955,122 @@ func TestHandlerUserParameterBoundaryConditions(t *testing.T) {
 
 			if w.Code != tt.expectedStatus {
 				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			}
+		})
+	}
+}
+
+func TestHandleShuffleXMLFormat(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_xml.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	// Add test songs to the database
+	testSongs := []models.Song{
+		{ID: "1", Title: "Test Song 1", Artist: "Test Artist 1", Album: "Test Album 1", Duration: 180},
+		{ID: "2", Title: "Test Song 2", Artist: "Test Artist 2", Album: "Test Album 2", Duration: 240},
+	}
+
+	for _, song := range testSongs {
+		err := db.StoreSongs("testuser", []models.Song{song})
+		if err != nil {
+			t.Fatalf("Failed to store test song: %v", err)
+		}
+	}
+
+	shuffleService := shuffle.New(db, logger)
+	handler := New(logger, shuffleService)
+
+	tests := []struct {
+		name           string
+		formatParam    string
+		expectedType   string
+		expectedStatus int
+	}{
+		{
+			name:           "JSON format (default)",
+			formatParam:    "",
+			expectedType:   "application/json",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "JSON format (explicit)",
+			formatParam:    "json",
+			expectedType:   "application/json",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "XML format",
+			formatParam:    "xml",
+			expectedType:   "application/xml",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqURL := "/rest/getRandomSongs?u=testuser&size=2"
+			if tt.formatParam != "" {
+				reqURL += "&f=" + tt.formatParam
+			}
+
+			req := httptest.NewRequest("GET", reqURL, nil)
+			w := httptest.NewRecorder()
+
+			handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			}
+
+			contentType := w.Header().Get("Content-Type")
+			if contentType != tt.expectedType {
+				t.Errorf("Expected Content-Type %s, got %s", tt.expectedType, contentType)
+			}
+
+			// Verify response can be parsed correctly
+			if tt.formatParam == "xml" {
+				var xmlResponse models.XMLSubsonicResponse
+				err := xml.Unmarshal(w.Body.Bytes(), &xmlResponse)
+				if err != nil {
+					t.Errorf("Failed to parse XML response: %v", err)
+				}
+
+				if xmlResponse.Status != "ok" {
+					t.Errorf("Expected status 'ok', got '%s'", xmlResponse.Status)
+				}
+
+				if xmlResponse.Version != "1.15.0" {
+					t.Errorf("Expected version '1.15.0', got '%s'", xmlResponse.Version)
+				}
+
+				if xmlResponse.Songs == nil {
+					t.Error("Expected songs element to be present")
+				}
+			} else {
+				// Test JSON response
+				var jsonResponse map[string]interface{}
+				err := json.Unmarshal(w.Body.Bytes(), &jsonResponse)
+				if err != nil {
+					t.Errorf("Failed to parse JSON response: %v", err)
+				}
+
+				subsonicResponse, ok := jsonResponse["subsonic-response"].(map[string]interface{})
+				if !ok {
+					t.Error("Expected subsonic-response object")
+				}
+
+				if status, ok := subsonicResponse["status"].(string); !ok || status != "ok" {
+					t.Errorf("Expected status 'ok', got '%v'", subsonicResponse["status"])
+				}
 			}
 		})
 	}

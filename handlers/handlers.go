@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/syeo66/subsoxy/errors"
+	"github.com/syeo66/subsoxy/models"
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
@@ -112,25 +114,55 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		return true
 	}
 
-	response := map[string]interface{}{
-		"subsonic-response": map[string]interface{}{
-			"status":  "ok",
-			"version": "1.15.0",
-			"songs": map[string]interface{}{
-				"song": songs,
-			},
-		},
+	// Check format parameter (defaults to json if not specified)
+	format := r.URL.Query().Get("f")
+	if format == "" {
+		format = "json"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
-			WithContext("size", size).
-			WithContext("song_count", len(songs)).
-			WithContext("userID", userID)
-		h.logger.WithError(encodeErr).Error("Failed to encode shuffle response")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return true
+	if format == "xml" {
+		// XML response
+		xmlResponse := models.XMLSubsonicResponse{
+			Status:  "ok",
+			Version: "1.15.0",
+			Songs: &models.XMLSongs{
+				Song: songs,
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
+		if err := xml.NewEncoder(w).Encode(xmlResponse); err != nil {
+			encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode XML shuffle response").
+				WithContext("size", size).
+				WithContext("song_count", len(songs)).
+				WithContext("userID", userID)
+			h.logger.WithError(encodeErr).Error("Failed to encode XML shuffle response")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return true
+		}
+	} else {
+		// JSON response (default)
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+				"songs": map[string]interface{}{
+					"song": songs,
+				},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode JSON shuffle response").
+				WithContext("size", size).
+				WithContext("song_count", len(songs)).
+				WithContext("userID", userID)
+			h.logger.WithError(encodeErr).Error("Failed to encode JSON shuffle response")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return true
+		}
 	}
 
 	h.logger.WithFields(logrus.Fields{

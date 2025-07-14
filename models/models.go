@@ -1,21 +1,22 @@
 package models
 
 import (
+	"encoding/xml"
 	"net/http"
 	"time"
 )
 
 type Song struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	Artist     string    `json:"artist"`
-	Album      string    `json:"album"`
-	Duration   int       `json:"duration"`
-	LastPlayed time.Time `json:"lastPlayed"`
-	PlayCount  int       `json:"playCount"`
-	SkipCount  int       `json:"skipCount"`
-	IsDir      bool      `json:"isDir"`
-	Name       string    `json:"name"`
+	ID         string    `json:"id" xml:"id,attr"`
+	Title      string    `json:"title" xml:"title,attr"`
+	Artist     string    `json:"artist" xml:"artist,attr"`
+	Album      string    `json:"album" xml:"album,attr"`
+	Duration   int       `json:"duration" xml:"duration,attr"`
+	LastPlayed time.Time `json:"lastPlayed" xml:"lastPlayed,attr"`
+	PlayCount  int       `json:"playCount" xml:"playCount,attr"`
+	SkipCount  int       `json:"skipCount" xml:"skipCount,attr"`
+	IsDir      bool      `json:"isDir" xml:"isDir,attr"`
+	Name       string    `json:"name" xml:"name,attr"`
 }
 
 type PlayEvent struct {
@@ -74,3 +75,16 @@ type SubsonicResponse struct {
 }
 
 type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
+
+// XML response structures for Subsonic API
+type XMLSubsonicResponse struct {
+	XMLName xml.Name `xml:"subsonic-response"`
+	Status  string   `xml:"status,attr"`
+	Version string   `xml:"version,attr"`
+	Songs   *XMLSongs `xml:"songs,omitempty"`
+}
+
+type XMLSongs struct {
+	XMLName xml.Name `xml:"songs"`
+	Song    []Song   `xml:"song"`
+}

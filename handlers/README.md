@@ -15,7 +15,7 @@ This module handles:
 ## Handler Types
 
 ### Shuffle Handler
-Provides intelligent weighted song shuffling for `/rest/getRandomSongs`.
+Provides intelligent weighted song shuffling for `/rest/getRandomSongs` with **JSON and XML format support** ✅ **NEW**.
 
 ```go
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
@@ -257,8 +257,10 @@ const (
 
 ## Response Formats
 
-### Subsonic API Compliance
-All responses follow the standard Subsonic API format:
+### Subsonic API Compliance ✅ **ENHANCED WITH XML SUPPORT**
+Responses follow the standard Subsonic API format and support both JSON and XML output via the `f` parameter:
+
+#### JSON Format (Default)
 ```json
 {
   "subsonic-response": {
@@ -279,9 +281,51 @@ All responses follow the standard Subsonic API format:
 }
 ```
 
+#### XML Format ✅ **NEW**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<subsonic-response status="ok" version="1.15.0">
+  <songs>
+    <song id="123" title="Song Title" artist="Artist Name" album="Album Name" duration="180"/>
+  </songs>
+</subsonic-response>
+```
+
+### Format Selection
+```go
+// Check format parameter (defaults to json if not specified)
+format := r.URL.Query().Get("f")
+if format == "" {
+    format = "json"
+}
+
+if format == "xml" {
+    // XML response
+    xmlResponse := models.XMLSubsonicResponse{
+        Status:  "ok",
+        Version: "1.15.0",
+        Songs: &models.XMLSongs{
+            Song: songs,
+        },
+    }
+    
+    w.Header().Set("Content-Type", "application/xml")
+    w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
+    xml.NewEncoder(w).Encode(xmlResponse)
+} else {
+    // JSON response (default)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(response)
+}
+```
+
 ### Content-Type Headers
 ```go
+// JSON format
 w.Header().Set("Content-Type", "application/json")
+
+// XML format ✅ **NEW**
+w.Header().Set("Content-Type", "application/xml")
 ```
 
 ## Extension Points
