@@ -72,6 +72,7 @@ The database connection pool includes proper goroutine lifecycle management:
 - `last_played` (DATETIME): Last time the song was played by this user
 - `play_count` (INTEGER): Number of times the song was played by this user
 - `skip_count` (INTEGER): Number of times the song was skipped by this user
+- `cover_art` (TEXT): Cover art identifier for use with `/rest/getCoverArt` endpoint ✅ **NEW**
 - **PRIMARY KEY**: `(id, user_id)` for per-user song isolation
 
 ### play_events (Multi-Tenant)
@@ -97,6 +98,52 @@ The database connection pool includes proper goroutine lifecycle management:
   - `idx_play_events_user_id` on play_events(user_id)
   - `idx_song_transitions_user_id` on song_transitions(user_id)
 - **Query Optimization**: All database operations filter by user_id for optimal performance
+
+## Cover Art Support ✅ **NEW**
+
+### Database Schema Enhancement
+The songs table now includes cover art support with automatic migration:
+
+**Cover Art Column**:
+- `cover_art` (TEXT): Stores cover art identifier from upstream Subsonic server
+- **Optional Field**: NULL/empty values are handled gracefully
+- **Migration Safe**: Automatically added to existing databases without data loss
+- **Subsonic Compatible**: Identifiers work with `/rest/getCoverArt` endpoint
+
+### Automatic Migration
+**Migration Process**:
+- **Detection**: Checks for existing `cover_art` column using `pragma_table_info`
+- **Safe Addition**: Uses `ALTER TABLE` to add column if missing
+- **Zero Downtime**: Migration happens transparently during startup
+- **Backward Compatible**: Existing data remains intact
+
+**Migration Code**:
+```sql
+-- Check if cover_art column exists
+SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='cover_art'
+
+-- Add column if missing
+ALTER TABLE songs ADD COLUMN cover_art TEXT
+```
+
+### Cover Art API Integration
+**Response Enhancement**:
+- **JSON Format**: Cover art included in `coverArt` field when available
+- **XML Format**: Cover art included in `coverArt` attribute when available
+- **Omit Empty**: Uses `omitempty` tags - only appears when cover art exists
+- **Client Compatible**: Works with existing Subsonic clients
+
+**Example Response**:
+```json
+{
+  "id": "song123",
+  "title": "Example Song",
+  "artist": "Example Artist",
+  "album": "Example Album",
+  "duration": 180,
+  "coverArt": "cover456"
+}
+```
 
 ### Migration & Compatibility
 - **Automatic Migration**: Seamless upgrade from single-tenant to multi-tenant schema

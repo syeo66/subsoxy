@@ -10,6 +10,7 @@ A high-performance Go-based proxy server that enhances your Subsonic music serve
 - **📊 Play Tracking**: Automatic monitoring of what you play, skip, and enjoy
 - **👥 Multi-User**: Complete isolation - each user gets their own personalized experience  
 - **🔄 Auto-Sync**: Keeps your music library updated automatically
+- **🎨 Cover Art**: Full cover art support in shuffled song responses
 - **🛡️ Secure**: Enterprise-grade security with encrypted credential storage
 - **⚡ Fast**: Connection pooling and optimized algorithms for smooth performance
 
@@ -54,6 +55,7 @@ Your `/rest/getRandomSongs` requests now return personalized recommendations ins
 - **Avoids Repetition**: Recently played songs appear less frequently  
 - **Smart Transitions**: Considers song flow and your listening patterns
 - **Individual Learning**: Each user gets their own personalized experience
+- **Cover Art Included**: Full cover art support in both JSON and XML responses
 
 ### Multi-User Support ✅ **NEW**
 - **Complete Isolation**: Each user has their own music library and preferences
@@ -113,7 +115,7 @@ export LOG_LEVEL=info
 
 | Endpoint | Enhancement |
 |----------|-------------|
-| `/rest/getRandomSongs` | Intelligent shuffle based on your preferences |
+| `/rest/getRandomSongs` | Intelligent shuffle based on your preferences with cover art |
 | `/rest/stream` | Tracks song starts for learning |
 | `/rest/scrobble` | Records plays/skips for personalization |
 | All others | Transparent proxy with full compatibility |

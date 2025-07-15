@@ -15,7 +15,7 @@ This module handles:
 ## Handler Types
 
 ### Shuffle Handler
-Provides intelligent weighted song shuffling for `/rest/getRandomSongs` with **JSON and XML format support** ✅ **NEW**.
+Provides intelligent weighted song shuffling for `/rest/getRandomSongs` with **JSON and XML format support** and **cover art information** ✅ **NEW**.
 
 ```go
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
@@ -273,7 +273,8 @@ Responses follow the standard Subsonic API format and support both JSON and XML 
           "title": "Song Title",
           "artist": "Artist Name",
           "album": "Album Name",
-          "duration": 180
+          "duration": 180,
+          "coverArt": "cover456"
         }
       ]
     }
@@ -286,10 +287,16 @@ Responses follow the standard Subsonic API format and support both JSON and XML 
 <?xml version="1.0" encoding="UTF-8"?>
 <subsonic-response status="ok" version="1.15.0">
   <songs>
-    <song id="123" title="Song Title" artist="Artist Name" album="Album Name" duration="180"/>
+    <song id="123" title="Song Title" artist="Artist Name" album="Album Name" duration="180" coverArt="cover456"/>
   </songs>
 </subsonic-response>
 ```
+
+#### Cover Art Support ✅ **NEW**
+- Cover art information is automatically included in song responses when available
+- Uses `omitempty` tags - only appears when cover art data exists
+- Cover art identifiers can be used with the Subsonic `/rest/getCoverArt` endpoint
+- Backward compatible with existing clients that don't expect cover art
 
 ### Format Selection
 ```go

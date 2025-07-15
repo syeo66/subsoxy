@@ -44,7 +44,7 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 ## Multi-Tenant Usage
 
 ### Format Support ✅ **NEW**
-The endpoint now supports both JSON and XML output formats via the `f` parameter:
+The endpoint now supports both JSON and XML output formats via the `f` parameter with **cover art information** included:
 
 ```bash
 # JSON format (default)

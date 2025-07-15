@@ -144,6 +144,7 @@ func (db *DB) createTables() error {
 			last_played DATETIME,
 			play_count INTEGER DEFAULT 0,
 			skip_count INTEGER DEFAULT 0,
+			cover_art TEXT,
 			PRIMARY KEY (id, user_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS play_events (
@@ -185,6 +186,11 @@ func (db *DB) createTables() error {
 	// Check if we need to migrate existing data
 	if err := db.migrateExistingData(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to migrate existing data")
+	}
+
+	// Add cover_art column if it doesn't exist
+	if err := db.addCoverArtColumn(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add cover_art column")
 	}
 
 	return nil
@@ -257,6 +263,30 @@ func (db *DB) migrateExistingData() error {
 	return nil
 }
 
+// addCoverArtColumn adds the cover_art column to the songs table if it doesn't exist
+func (db *DB) addCoverArtColumn() error {
+	// Check if cover_art column already exists
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='cover_art'`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for cover_art column")
+	}
+
+	// If column already exists, no migration needed
+	if count > 0 {
+		return nil
+	}
+
+	// Add the cover_art column
+	_, err = db.conn.Exec(`ALTER TABLE songs ADD COLUMN cover_art TEXT`)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add cover_art column")
+	}
+
+	db.logger.Info("Added cover_art column to songs table")
+	return nil
+}
+
 func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	if userID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "userID")
@@ -268,8 +298,8 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO songs (id, user_id, title, artist, album, duration, play_count, skip_count) 
-		VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT play_count FROM songs WHERE id = ? AND user_id = ?), 0), COALESCE((SELECT skip_count FROM songs WHERE id = ? AND user_id = ?), 0))`)
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO songs (id, user_id, title, artist, album, duration, cover_art, play_count, skip_count) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT play_count FROM songs WHERE id = ? AND user_id = ?), 0), COALESCE((SELECT skip_count FROM songs WHERE id = ? AND user_id = ?), 0))`)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to prepare song insert statement")
 	}
@@ -277,7 +307,7 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 
 	var failedSongs []string
 	for _, song := range songs {
-		_, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.ID, userID, song.ID, userID)
+		_, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.ID, userID, song.ID, userID)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"songId": song.ID,
@@ -305,7 +335,8 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
 		COALESCE(last_played, '1970-01-01') as last_played, 
 		COALESCE(play_count, 0) as play_count, 
-		COALESCE(skip_count, 0) as skip_count 
+		COALESCE(skip_count, 0) as skip_count,
+		COALESCE(cover_art, '') as cover_art 
 		FROM songs WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query songs").
@@ -318,7 +349,7 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 		var song models.Song
 		var lastPlayedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount)
+			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song")
 			continue
@@ -370,7 +401,8 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
 		COALESCE(last_played, '1970-01-01') as last_played, 
 		COALESCE(play_count, 0) as play_count, 
-		COALESCE(skip_count, 0) as skip_count 
+		COALESCE(skip_count, 0) as skip_count,
+		COALESCE(cover_art, '') as cover_art 
 		FROM songs WHERE user_id = ? 
 		ORDER BY id LIMIT ? OFFSET ?`, userID, limit, offset)
 	if err != nil {
@@ -386,7 +418,7 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 		var song models.Song
 		var lastPlayedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount)
+			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"userID": userID,

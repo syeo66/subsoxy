@@ -17,6 +17,7 @@ type Song struct {
 	SkipCount  int       `json:"skipCount" xml:"skipCount,attr"`
 	IsDir      bool      `json:"isDir" xml:"isDir,attr"`
 	Name       string    `json:"name" xml:"name,attr"`
+	CoverArt   string    `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
 }
 
 type PlayEvent struct {
