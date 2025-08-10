@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  subsoxy-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: subsoxy:dev
+    container_name: subsoxy-dev
+    
+    ports:
+      - "${PORT:-8080}:8080"
+      - "2345:2345"  # Delve debugger port
+    
+    environment:
+      - PORT=8080
+      - UPSTREAM_URL=${UPSTREAM_URL}
+      - LOG_LEVEL=debug
+      - DEV_MODE=true
+      - DB_PATH=/app/data/subsoxy.db
+    
+    volumes:
+      # Source code for live reload
+      - .:/app:rw
+      # Persistent data directory
+      - subsoxy_dev_data:/app/data:rw
+      # Go module cache
+      - go_mod_cache:/go/pkg/mod:rw
+    
+    # Override security restrictions for development
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+
+volumes:
+  subsoxy_dev_data:
+    driver: local
+  go_mod_cache:
+    driver: local

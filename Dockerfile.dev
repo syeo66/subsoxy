@@ -1,0 +1,31 @@
+# Development Dockerfile with live reload and debugging tools
+FROM golang:1.24.4-alpine AS dev-stage
+
+# Install development dependencies
+RUN apk add --no-cache gcc musl-dev sqlite-dev ca-certificates git curl
+
+# Install air for live reload
+RUN go install github.com/air-verse/air@latest
+
+# Install development tools
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
+WORKDIR /app
+
+# Copy dependency files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Create non-root user for development
+RUN adduser -D -s /bin/sh -u 1001 devuser
+RUN chown -R devuser:devuser /app
+USER devuser
+
+# Default port for development
+EXPOSE 8080
+
+# Use air for live reload
+CMD ["air"]

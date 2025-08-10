@@ -16,17 +16,26 @@ A high-performance Go-based proxy server that enhances your Subsonic music serve
 
 ## 🚀 Quick Start
 
-### 1. Install
+### Option 1: Docker (Recommended)
+
 ```bash
-go build -o subsoxy
+# 1. Copy environment template
+cp .env.example .env
+
+# 2. Edit .env with your Subsonic server URL
+vim .env  # Set UPSTREAM_URL=http://your-subsonic-server:4533
+
+# 3. Start with Docker Compose
+./scripts/docker-run.sh --prod --detach
 ```
 
-### 2. Run
-```bash
-# Basic setup - connects to Subsonic server at localhost:4533
-./subsoxy
+### Option 2: Binary Installation
 
-# Custom Subsonic server
+```bash
+# 1. Build
+go build -o subsoxy
+
+# 2. Run
 ./subsoxy -upstream http://my-subsonic-server:4533 -port 8080
 ```
 
@@ -120,16 +129,27 @@ export LOG_LEVEL=info
 | `/rest/scrobble` | Records plays/skips for personalization |
 | All others | Transparent proxy with full compatibility |
 
-## 🔧 Advanced Configuration
+## 🔧 Configuration & Deployment
 
-For detailed configuration options, see [Configuration Guide](docs/configuration.md).
+### Quick Configuration
 
-Common settings:
-- **Port**: `-port 8080` (default)
-- **Database**: `-db-path ./music.db` (auto-created)
-- **Rate Limiting**: `-rate-limit-rps 100` (requests per second)
-- **Connection Pool**: `-db-max-open-conns 25` (database connections)
-- **CORS**: `-cors-allow-origins "*"` (for web clients)
+**Docker (Environment Variables)**:
+```bash
+# Copy and edit .env file
+cp .env.example .env
+vim .env
+```
+
+**Binary (Command Line)**:
+```bash
+./subsoxy -port 8080 -upstream http://your-server:4533 -log-level debug
+```
+
+### Deployment Options
+
+- **🐳 [Docker Guide](docs/docker.md)**: Containerized deployment with Docker Compose
+- **⚙️ [Configuration Guide](docs/configuration.md)**: Complete configuration reference
+- **🏗️ [Architecture Guide](docs/architecture.md)**: Technical architecture details
 
 ## 🏗️ Architecture
 
@@ -177,35 +197,46 @@ Optimized for real-world usage:
 
 For performance details, see [Weighted Shuffle Guide](docs/weighted-shuffle.md).
 
-## 🧪 Testing
+## 🧪 Testing & Development
 
+### Quick Testing
+
+**Docker Development**:
 ```bash
-# Run all tests
-go test ./...
+# Start development environment with live reload
+./scripts/docker-run.sh --dev
 
-# Run with race detection
+# Run tests in container
+./scripts/docker-build.sh --test
+```
+
+**Local Development**:
+```bash
+# Run tests
 go test ./... -race
 
-# Test with real Subsonic server
+# Test with real server
 ./subsoxy -upstream https://your-server.com &
 curl "http://localhost:8080/rest/ping?u=user&p=pass&f=json"
 ```
 
 ## 📖 Documentation
 
-- [**Configuration Guide**](docs/configuration.md) - Complete configuration reference
-- [**Architecture Guide**](docs/architecture.md) - Technical architecture details  
-- [**Security Guide**](docs/security.md) - Security features and best practices
-- [**Multi-Tenancy Guide**](docs/multi-tenancy.md) - Multi-user setup and features
-- [**Database Guide**](docs/database.md) - Database schema and features
-- [**Weighted Shuffle Guide**](docs/weighted-shuffle.md) - How intelligent recommendations work
-- [**Development Guide**](docs/development.md) - Contributing and development setup
+- [**🐳 Docker Guide**](docs/docker.md) - Containerized deployment and Docker Compose
+- [**⚙️ Configuration Guide**](docs/configuration.md) - Complete configuration reference
+- [**🏗️ Architecture Guide**](docs/architecture.md) - Technical architecture details  
+- [**🛡️ Security Guide**](docs/security.md) - Security features and best practices
+- [**👥 Multi-Tenancy Guide**](docs/multi-tenancy.md) - Multi-user setup and features
+- [**🗄️ Database Guide**](docs/database.md) - Database schema and features
+- [**🎯 Weighted Shuffle Guide**](docs/weighted-shuffle.md) - How intelligent recommendations work
+- [**💻 Development Guide**](docs/development.md) - Contributing and development setup
 
 ## 🆘 Getting Help
 
-- Check the [Configuration Guide](docs/configuration.md) for setup issues
-- Review [Security Guide](docs/security.md) for authentication problems  
-- See [Development Guide](docs/development.md) for contributing
+- **🐳 Docker Issues**: Check the [Docker Guide](docs/docker.md) for containerization help
+- **⚙️ Configuration**: See [Configuration Guide](docs/configuration.md) for setup issues
+- **🛡️ Authentication**: Review [Security Guide](docs/security.md) for credential problems  
+- **💻 Development**: See [Development Guide](docs/development.md) for contributing
 
 ## 📄 License
 
@@ -214,6 +245,14 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ---
 
 **Ready to enhance your music experience?** 
+
+**Docker (Recommended)**:
+```bash
+cp .env.example .env && vim .env
+./scripts/docker-run.sh --prod --detach
+```
+
+**Binary**:
 ```bash
 go build -o subsoxy && ./subsoxy
 ```

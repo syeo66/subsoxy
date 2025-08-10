@@ -1,10 +1,51 @@
-# Configuration
+# Configuration Guide
 
-This document provides comprehensive information about configuring the Subsonic proxy server.
+This guide covers all configuration options for Subsoxy, including Docker environment variables, command-line flags, and configuration files.
 
-## Configuration Overview
+## Configuration Methods
 
-Configuration can be set via command-line flags or environment variables. Command-line flags take precedence over environment variables. All configuration parameters are validated at startup with helpful error messages.
+1. **Docker Environment Variables** (Recommended for containers)
+2. **Command-line Flags** (Direct binary execution)
+3. **Environment Variables** (System-level configuration)
+
+Configuration precedence: Command-line flags > Environment variables > Defaults. All parameters are validated at startup with helpful error messages.
+
+## Docker Configuration (Recommended)
+
+### Environment File Setup
+
+```bash
+# Copy template and edit
+cp .env.example .env
+vim .env
+```
+
+### Common Docker Environment Variables
+
+```bash
+# Required
+UPSTREAM_URL=http://your-subsonic-server:4533
+
+# Server Configuration
+PORT=8080
+LOG_LEVEL=info
+
+# Database Configuration
+DB_PATH=/app/data/subsoxy.db
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=5
+DB_CONN_MAX_LIFETIME=30m0s
+DB_CONN_MAX_IDLE_TIME=5m0s
+
+# Performance
+RATE_LIMIT_RPS=100
+RATE_LIMIT_BURST=200
+
+# Security
+SECURITY_HEADERS_ENABLED=true
+CORS_ALLOW_ORIGINS=*
+DEV_MODE=false
+```
 
 ## Command-line Flags
 

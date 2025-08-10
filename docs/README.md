@@ -6,6 +6,7 @@ This directory contains comprehensive technical documentation for the Subsonic A
 
 ### Getting Started
 - **[Main README](../README.md)** - Quick start guide and feature overview
+- **[🐳 Docker Guide](docker.md)** - Containerized deployment with Docker Compose
 - **[Configuration Guide](configuration.md)** - Complete configuration reference
 
 ### Core Features
@@ -40,9 +41,10 @@ Each module also has its own detailed README:
 
 ### For Users
 1. **[Main README](../README.md)** - Start here for setup
-2. **[Configuration Guide](configuration.md)** - Customize your setup
-3. **[Multi-Tenancy Guide](multi-tenancy.md)** - Multi-user features
-4. **[Troubleshooting](../TROUBLESHOOTING.md)** - Fix issues
+2. **[🐳 Docker Guide](docker.md)** - Containerized deployment (recommended)
+3. **[Configuration Guide](configuration.md)** - Customize your setup
+4. **[Multi-Tenancy Guide](multi-tenancy.md)** - Multi-user features
+5. **[Troubleshooting](../TROUBLESHOOTING.md)** - Fix issues
 
 ### For Developers
 1. **[Development Guide](development.md)** - Contributing and testing
@@ -51,16 +53,18 @@ Each module also has its own detailed README:
 4. **[Security Guide](security.md)** - Security implementation
 
 ### For Administrators
-1. **[Configuration Guide](configuration.md)** - Deployment options
-2. **[Security Guide](security.md)** - Security setup
-3. **[Database Guide](database.md)** - Performance tuning
-4. **[Troubleshooting](../TROUBLESHOOTING.md)** - Operations guide
+1. **[🐳 Docker Guide](docker.md)** - Production deployment with containers
+2. **[Configuration Guide](configuration.md)** - Environment and performance settings
+3. **[Security Guide](security.md)** - Security setup and hardening
+4. **[Database Guide](database.md)** - Performance tuning and scaling
+5. **[Troubleshooting](../TROUBLESHOOTING.md)** - Operations guide
 
 ## 🔍 Find What You Need
 
 | Topic | Documentation |
 |-------|---------------|
 | **Getting Started** | [Main README](../README.md) |
+| **Docker Deployment** | [🐳 Docker Guide](docker.md) |
 | **Installation & Setup** | [Main README](../README.md) → Quick Start |
 | **Configuration Options** | [Configuration Guide](configuration.md) |
 | **Multi-User Setup** | [Multi-Tenancy Guide](multi-tenancy.md) |
