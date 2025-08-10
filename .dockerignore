@@ -83,9 +83,6 @@ Jenkinsfile
 # Captain definition (already copied explicitly if needed)
 captain-definition
 
-# Docker files
-docker-compose*.yml
-
 # Air live reload config
 .air.toml
 

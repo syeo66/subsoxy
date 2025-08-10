@@ -1,33 +1,6 @@
 # Development Guide
 
-This guide covers setting up a development environment using Docker or native tools, contributing to the project, and understanding the codebase structure.
-
-## Quick Start
-
-### Docker Development (Recommended)
-
-```bash
-# 1. Start development environment with live reload
-./scripts/docker-run.sh --dev
-
-# 2. Code changes are automatically reloaded
-# 3. Debug on port 2345 if needed
-```
-
-### Native Development
-
-```bash
-# 1. Clone and setup
-git clone <repo>
-cd subsoxy
-go mod download
-
-# 2. Install development tools
-go install github.com/air-verse/air@latest
-
-# 3. Start with live reload
-air
-```
+This document provides information for developers working on the Subsonic proxy server.
 
 ## Project Structure
 
@@ -71,7 +44,6 @@ air
 │   ├── errors_test.go   # Error handling tests
 │   └── README.md        # Error handling documentation
 ├── docs/                # Documentation
-│   ├── docker.md        # Docker deployment guide
 │   ├── architecture.md  # System architecture
 │   ├── configuration.md # Configuration guide
 │   ├── database.md      # Database features
@@ -112,20 +84,6 @@ go test ./shuffle/... -run=TestMemoryUsage -v
 ```
 
 ### Building
-
-**Docker Build (Recommended)**:
-```bash
-# Production build
-./scripts/docker-build.sh --prod
-
-# Development build  
-./scripts/docker-build.sh --dev
-
-# Test build (runs tests in container)
-./scripts/docker-build.sh --test
-```
-
-**Native Build**:
 ```bash
 # Build the application
 go build -o subsoxy
@@ -145,18 +103,6 @@ rm subsoxy
 - **Performance Testing**: Large datasets, memory efficiency, concurrent operations
 
 ### Multi-User Testing
-
-**Docker Testing**:
-```bash
-# Start test environment
-docker compose -f docker-compose.dev.yml up -d
-
-# Test endpoints
-curl -s "http://localhost:8080/rest/ping?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&f=json"
-curl -s "http://localhost:8080/rest/getRandomSongs?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&size=5&f=json"
-```
-
-**Native Testing**:
 ```bash
 # Test credentials and sync functionality
 go test ./credentials -v -run="TestGetAllValid"
