@@ -337,13 +337,38 @@ func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previou
 }
 ```
 
-### User-Specific Last Played Tracking
+### User-Specific Tracking and Skip Detection
 ```go
 func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
     song := &models.Song{ID: songID}
     ps.shuffle.SetLastPlayed(userID, song)
 }
+
+// CheckAndRecordSkip checks if the previous song was skipped and records it
+func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
+    newSong := &models.Song{ID: newSongID}
+    
+    // Check if the previous song was skipped
+    skippedSong, wasSkipped := ps.shuffle.CheckForSkip(userID, newSong)
+    if wasSkipped {
+        // Record the skip event
+        return ps.db.RecordPlayEvent(userID, skippedSong.ID, "skip", nil)
+    }
+    
+    return nil
+}
+
+// SetLastStarted records when a song starts streaming
+func (ps *ProxyServer) SetLastStarted(userID, songID string) {
+    song := &models.Song{ID: songID}
+    ps.shuffle.SetLastStarted(userID, song)
+}
 ```
+
+These methods work together to implement accurate skip detection:
+- **SetLastStarted**: Called when a song begins streaming (`/rest/stream`)
+- **SetLastPlayed**: Called when a song is successfully played (`/rest/scrobble` with `submission=true`)
+- **CheckAndRecordSkip**: Called before starting a new song to detect if the previous song was skipped
 
 ## Reverse Proxy Configuration
 

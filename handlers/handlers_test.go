@@ -370,7 +370,15 @@ func TestHandleStream(t *testing.T) {
 			recordedPreviousSong = previousSong
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc)
+		// Mock skip check and set started functions
+		checkSkipFunc := func(userID, songID string) error {
+			return nil
+		}
+		setStartedFunc := func(userID, songID string) {
+			// Track that this song started
+		}
+
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -398,7 +406,16 @@ func TestHandleStream(t *testing.T) {
 			recordCalled = true
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc)
+		// Mock functions - should not be called
+		checkSkipFunc := func(userID, songID string) error {
+			t.Error("CheckSkip function should not be called without song ID")
+			return nil
+		}
+		setStartedFunc := func(userID, songID string) {
+			t.Error("SetStarted function should not be called without song ID")
+		}
+
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -418,7 +435,16 @@ func TestHandleStream(t *testing.T) {
 			recordCalled = true
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc)
+		// Mock functions - should not be called
+		checkSkipFunc := func(userID, songID string) error {
+			t.Error("CheckSkip function should not be called with empty song ID")
+			return nil
+		}
+		setStartedFunc := func(userID, songID string) {
+			t.Error("SetStarted function should not be called with empty song ID")
+		}
+
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -488,19 +514,15 @@ func TestHandleScrobble(t *testing.T) {
 		}
 	})
 
-	t.Run("Skip event", func(t *testing.T) {
+	t.Run("Song ended without play threshold (submission=false)", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=456&submission=false", nil)
 		w := httptest.NewRecorder()
 
-		var recordedSongID string
-		var recordedEventType string
-		var recordedPreviousSong *string
+		var recordCalled bool
 		var lastPlayedCalled bool
 
 		recordFunc := func(userID, songID, eventType string, previousSong *string) {
-			recordedSongID = songID
-			recordedEventType = eventType
-			recordedPreviousSong = previousSong
+			recordCalled = true
 		}
 
 		setLastPlayedFunc := func(userID, songID string) {
@@ -513,20 +535,12 @@ func TestHandleScrobble(t *testing.T) {
 			t.Error("HandleScrobble should return false (not handled)")
 		}
 
-		if recordedSongID != "456" {
-			t.Errorf("Expected recorded song ID '456', got '%s'", recordedSongID)
-		}
-
-		if recordedEventType != "skip" {
-			t.Errorf("Expected recorded event type 'skip', got '%s'", recordedEventType)
-		}
-
-		if recordedPreviousSong != nil {
-			t.Errorf("Expected no previous song, got %v", recordedPreviousSong)
+		if recordCalled {
+			t.Error("Record function should not be called for submission=false (song ended but didn't meet play threshold)")
 		}
 
 		if lastPlayedCalled {
-			t.Error("SetLastPlayed should not be called for skip events")
+			t.Error("SetLastPlayed should not be called for submission=false")
 		}
 	})
 
@@ -594,13 +608,11 @@ func TestHandleScrobble(t *testing.T) {
 		req := httptest.NewRequest("GET", "/rest/scrobble?u=testuser&id=789", nil)
 		w := httptest.NewRecorder()
 
-		var recordedSongID string
-		var recordedEventType string
+		var recordCalled bool
 		var lastPlayedCalled bool
 
 		recordFunc := func(userID, songID, eventType string, previousSong *string) {
-			recordedSongID = songID
-			recordedEventType = eventType
+			recordCalled = true
 		}
 
 		setLastPlayedFunc := func(userID, songID string) {
@@ -613,16 +625,12 @@ func TestHandleScrobble(t *testing.T) {
 			t.Error("HandleScrobble should return false (not handled)")
 		}
 
-		if recordedSongID != "789" {
-			t.Errorf("Expected recorded song ID '789', got '%s'", recordedSongID)
-		}
-
-		if recordedEventType != "skip" {
-			t.Errorf("Expected recorded event type 'skip', got '%s'", recordedEventType)
+		if recordCalled {
+			t.Error("Record function should not be called without submission parameter (song ended but didn't meet play threshold)")
 		}
 
 		if lastPlayedCalled {
-			t.Error("SetLastPlayed should not be called for skip events")
+			t.Error("SetLastPlayed should not be called without submission parameter")
 		}
 	})
 }

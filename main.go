@@ -42,7 +42,7 @@ func main() {
 	})
 
 	proxyServer.AddHook("/rest/stream", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleStream(w, r, endpoint, proxyServer.RecordPlayEvent)
+		return handlers.HandleStream(w, r, endpoint, proxyServer.RecordPlayEvent, proxyServer.CheckAndRecordSkip, proxyServer.SetLastStarted)
 	})
 
 	proxyServer.AddHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {

@@ -35,17 +35,19 @@ const (
 )
 
 type Service struct {
-	db         *database.DB
-	logger     *logrus.Logger
-	lastPlayed map[string]*models.Song // Map userID to last played song
-	mu         sync.RWMutex            // Protects lastPlayed map
+	db          *database.DB
+	logger      *logrus.Logger
+	lastPlayed  map[string]*models.Song // Map userID to last played song
+	lastStarted map[string]*models.Song // Map userID to last started song
+	mu          sync.RWMutex            // Protects lastPlayed and lastStarted maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
 	return &Service{
-		db:         db,
-		logger:     logger,
-		lastPlayed: make(map[string]*models.Song),
+		db:          db,
+		logger:      logger,
+		lastPlayed:  make(map[string]*models.Song),
+		lastStarted: make(map[string]*models.Song),
 	}
 }
 
@@ -53,6 +55,35 @@ func (s *Service) SetLastPlayed(userID string, song *models.Song) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastPlayed[userID] = song
+}
+
+// SetLastStarted records when a song starts streaming
+func (s *Service) SetLastStarted(userID string, song *models.Song) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastStarted[userID] = song
+}
+
+// CheckForSkip checks if the previous started song was skipped and returns it if so
+func (s *Service) CheckForSkip(userID string, newSong *models.Song) (*models.Song, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	lastStarted, hasStarted := s.lastStarted[userID]
+	if !hasStarted || lastStarted == nil {
+		return nil, false // No previous song to check
+	}
+	
+	lastPlayed, hasPlayed := s.lastPlayed[userID]
+	
+	// If the last started song is different from the new song and wasn't played, it was skipped
+	if lastStarted.ID != newSong.ID {
+		if !hasPlayed || lastPlayed == nil || lastPlayed.ID != lastStarted.ID {
+			return lastStarted, true // This song was skipped
+		}
+	}
+	
+	return nil, false // No skip detected
 }
 
 func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {

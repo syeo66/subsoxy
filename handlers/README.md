@@ -73,24 +73,31 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 Handlers that record play events for analytics and machine learning.
 
 ```go
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), checkSkipFunc func(string, string) error, setStartedFunc func(string, string)) bool {
+    userID := r.URL.Query().Get("u")
     songID := r.URL.Query().Get("id")
     if songID != "" {
-        recordFunc(songID, "start", nil)
+        // Check if previous song was skipped
+        checkSkipFunc(userID, songID)
+        // Record that this song started
+        setStartedFunc(userID, songID)
+        recordFunc(userID, songID, "start", nil)
     }
     return false // Continue with normal proxy behavior
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, *string), setLastPlayed func(string)) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string)) bool {
+    userID := r.URL.Query().Get("u")
     songID := r.URL.Query().Get("id")
     submission := r.URL.Query().Get("submission")
     if songID != "" {
         if submission == "true" {
-            recordFunc(songID, "play", nil)
-            setLastPlayed(songID)
-        } else {
-            recordFunc(songID, "skip", nil)
+            recordFunc(userID, songID, "play", nil)
+            setLastPlayed(userID, songID)
         }
+        // Note: submission=false means song ended without meeting play threshold,
+        // but this is NOT a skip. Skips are detected when a new song starts
+        // before the previous one was marked as played.
     }
     return false // Continue with normal proxy behavior
 }
@@ -117,7 +124,7 @@ server.AddHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Reque
 })
 
 server.AddHook("/rest/stream", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-    return handlers.HandleStream(w, r, endpoint, server.RecordPlayEvent)
+    return handlers.HandleStream(w, r, endpoint, server.RecordPlayEvent, server.CheckAndRecordSkip, server.SetLastStarted)
 })
 ```
 
@@ -157,9 +164,21 @@ The shuffle service provides thread-safe operations allowing multiple simultaneo
 ### Event Recording
 Handlers accept callback functions for recording play events:
 ```go
-recordFunc func(string, string, *string)  // songID, eventType, previousSong
-setLastPlayed func(string)                // songID
+recordFunc func(string, string, string, *string)  // userID, songID, eventType, previousSong
+setLastPlayed func(string, string)                // userID, songID
+checkSkipFunc func(string, string) error          // userID, songID - detects skipped songs
+setStartedFunc func(string, string)               // userID, songID - tracks started songs
 ```
+
+### Skip Detection Logic
+The system uses sophisticated skip detection logic to accurately track user behavior:
+
+- **Stream Handler**: When a new song starts, checks if the previous song was skipped
+- **Scrobble Handler**: Records play events only when `submission=true`
+- **Skip Criteria**: A song is marked as skipped when a new song starts before the previous one received `submission=true`
+- **Not Skips**: Songs ending with `submission=false` are NOT skips - they simply didn't meet the client's play threshold
+
+This ensures `skip_count` reflects actual user skips, not songs that played but didn't meet scrobbling thresholds.
 
 ## Error Handling
 

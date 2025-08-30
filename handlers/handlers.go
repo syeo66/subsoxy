@@ -184,7 +184,7 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 	return false
 }
 
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), checkSkipFunc func(string, string) error, setStartedFunc func(string, string)) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 
@@ -199,7 +199,17 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 			h.logger.WithError(err).Warn("Invalid song ID in stream request")
 			return false
 		}
+
+		// Check if the previous song was skipped before starting this one
+		if err := checkSkipFunc(userID, songID); err != nil {
+			h.logger.WithError(err).Warn("Failed to check for skip")
+			// Continue processing despite skip detection failure
+		}
+
+		// Record that this song started
+		setStartedFunc(userID, songID)
 		recordFunc(userID, songID, "start", nil)
+		
 		h.logger.WithFields(logrus.Fields{
 			"song_id": SanitizeForLogging(songID),
 			"user_id": SanitizeForLogging(userID),
@@ -243,21 +253,10 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 			"song_id": sanitizedSongID,
 			"user_id": sanitizedUserID,
 		}).Debug("Recorded play event")
-	} else {
-		// Treat missing or non-"true" submission as skip
-		recordFunc(userID, songID, "skip", nil)
-		h.logger.WithFields(logrus.Fields{
-			"song_id": sanitizedSongID,
-			"user_id": sanitizedUserID,
-		}).Debug("Recorded skip event")
-
-		if submission == "" {
-			h.logger.WithFields(logrus.Fields{
-				"song_id": sanitizedSongID,
-				"user_id": sanitizedUserID,
-			}).Debug("Scrobble request missing submission parameter, treating as skip")
-		}
 	}
+	// Note: submission=false means song ended without meeting play threshold,
+	// but this is NOT a skip. A skip only occurs when a new song starts
+	// before the previous one was marked as played.
 
 	return false
 }

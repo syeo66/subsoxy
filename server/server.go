@@ -832,6 +832,26 @@ func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
 	ps.shuffle.SetLastPlayed(userID, song)
 }
 
+// CheckAndRecordSkip checks if the previous song was skipped and records it
+func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
+	newSong := &models.Song{ID: newSongID}
+	
+	// Check if the previous song was skipped
+	skippedSong, wasSkipped := ps.shuffle.CheckForSkip(userID, newSong)
+	if wasSkipped {
+		// Record the skip event
+		return ps.db.RecordPlayEvent(userID, skippedSong.ID, "skip", nil)
+	}
+	
+	return nil
+}
+
+// SetLastStarted records when a song starts streaming
+func (ps *ProxyServer) SetLastStarted(userID, songID string) {
+	song := &models.Song{ID: songID}
+	ps.shuffle.SetLastStarted(userID, song)
+}
+
 func (ps *ProxyServer) GetHandlers() *handlers.Handler {
 	return ps.handlers
 }

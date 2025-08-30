@@ -102,12 +102,20 @@ userID := "alice"
 song := &models.Song{ID: "song123"}
 shuffleService.SetLastPlayed(userID, song) // Protected by mutex
 
-// Each user's last played song is tracked independently and safely
-shuffleService.SetLastPlayed("bob", &models.Song{ID: "song456"})
+// Track when songs start streaming for skip detection
+shuffleService.SetLastStarted(userID, &models.Song{ID: "song456"})
+
+// Check for skips when a new song starts
+newSong := &models.Song{ID: "song789"}
+skippedSong, wasSkipped := shuffleService.CheckForSkip(userID, newSong)
+if wasSkipped {
+    // Record the skip event in the database
+    fmt.Printf("Song %s was skipped\n", skippedSong.ID)
+}
 
 // Multiple goroutines can safely access different users concurrently
 go shuffleService.SetLastPlayed("alice", songA)
-go shuffleService.SetLastPlayed("bob", songB)   // Safe concurrent access
+go shuffleService.SetLastStarted("bob", songB)   // Safe concurrent access
 ```
 
 ## Multi-Tenant Weight Calculation ✅ **UPDATED**
@@ -238,9 +246,14 @@ The shuffle service now includes comprehensive thread safety:
 
 ### Mutex Protection
 - **RWMutex**: Uses `sync.RWMutex` for optimal read/write performance
-- **Write Protection**: `SetLastPlayed()` uses exclusive locks (`Lock()/Unlock()`)  
-- **Read Protection**: `calculateTransitionWeight()` uses shared locks (`RLock()/RUnlock()`)
+- **Write Protection**: `SetLastPlayed()` and `SetLastStarted()` use exclusive locks (`Lock()/Unlock()`)  
+- **Read Protection**: `CheckForSkip()` and `calculateTransitionWeight()` use shared locks (`RLock()/RUnlock()`)
 - **Concurrent Users**: Multiple users can safely access the service simultaneously
+
+### Skip Detection Methods ✅ **NEW**
+- **SetLastStarted**: Records when a song begins streaming for skip detection
+- **CheckForSkip**: Detects when a song was skipped by comparing last started vs last played
+- **Thread-Safe**: All skip detection methods use appropriate mutex protection
 
 ### Testing
 - **Concurrent Test**: `TestConcurrentAccess()` with 100 goroutines × 10 iterations
