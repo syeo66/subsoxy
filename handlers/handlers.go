@@ -209,7 +209,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 		// Record that this song started
 		setStartedFunc(userID, songID)
 		recordFunc(userID, songID, "start", nil)
-		
+
 		h.logger.WithFields(logrus.Fields{
 			"song_id": SanitizeForLogging(songID),
 			"user_id": SanitizeForLogging(userID),

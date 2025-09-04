@@ -79,9 +79,9 @@ type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
 
 // XML response structures for Subsonic API
 type XMLSubsonicResponse struct {
-	XMLName xml.Name `xml:"subsonic-response"`
-	Status  string   `xml:"status,attr"`
-	Version string   `xml:"version,attr"`
+	XMLName xml.Name  `xml:"subsonic-response"`
+	Status  string    `xml:"status,attr"`
+	Version string    `xml:"version,attr"`
 	Songs   *XMLSongs `xml:"songs,omitempty"`
 }
 

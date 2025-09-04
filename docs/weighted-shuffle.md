@@ -1,23 +1,34 @@
 # Weighted Shuffle Feature
 
-The `/rest/getRandomSongs` endpoint provides intelligent song shuffling using a **per-user weighted algorithm** with **memory-efficient performance optimizations** that considers multiple factors to provide personalized music recommendations for each user.
+The `/rest/getRandomSongs` endpoint provides intelligent song shuffling using a **per-user weighted algorithm** with **2-week replay prevention** and **memory-efficient performance optimizations** that considers multiple factors to provide personalized music recommendations for each user.
 
-## Performance Optimizations ✅ **NEW**
+## 2-Week Replay Prevention ✅ **NEW FEATURE**
+
+The shuffle system now prevents songs from being replayed too frequently:
+
+- **Minimum Replay Interval**: Songs are not replayed for at least 14 days after being played
+- **Intelligent Fallback**: When fewer than the requested number of songs are available outside the 2-week window, the system gracefully includes recent songs
+- **Database-Level Filtering**: For large libraries (>5,000 songs), filtering happens at the database level for memory efficiency
+- **Configurable**: `TwoWeekReplayThreshold = 14` constant can be adjusted if needed
+
+## Performance Optimizations
 
 The shuffle system automatically adapts to library size for optimal performance:
 
 ### Small Libraries (≤5,000 songs)
-- **Algorithm**: Original algorithm with complete song analysis
-- **Memory Usage**: O(total_songs) - all songs loaded into memory
+- **Algorithm**: Original algorithm with complete song analysis and 2-week filtering
+- **Memory Usage**: O(total_songs) - all songs loaded into memory with date filtering
 - **Performance**: ~5ms for 1,000 songs, ~25ms for 5,000 songs
 - **Quality**: 100% of songs considered for maximum recommendation quality
+- **Replay Prevention**: In-memory filtering by last played date
 
 ### Large Libraries (>5,000 songs)
-- **Algorithm**: Memory-efficient reservoir sampling with batch processing
+- **Algorithm**: Memory-efficient reservoir sampling with database-level 2-week filtering
 - **Memory Usage**: O(sample_size) - only representative sample in memory
 - **Performance**: ~106ms for 10,000 songs, ~2.4s for 50,000 songs
 - **Quality**: 3x oversampling maintains high recommendation quality
 - **Batch Processing**: Processes songs in 1,000-song batches to control memory usage
+- **Replay Prevention**: Database queries exclude songs played within 14 days
 
 ### Performance Benefits
 - **Memory Efficiency**: ~90% reduction in memory usage for large libraries
@@ -34,10 +45,12 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 2. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
 3. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
 
-## Database Performance Optimizations ✅ **NEW**
+## Database Performance Optimizations ✅ **UPDATED**
 
 - **`GetSongCount()`**: Fast song counting for intelligent algorithm selection
 - **`GetSongsBatch()`**: Pagination support with LIMIT/OFFSET for memory-efficient processing
+- **`GetSongsBatchFiltered()`**: ✅ **NEW** - Time-based filtering at database level for 2-week replay prevention
+- **`GetSongCountFiltered()`**: ✅ **NEW** - Efficient counting of songs outside replay window
 - **`GetTransitionProbabilities()`**: Batch probability queries eliminate N+1 query problems
 - **Prepared Statements**: Optimized query performance with connection pooling
 
@@ -76,6 +89,7 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 ## Multi-Tenancy Benefits
 
 - **Personalized Recommendations**: Each user gets recommendations based on their individual listening history
+- **2-Week Replay Prevention**: ✅ **NEW** - Each user's songs are prevented from replaying for 14 days individually
 - **User-Specific Repetition Reduction**: Recently played songs by each user are less likely to appear in their shuffle
 - **Individual Preference Learning**: Songs each user tends to play (vs skip) are weighted higher for that user only
 - **Per-User Context Awareness**: Considers what song was played previously by each user for smoother transitions
@@ -92,18 +106,21 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 
 ### Weight Calculation Factors
 
-1. **Time Decay Weight**: Recent songs (< 30 days) receive lower weights
-2. **Play/Skip Ratio Weight**: Based on user's historical play behavior
-3. **Transition Probability Weight**: Uses probabilities from user's last played song
-4. **Final Weight**: All factors multiplied together per user
+1. **2-Week Replay Filter**: ✅ **NEW** - Songs played within 14 days are excluded first
+2. **Time Decay Weight**: Recent songs (< 30 days) receive lower weights
+3. **Play/Skip Ratio Weight**: Based on user's historical play behavior
+4. **Transition Probability Weight**: Uses probabilities from user's last played song
+5. **Final Weight**: All factors multiplied together per user
 
 ### Memory-Efficient Implementation
 
-For large libraries, the system uses reservoir sampling:
-- Samples 3x the requested number of songs
-- Processes songs in batches to control memory usage
-- Maintains high recommendation quality with reduced memory footprint
-- Automatically switches to this mode for libraries >5,000 songs
+For large libraries, the system uses reservoir sampling with replay prevention:
+- **Pre-filtering**: Database-level filtering excludes songs played within 14 days
+- **Sampling**: Samples 3x the requested number of songs from eligible candidates
+- **Fallback**: Includes all songs if insufficient eligible songs are available
+- **Batch Processing**: Processes songs in batches to control memory usage
+- **High Quality**: Maintains recommendation quality with reduced memory footprint
+- **Automatic Switching**: Switches to this mode for libraries >5,000 songs
 
 ### Thread Safety
 

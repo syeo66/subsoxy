@@ -445,6 +445,96 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 	return songs, nil
 }
 
+// GetSongsBatchFiltered returns a batch of songs filtered by last played date.
+// Songs played within excludePlayedWithinDays are excluded from results.
+func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, excludePlayedWithinDays int) ([]models.Song, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if limit <= 0 {
+		return nil, errors.ErrValidationFailed.WithContext("field", "limit")
+	}
+	if offset < 0 {
+		return nil, errors.ErrValidationFailed.WithContext("field", "offset")
+	}
+
+	// Calculate the cutoff date
+	cutoffDate := time.Now().AddDate(0, 0, -excludePlayedWithinDays)
+	cutoffStr := cutoffDate.Format("2006-01-02 15:04:05")
+
+	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
+		COALESCE(last_played, '1970-01-01') as last_played, 
+		COALESCE(play_count, 0) as play_count, 
+		COALESCE(skip_count, 0) as skip_count,
+		COALESCE(cover_art, '') as cover_art 
+		FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?)
+		ORDER BY id LIMIT ? OFFSET ?`, userID, cutoffStr, limit, offset)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query filtered songs batch").
+			WithContext("userID", userID).
+			WithContext("limit", limit).
+			WithContext("offset", offset).
+			WithContext("excludePlayedWithinDays", excludePlayedWithinDays)
+	}
+	defer rows.Close()
+
+	var songs []models.Song
+	for rows.Next() {
+		var song models.Song
+		var lastPlayedStr string
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
+			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
+		if err != nil {
+			db.logger.WithError(err).WithFields(logrus.Fields{
+				"userID":                  userID,
+				"limit":                   limit,
+				"offset":                  offset,
+				"excludePlayedWithinDays": excludePlayedWithinDays,
+			}).Error("Failed to scan song in filtered batch")
+			continue
+		}
+
+		if lastPlayedStr != DefaultDateString {
+			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+		}
+
+		songs = append(songs, song)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during filtered song batch iteration").
+			WithContext("userID", userID).
+			WithContext("limit", limit).
+			WithContext("offset", offset).
+			WithContext("excludePlayedWithinDays", excludePlayedWithinDays)
+	}
+
+	return songs, nil
+}
+
+// GetSongCountFiltered returns the count of songs filtered by last played date.
+// Songs played within excludePlayedWithinDays are excluded from the count.
+func (db *DB) GetSongCountFiltered(userID string, excludePlayedWithinDays int) (int, error) {
+	if userID == "" {
+		return 0, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	// Calculate the cutoff date
+	cutoffDate := time.Now().AddDate(0, 0, -excludePlayedWithinDays)
+	cutoffStr := cutoffDate.Format("2006-01-02 15:04:05")
+
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?)`,
+		userID, cutoffStr).Scan(&count)
+	if err != nil {
+		return 0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get filtered song count").
+			WithContext("userID", userID).
+			WithContext("excludePlayedWithinDays", excludePlayedWithinDays)
+	}
+
+	return count, nil
+}
+
 // GetExistingSongIDs returns a map of all existing song IDs for a user
 func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
 	if userID == "" {
