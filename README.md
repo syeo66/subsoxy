@@ -51,17 +51,19 @@ That's it! Subsoxy will automatically:
 
 ### Intelligent Music Recommendations
 Your `/rest/getRandomSongs` requests now return personalized recommendations instead of random songs:
-- **Learns Your Taste**: Tracks what you play vs skip with accurate skip detection
+- **Learns Your Taste**: Tracks what you play vs skip with enhanced, preload-resistant skip detection
 - **2-Week Replay Prevention**: Songs won't repeat for 14 days (unless no other options available)
 - **Smart Transitions**: Considers song flow and your listening patterns
 - **Individual Learning**: Each user gets their own personalized experience
 - **Cover Art Included**: Full cover art support in both JSON and XML responses
 
-#### Accurate Skip Detection
-The system intelligently differentiates between actual skips and songs that simply didn't meet play thresholds:
-- **Real Skips**: Only counted when you start a new song before finishing the previous one
-- **Play Thresholds**: Songs ending with `submission=false` are not counted as skips
-- **Precise Analytics**: Your skip counts reflect actual user behavior, not client-specific thresholds
+#### Enhanced Skip Detection ✅ **IMPROVED**
+The system now implements robust, preload-resistant skip detection that handles modern music clients:
+- **Preload Support**: Multiple track preloading doesn't trigger false skip detection
+- **Real Skips**: Only counted when songs are never played or when later songs get played first
+- **Timeout Protection**: Songs pending >5 minutes without scrobble are marked as skipped
+- **Client Agnostic**: Works with aggressive preloading strategies used by modern clients
+- **Precise Analytics**: Your skip counts reflect actual listening behavior, not technical preloading
 
 ### Multi-User Support ✅ **NEW**
 - **Complete Isolation**: Each user has their own music library and preferences

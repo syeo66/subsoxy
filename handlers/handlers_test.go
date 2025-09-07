@@ -370,15 +370,15 @@ func TestHandleStream(t *testing.T) {
 			recordedPreviousSong = previousSong
 		}
 
-		// Mock skip check and set started functions
-		checkSkipFunc := func(userID, songID string) error {
-			return nil
+		// Mock add pending and set started functions
+		addPendingFunc := func(userID, songID string) {
+			// Track that this song was added as pending
 		}
 		setStartedFunc := func(userID, songID string) {
 			// Track that this song started
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -407,15 +407,14 @@ func TestHandleStream(t *testing.T) {
 		}
 
 		// Mock functions - should not be called
-		checkSkipFunc := func(userID, songID string) error {
-			t.Error("CheckSkip function should not be called without song ID")
-			return nil
+		addPendingFunc := func(userID, songID string) {
+			t.Error("AddPending function should not be called without song ID")
 		}
 		setStartedFunc := func(userID, songID string) {
 			t.Error("SetStarted function should not be called without song ID")
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -436,15 +435,14 @@ func TestHandleStream(t *testing.T) {
 		}
 
 		// Mock functions - should not be called
-		checkSkipFunc := func(userID, songID string) error {
-			t.Error("CheckSkip function should not be called with empty song ID")
-			return nil
+		addPendingFunc := func(userID, songID string) {
+			t.Error("AddPending function should not be called with empty song ID")
 		}
 		setStartedFunc := func(userID, songID string) {
 			t.Error("SetStarted function should not be called with empty song ID")
 		}
 
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, checkSkipFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
@@ -491,7 +489,11 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedSongID = songID
 		}
 
-		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc)
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+			// Mock processing of pending songs
+		}
+
+		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
 
 		if handled {
 			t.Error("HandleScrobble should return false (not handled)")
@@ -529,7 +531,11 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc)
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+			// Mock processing of pending songs
+		}
+
+		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
 
 		if handled {
 			t.Error("HandleScrobble should return false (not handled)")
@@ -559,7 +565,11 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc)
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+			// Mock processing of pending songs
+		}
+
+		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
 
 		if handled {
 			t.Error("HandleScrobble should return false (not handled)")
@@ -589,7 +599,11 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc)
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+			// Mock processing of pending songs
+		}
+
+		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
 
 		if handled {
 			t.Error("HandleScrobble should return false (not handled)")
@@ -619,7 +633,11 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc)
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+			// Mock processing of pending songs
+		}
+
+		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
 
 		if handled {
 			t.Error("HandleScrobble should return false (not handled)")

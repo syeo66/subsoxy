@@ -253,19 +253,22 @@ Context: {"field": "songID"}
 - Maintains complete event history
 - **Accurate Skip Detection**: Only increments skip_count for actual user skips, not songs that ended without meeting play thresholds
 
-### Skip Detection Logic ✅ **FIXED**
-The system now correctly distinguishes between different types of song endings:
+### Enhanced Skip Detection Logic ✅ **ENHANCED**
+The system now implements robust, preload-resistant skip detection:
 
-- **True Skips** (`eventType = "skip"`): When a user starts a new song before the previous one was marked as played (`submission=true`)
+- **Pending Song Tracking**: Songs are tracked when streaming starts without immediate skip detection
+- **Scrobble-Based Processing**: Skip detection occurs only when scrobble events are received
+- **True Skips** (`eventType = "skip"`): Songs that are never scrobbled or when later songs get scrobbled first
 - **Play Completions** (`eventType = "play"`): When a song receives `submission=true` from the client
-- **Non-Skip Endings**: Songs ending with `submission=false` are NOT recorded as skips - they simply didn't meet the client's play threshold
+- **Timeout Handling**: Songs pending >5 minutes without scrobble are automatically marked as skipped
+- **Preload Support**: Multiple concurrent stream requests don't trigger false skip detection
 
-This ensures `skip_count` accurately reflects user behavior rather than client-specific scrobbling thresholds.
+This ensures accurate skip detection even with aggressive client preloading strategies.
 
 ### Transition Probabilities
 - Automatically calculated as `play_count / (play_count + skip_count)`
 - Updated whenever transition events are recorded
-- Now more accurate due to corrected skip detection
+- Now more accurate due to enhanced preload-resistant skip detection
 - Used by the shuffle algorithm for intelligent recommendations
 
 ### Goroutine Management ✅ **FIXED**

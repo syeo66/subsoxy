@@ -184,7 +184,7 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 	return false
 }
 
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), checkSkipFunc func(string, string) error, setStartedFunc func(string, string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), addPendingFunc func(string, string), setStartedFunc func(string, string)) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 
@@ -200,20 +200,17 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 			return false
 		}
 
-		// Check if the previous song was skipped before starting this one
-		if err := checkSkipFunc(userID, songID); err != nil {
-			h.logger.WithError(err).Warn("Failed to check for skip")
-			// Continue processing despite skip detection failure
-		}
+		// Add this song to pending list (no immediate skip detection)
+		addPendingFunc(userID, songID)
 
-		// Record that this song started
+		// Record that this song started (for compatibility)
 		setStartedFunc(userID, songID)
 		recordFunc(userID, songID, "start", nil)
 
 		h.logger.WithFields(logrus.Fields{
 			"song_id": SanitizeForLogging(songID),
 			"user_id": SanitizeForLogging(userID),
-		}).Debug("Recorded stream start event")
+		}).Debug("Added pending song and recorded stream start event")
 	} else {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Stream request missing song ID")
@@ -221,7 +218,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 	return false
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string)) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool)) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 	submission := r.URL.Query().Get("submission")
@@ -246,17 +243,24 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 	sanitizedSongID := SanitizeForLogging(songID)
 	sanitizedUserID := SanitizeForLogging(userID)
 
-	if submission == "true" {
+	isSubmission := submission == "true"
+
+	// Process pending songs first (may mark earlier songs as skipped)
+	processScrobbleFunc(userID, songID, isSubmission)
+
+	if isSubmission {
 		recordFunc(userID, songID, "play", nil)
 		setLastPlayed(userID, songID)
 		h.logger.WithFields(logrus.Fields{
 			"song_id": sanitizedSongID,
 			"user_id": sanitizedUserID,
-		}).Debug("Recorded play event")
+		}).Debug("Recorded play event and processed pending songs")
+	} else {
+		h.logger.WithFields(logrus.Fields{
+			"song_id": sanitizedSongID,
+			"user_id": sanitizedUserID,
+		}).Debug("Processed scrobble without submission and handled pending songs")
 	}
-	// Note: submission=false means song ended without meeting play threshold,
-	// but this is NOT a skip. A skip only occurs when a new song starts
-	// before the previous one was marked as played.
 
 	return false
 }

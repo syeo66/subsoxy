@@ -58,10 +58,13 @@ if err != nil {
 
 ### Server Lifecycle
 ```go
-// Start the server
+// Start the server (includes background routines)
 if err := proxyServer.Start(); err != nil {
     log.Fatal("Failed to start server:", err)
 }
+// Server automatically starts:
+// - Song sync routine (hourly)
+// - Pending songs cleanup routine (every minute)
 
 // Graceful shutdown
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -251,6 +254,8 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
             continue
         }
     }
+    
+    // Background cleanup of pending songs runs separately every minute
 }
 
 func (ps *ProxyServer) syncSongsForUser(username, password string) error {
@@ -344,7 +349,7 @@ func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
     ps.shuffle.SetLastPlayed(userID, song)
 }
 
-// CheckAndRecordSkip checks if the previous song was skipped and records it
+// CheckAndRecordSkip checks if the previous song was skipped and records it (deprecated)
 func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
     newSong := &models.Song{ID: newSongID}
     
@@ -358,17 +363,41 @@ func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
     return nil
 }
 
-// SetLastStarted records when a song starts streaming
+// AddPendingSong adds a song to the pending list when streaming starts
+func (ps *ProxyServer) AddPendingSong(userID, songID string) {
+    song := &models.Song{ID: songID}
+    ps.shuffle.AddPendingSong(userID, song)
+}
+
+// ProcessScrobble processes a scrobble event and handles pending songs
+func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) {
+    recordSkipFunc := func(userID string, song *models.Song) {
+        err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
+        if err != nil {
+            ps.logger.WithError(err).WithFields(logrus.Fields{
+                "user_id": userID,
+                "song_id": song.ID,
+            }).Error("Failed to record skip event from pending song processing")
+        }
+    }
+    ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
+}
+
+// SetLastStarted records when a song starts streaming (compatibility)
 func (ps *ProxyServer) SetLastStarted(userID, songID string) {
     song := &models.Song{ID: songID}
     ps.shuffle.SetLastStarted(userID, song)
 }
 ```
 
-These methods work together to implement accurate skip detection:
-- **SetLastStarted**: Called when a song begins streaming (`/rest/stream`)
+### Enhanced Skip Detection Methods
+These methods work together to implement robust, preload-resistant skip detection:
+
+- **AddPendingSong**: Called when a song begins streaming (`/rest/stream`) - adds to pending list
+- **ProcessScrobble**: Called during scrobble processing - handles pending songs and skip detection
 - **SetLastPlayed**: Called when a song is successfully played (`/rest/scrobble` with `submission=true`)
-- **CheckAndRecordSkip**: Called before starting a new song to detect if the previous song was skipped
+- **SetLastStarted**: Compatibility method for tracking started songs
+- **Cleanup Routine**: Background process that handles timed-out pending songs (runs every minute)
 
 ## Reverse Proxy Configuration
 

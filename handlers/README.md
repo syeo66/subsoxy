@@ -73,31 +73,36 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 Handlers that record play events for analytics and machine learning.
 
 ```go
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), checkSkipFunc func(string, string) error, setStartedFunc func(string, string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), addPendingFunc func(string, string), setStartedFunc func(string, string)) bool {
     userID := r.URL.Query().Get("u")
     songID := r.URL.Query().Get("id")
     if songID != "" {
-        // Check if previous song was skipped
-        checkSkipFunc(userID, songID)
-        // Record that this song started
+        // Add song to pending list (no immediate skip detection)
+        addPendingFunc(userID, songID)
+        // Record that this song started (for compatibility)
         setStartedFunc(userID, songID)
         recordFunc(userID, songID, "start", nil)
     }
     return false // Continue with normal proxy behavior
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string)) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool)) bool {
     userID := r.URL.Query().Get("u")
     songID := r.URL.Query().Get("id")
     submission := r.URL.Query().Get("submission")
+    isSubmission := submission == "true"
+    
     if songID != "" {
-        if submission == "true" {
+        // Process pending songs first (may mark earlier songs as skipped)
+        processScrobbleFunc(userID, songID, isSubmission)
+        
+        if isSubmission {
             recordFunc(userID, songID, "play", nil)
             setLastPlayed(userID, songID)
         }
-        // Note: submission=false means song ended without meeting play threshold,
-        // but this is NOT a skip. Skips are detected when a new song starts
-        // before the previous one was marked as played.
+        // Note: submission=false is processed for pending song cleanup,
+        // but doesn't count as a play. True skips occur when songs are
+        // never scrobbled or when later songs get scrobbled first.
     }
     return false // Continue with normal proxy behavior
 }
@@ -124,7 +129,11 @@ server.AddHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Reque
 })
 
 server.AddHook("/rest/stream", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-    return handlers.HandleStream(w, r, endpoint, server.RecordPlayEvent, server.CheckAndRecordSkip, server.SetLastStarted)
+    return handlers.HandleStream(w, r, endpoint, server.RecordPlayEvent, server.AddPendingSong, server.SetLastStarted)
+})
+
+server.AddHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+    return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEvent, server.SetLastPlayed, server.ProcessScrobble)
 })
 ```
 
@@ -166,19 +175,22 @@ Handlers accept callback functions for recording play events:
 ```go
 recordFunc func(string, string, string, *string)  // userID, songID, eventType, previousSong
 setLastPlayed func(string, string)                // userID, songID
-checkSkipFunc func(string, string) error          // userID, songID - detects skipped songs
-setStartedFunc func(string, string)               // userID, songID - tracks started songs
+addPendingFunc func(string, string)               // userID, songID - adds song to pending list
+processScrobbleFunc func(string, string, bool)    // userID, songID, isSubmission - processes scrobbles
+setStartedFunc func(string, string)               // userID, songID - tracks started songs (compatibility)
 ```
 
-### Skip Detection Logic
-The system uses sophisticated skip detection logic to accurately track user behavior:
+### Enhanced Skip Detection Logic
+The system uses robust, preload-resistant skip detection logic:
 
-- **Stream Handler**: When a new song starts, checks if the previous song was skipped
-- **Scrobble Handler**: Records play events only when `submission=true`
-- **Skip Criteria**: A song is marked as skipped when a new song starts before the previous one received `submission=true`
-- **Not Skips**: Songs ending with `submission=false` are NOT skips - they simply didn't meet the client's play threshold
+- **Stream Handler**: Adds songs to pending list without immediate skip detection
+- **Scrobble Handler**: Processes pending songs and marks earlier unscrobbled songs as skipped
+- **Pending Song Tracking**: Handles multiple preloaded tracks without false positives
+- **Timeout Cleanup**: Songs pending >5 minutes without scrobble are automatically marked as skipped
+- **Skip Criteria**: Songs are skipped when later songs get scrobbled first, or when they timeout
+- **Preload Support**: Multiple concurrent stream requests don't trigger false skip detection
 
-This ensures `skip_count` reflects actual user skips, not songs that played but didn't meet scrobbling thresholds.
+This ensures accurate skip detection even with aggressive client preloading strategies.
 
 ## Error Handling
 

@@ -33,10 +33,11 @@ const (
 
 // Server operation constants
 const (
-	SongSyncInterval     = 1 * time.Hour
-	UserSyncStaggerDelay = 2 * time.Second
-	CORSMaxAge           = "86400"
-	SubsonicAPIVersion   = "1.15.0"
+	SongSyncInterval      = 1 * time.Hour
+	CleanupInterval       = 1 * time.Minute // Check for timed-out pending songs every minute
+	UserSyncStaggerDelay  = 2 * time.Second
+	CORSMaxAge            = "86400"
+	SubsonicAPIVersion    = "1.15.0"
 	ClientName           = "subsoxy"
 )
 
@@ -54,12 +55,13 @@ type ProxyServer struct {
 	db           *database.DB
 	credentials  *credentials.Manager
 	handlers     *handlers.Handler
-	shuffle      *shuffle.Service
-	server       *http.Server
-	syncTicker   *time.Ticker
-	syncMutex    sync.RWMutex
-	shutdownChan chan struct{}
-	rateLimiter  *rate.Limiter
+	shuffle       *shuffle.Service
+	server        *http.Server
+	syncTicker    *time.Ticker
+	cleanupTicker *time.Ticker
+	syncMutex     sync.RWMutex
+	shutdownChan  chan struct{}
+	rateLimiter   *rate.Limiter
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -138,6 +140,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	go server.syncSongs()
+	go server.cleanupPendingSongs()
 
 	return server, nil
 }
@@ -360,10 +363,13 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 
 	close(ps.shutdownChan)
 
-	// Safely stop the sync ticker
+	// Safely stop the tickers
 	ps.syncMutex.RLock()
 	if ps.syncTicker != nil {
 		ps.syncTicker.Stop()
+	}
+	if ps.cleanupTicker != nil {
+		ps.cleanupTicker.Stop()
 	}
 	ps.syncMutex.RUnlock()
 
@@ -415,6 +421,50 @@ func (ps *ProxyServer) syncSongs() {
 			ps.fetchAndStoreSongs()
 		case <-ps.shutdownChan:
 			ps.logger.Info("Stopping song sync goroutine")
+			return
+		}
+	}
+}
+
+func (ps *ProxyServer) cleanupPendingSongs() {
+	// Safely create and store the cleanup ticker
+	ps.syncMutex.Lock()
+	ps.cleanupTicker = time.NewTicker(CleanupInterval)
+	ps.syncMutex.Unlock()
+
+	defer func() {
+		ps.syncMutex.Lock()
+		if ps.cleanupTicker != nil {
+			ps.cleanupTicker.Stop()
+		}
+		ps.syncMutex.Unlock()
+	}()
+
+	ps.logger.Info("Pending songs cleanup routine started")
+
+	for {
+		ps.syncMutex.RLock()
+		ticker := ps.cleanupTicker
+		ps.syncMutex.RUnlock()
+
+		if ticker == nil {
+			return
+		}
+
+		select {
+		case <-ticker.C:
+			recordSkipFunc := func(userID string, song *models.Song) {
+				err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
+				if err != nil {
+					ps.logger.WithError(err).WithFields(logrus.Fields{
+						"user_id": userID,
+						"song_id": song.ID,
+					}).Error("Failed to record skip event during cleanup")
+				}
+			}
+			ps.shuffle.CleanupTimedOutPendingSongs(recordSkipFunc)
+		case <-ps.shutdownChan:
+			ps.logger.Info("Stopping pending songs cleanup goroutine")
 			return
 		}
 	}
@@ -832,7 +882,7 @@ func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
 	ps.shuffle.SetLastPlayed(userID, song)
 }
 
-// CheckAndRecordSkip checks if the previous song was skipped and records it
+// CheckAndRecordSkip checks if the previous song was skipped and records it (deprecated)
 func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
 	newSong := &models.Song{ID: newSongID}
 
@@ -844,6 +894,26 @@ func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
 	}
 
 	return nil
+}
+
+// AddPendingSong adds a song to the pending list when streaming starts
+func (ps *ProxyServer) AddPendingSong(userID, songID string) {
+	song := &models.Song{ID: songID}
+	ps.shuffle.AddPendingSong(userID, song)
+}
+
+// ProcessScrobble processes a scrobble event and handles pending songs
+func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) {
+	recordSkipFunc := func(userID string, song *models.Song) {
+		err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
+		if err != nil {
+			ps.logger.WithError(err).WithFields(logrus.Fields{
+				"user_id": userID,
+				"song_id": song.ID,
+			}).Error("Failed to record skip event from pending song processing")
+		}
+	}
+	ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
 
 // SetLastStarted records when a song starts streaming

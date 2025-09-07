@@ -33,22 +33,31 @@ const (
 	PlayRatioMaxWeight     = 1.8
 	BaseTransitionWeight   = 0.5
 	TwoWeekReplayThreshold = 14 // Minimum days before a song can be replayed (unless no alternatives)
+	PendingSongTimeout     = 5 * time.Minute // Timeout for songs to be scrobbled before marking as skipped
 )
 
+// PendingSong tracks songs that have started streaming but haven't been scrobbled yet
+type PendingSong struct {
+	Song      *models.Song
+	StartTime time.Time
+}
+
 type Service struct {
-	db          *database.DB
-	logger      *logrus.Logger
-	lastPlayed  map[string]*models.Song // Map userID to last played song
-	lastStarted map[string]*models.Song // Map userID to last started song
-	mu          sync.RWMutex            // Protects lastPlayed and lastStarted maps
+	db           *database.DB
+	logger       *logrus.Logger
+	lastPlayed   map[string]*models.Song // Map userID to last played song
+	lastStarted  map[string]*models.Song // Map userID to last started song (deprecated, kept for compatibility)
+	pendingSongs map[string][]*PendingSong // Map userID to list of pending songs
+	mu           sync.RWMutex            // Protects all maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
 	return &Service{
-		db:          db,
-		logger:      logger,
-		lastPlayed:  make(map[string]*models.Song),
-		lastStarted: make(map[string]*models.Song),
+		db:           db,
+		logger:       logger,
+		lastPlayed:   make(map[string]*models.Song),
+		lastStarted:  make(map[string]*models.Song),
+		pendingSongs: make(map[string][]*PendingSong),
 	}
 }
 
@@ -58,11 +67,115 @@ func (s *Service) SetLastPlayed(userID string, song *models.Song) {
 	s.lastPlayed[userID] = song
 }
 
-// SetLastStarted records when a song starts streaming
+// SetLastStarted records when a song starts streaming (deprecated but kept for compatibility)
 func (s *Service) SetLastStarted(userID string, song *models.Song) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastStarted[userID] = song
+}
+
+// AddPendingSong adds a song to the pending list when streaming starts
+func (s *Service) AddPendingSong(userID string, song *models.Song) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	pendingSong := &PendingSong{
+		Song:      song,
+		StartTime: time.Now(),
+	}
+	
+	s.pendingSongs[userID] = append(s.pendingSongs[userID], pendingSong)
+	
+	s.logger.WithFields(logrus.Fields{
+		"user_id": userID,
+		"song_id": song.ID,
+	}).Debug("Added pending song")
+}
+
+// ProcessScrobble processes a scrobble event and handles pending songs
+func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	pendingList, exists := s.pendingSongs[userID]
+	if !exists || len(pendingList) == 0 {
+		return
+	}
+	
+	var newPendingList []*PendingSong
+	var skippedSongs []*models.Song
+	var foundScrobbledSong bool
+	
+	// Process all pending songs
+	for _, pending := range pendingList {
+		if pending.Song.ID == songID {
+			// This is the song being scrobbled - remove from pending
+			foundScrobbledSong = true
+			s.logger.WithFields(logrus.Fields{
+				"user_id": userID,
+				"song_id": songID,
+				"submission": isSubmission,
+			}).Debug("Processed scrobble for pending song")
+		} else if foundScrobbledSong {
+			// Songs after the scrobbled song stay pending (could be preloaded)
+			newPendingList = append(newPendingList, pending)
+		} else {
+			// Songs before the scrobbled song are skipped
+			skippedSongs = append(skippedSongs, pending.Song)
+			s.logger.WithFields(logrus.Fields{
+				"user_id": userID,
+				"song_id": pending.Song.ID,
+				"reason": "scrobbled_later_song",
+			}).Debug("Marking pending song as skipped")
+		}
+	}
+	
+	s.pendingSongs[userID] = newPendingList
+	
+	// Record skipped songs
+	for _, skippedSong := range skippedSongs {
+		recordSkipFunc(userID, skippedSong)
+	}
+}
+
+// CleanupTimedOutPendingSongs removes songs that have been pending too long without scrobble
+func (s *Service) CleanupTimedOutPendingSongs(recordSkipFunc func(string, *models.Song)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	now := time.Now()
+	
+	for userID, pendingList := range s.pendingSongs {
+		if len(pendingList) == 0 {
+			continue
+		}
+		
+		var newPendingList []*PendingSong
+		var skippedSongs []*models.Song
+		
+		for _, pending := range pendingList {
+			if now.Sub(pending.StartTime) > PendingSongTimeout {
+				// Song has timed out - mark as skipped
+				skippedSongs = append(skippedSongs, pending.Song)
+				s.logger.WithFields(logrus.Fields{
+					"user_id": userID,
+					"song_id": pending.Song.ID,
+					"timeout": PendingSongTimeout,
+					"reason": "timeout",
+				}).Debug("Marking pending song as skipped due to timeout")
+			} else {
+				// Keep this pending song
+				newPendingList = append(newPendingList, pending)
+			}
+		}
+		
+		s.pendingSongs[userID] = newPendingList
+		
+		// Record skipped songs
+		for _, skippedSong := range skippedSongs {
+			recordSkipFunc(userID, skippedSong)
+		}
+	}
 }
 
 // CheckForSkip checks if the previous started song was skipped and returns it if so

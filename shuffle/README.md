@@ -102,16 +102,18 @@ userID := "alice"
 song := &models.Song{ID: "song123"}
 shuffleService.SetLastPlayed(userID, song) // Protected by mutex
 
-// Track when songs start streaming for skip detection
-shuffleService.SetLastStarted(userID, &models.Song{ID: "song456"})
+// Add song to pending list when streaming starts (enhanced skip detection)
+shuffleService.AddPendingSong(userID, &models.Song{ID: "song456"})
 
-// Check for skips when a new song starts
-newSong := &models.Song{ID: "song789"}
-skippedSong, wasSkipped := shuffleService.CheckForSkip(userID, newSong)
-if wasSkipped {
-    // Record the skip event in the database
-    fmt.Printf("Song %s was skipped\n", skippedSong.ID)
+// Process scrobble and handle pending songs
+recordSkipFunc := func(userID string, song *models.Song) {
+    // Record skip event in database
+    fmt.Printf("Song %s was skipped by %s\n", song.ID, userID)
 }
+shuffleService.ProcessScrobble(userID, "song456", true, recordSkipFunc) // submission=true
+
+// Cleanup timed-out pending songs (runs automatically in background)
+shuffleService.CleanupTimedOutPendingSongs(recordSkipFunc)
 
 // Multiple goroutines can safely access different users concurrently
 go shuffleService.SetLastPlayed("alice", songA)
@@ -250,10 +252,14 @@ The shuffle service now includes comprehensive thread safety:
 - **Read Protection**: `CheckForSkip()` and `calculateTransitionWeight()` use shared locks (`RLock()/RUnlock()`)
 - **Concurrent Users**: Multiple users can safely access the service simultaneously
 
-### Skip Detection Methods ✅ **NEW**
-- **SetLastStarted**: Records when a song begins streaming for skip detection
-- **CheckForSkip**: Detects when a song was skipped by comparing last started vs last played
-- **Thread-Safe**: All skip detection methods use appropriate mutex protection
+### Enhanced Skip Detection Methods ✅ **UPDATED**
+- **AddPendingSong**: Adds songs to pending list when streaming starts (no immediate skip detection)
+- **ProcessScrobble**: Processes scrobble events and marks earlier unscrobbled songs as skipped
+- **CleanupTimedOutPendingSongs**: Removes songs pending >5 minutes and marks them as skipped
+- **SetLastStarted**: Records when a song begins streaming (compatibility method)
+- **CheckForSkip**: Legacy skip detection method (deprecated but maintained for compatibility)
+- **Preload-Resistant**: Handles multiple concurrent stream requests without false positives
+- **Thread-Safe**: All methods use appropriate mutex protection for concurrent access
 
 ### Testing
 - **Concurrent Test**: `TestConcurrentAccess()` with 100 goroutines × 10 iterations
