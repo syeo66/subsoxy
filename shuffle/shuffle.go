@@ -32,7 +32,7 @@ const (
 	PlayRatioMinWeight     = 0.2
 	PlayRatioMaxWeight     = 1.8
 	BaseTransitionWeight   = 0.5
-	TwoWeekReplayThreshold = 14 // Minimum days before a song can be replayed (unless no alternatives)
+	TwoWeekReplayThreshold = 14              // Minimum days before a song can be replayed (unless no alternatives)
 	PendingSongTimeout     = 5 * time.Minute // Timeout for songs to be scrobbled before marking as skipped
 )
 
@@ -45,10 +45,10 @@ type PendingSong struct {
 type Service struct {
 	db           *database.DB
 	logger       *logrus.Logger
-	lastPlayed   map[string]*models.Song // Map userID to last played song
-	lastStarted  map[string]*models.Song // Map userID to last started song (deprecated, kept for compatibility)
+	lastPlayed   map[string]*models.Song   // Map userID to last played song
+	lastStarted  map[string]*models.Song   // Map userID to last started song (deprecated, kept for compatibility)
 	pendingSongs map[string][]*PendingSong // Map userID to list of pending songs
-	mu           sync.RWMutex            // Protects all maps
+	mu           sync.RWMutex              // Protects all maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
@@ -78,14 +78,14 @@ func (s *Service) SetLastStarted(userID string, song *models.Song) {
 func (s *Service) AddPendingSong(userID string, song *models.Song) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	pendingSong := &PendingSong{
 		Song:      song,
 		StartTime: time.Now(),
 	}
-	
+
 	s.pendingSongs[userID] = append(s.pendingSongs[userID], pendingSong)
-	
+
 	s.logger.WithFields(logrus.Fields{
 		"user_id": userID,
 		"song_id": song.ID,
@@ -96,24 +96,24 @@ func (s *Service) AddPendingSong(userID string, song *models.Song) {
 func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	pendingList, exists := s.pendingSongs[userID]
 	if !exists || len(pendingList) == 0 {
 		return
 	}
-	
+
 	var newPendingList []*PendingSong
 	var skippedSongs []*models.Song
 	var foundScrobbledSong bool
-	
+
 	// Process all pending songs
 	for _, pending := range pendingList {
 		if pending.Song.ID == songID {
 			// This is the song being scrobbled - remove from pending
 			foundScrobbledSong = true
 			s.logger.WithFields(logrus.Fields{
-				"user_id": userID,
-				"song_id": songID,
+				"user_id":    userID,
+				"song_id":    songID,
 				"submission": isSubmission,
 			}).Debug("Processed scrobble for pending song")
 		} else if foundScrobbledSong {
@@ -125,13 +125,13 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 			s.logger.WithFields(logrus.Fields{
 				"user_id": userID,
 				"song_id": pending.Song.ID,
-				"reason": "scrobbled_later_song",
+				"reason":  "scrobbled_later_song",
 			}).Debug("Marking pending song as skipped")
 		}
 	}
-	
+
 	s.pendingSongs[userID] = newPendingList
-	
+
 	// Record skipped songs
 	for _, skippedSong := range skippedSongs {
 		recordSkipFunc(userID, skippedSong)
@@ -142,17 +142,17 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 func (s *Service) CleanupTimedOutPendingSongs(recordSkipFunc func(string, *models.Song)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	for userID, pendingList := range s.pendingSongs {
 		if len(pendingList) == 0 {
 			continue
 		}
-		
+
 		var newPendingList []*PendingSong
 		var skippedSongs []*models.Song
-		
+
 		for _, pending := range pendingList {
 			if now.Sub(pending.StartTime) > PendingSongTimeout {
 				// Song has timed out - mark as skipped
@@ -161,16 +161,16 @@ func (s *Service) CleanupTimedOutPendingSongs(recordSkipFunc func(string, *model
 					"user_id": userID,
 					"song_id": pending.Song.ID,
 					"timeout": PendingSongTimeout,
-					"reason": "timeout",
+					"reason":  "timeout",
 				}).Debug("Marking pending song as skipped due to timeout")
 			} else {
 				// Keep this pending song
 				newPendingList = append(newPendingList, pending)
 			}
 		}
-		
+
 		s.pendingSongs[userID] = newPendingList
-		
+
 		// Record skipped songs
 		for _, skippedSong := range skippedSongs {
 			recordSkipFunc(userID, skippedSong)
@@ -229,7 +229,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	var recentSongs []models.Song
 
 	for _, song := range songs {
-		if song.LastPlayed.IsZero() || song.LastPlayed.Before(twoWeeksAgo) {
+		if (song.LastPlayed.IsZero() || song.LastPlayed.Before(twoWeeksAgo)) && (song.LastSkipped.IsZero() || song.LastSkipped.Before(twoWeeksAgo)) {
 			eligibleSongs = append(eligibleSongs, song)
 		} else {
 			recentSongs = append(recentSongs, song)

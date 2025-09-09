@@ -142,6 +142,7 @@ func (db *DB) createTables() error {
 			album TEXT NOT NULL,
 			duration INTEGER NOT NULL,
 			last_played DATETIME,
+			last_skipped DATETIME,
 			play_count INTEGER DEFAULT 0,
 			skip_count INTEGER DEFAULT 0,
 			cover_art TEXT,
@@ -191,6 +192,11 @@ func (db *DB) createTables() error {
 	// Add cover_art column if it doesn't exist
 	if err := db.addCoverArtColumn(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add cover_art column")
+	}
+
+	// Add last_skipped column if it doesn't exist
+	if err := db.addLastSkippedColumn(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add last_skipped column")
 	}
 
 	return nil
@@ -287,6 +293,30 @@ func (db *DB) addCoverArtColumn() error {
 	return nil
 }
 
+// addLastSkippedColumn adds the last_skipped column to the songs table if it doesn't exist
+func (db *DB) addLastSkippedColumn() error {
+	// Check if last_skipped column already exists
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='last_skipped'`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for last_skipped column")
+	}
+
+	// If column already exists, no migration needed
+	if count > 0 {
+		return nil
+	}
+
+	// Add the last_skipped column
+	_, err = db.conn.Exec(`ALTER TABLE songs ADD COLUMN last_skipped DATETIME`)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add last_skipped column")
+	}
+
+	db.logger.Info("Added last_skipped column to songs table")
+	return nil
+}
+
 func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	if userID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "userID")
@@ -298,8 +328,8 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO songs (id, user_id, title, artist, album, duration, cover_art, play_count, skip_count) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT play_count FROM songs WHERE id = ? AND user_id = ?), 0), COALESCE((SELECT skip_count FROM songs WHERE id = ? AND user_id = ?), 0))`)
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO songs (id, user_id, title, artist, album, duration, cover_art, play_count, skip_count, last_played, last_skipped) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT play_count FROM songs WHERE id = ? AND user_id = ?), 0), COALESCE((SELECT skip_count FROM songs WHERE id = ? AND user_id = ?), 0), COALESCE((SELECT last_played FROM songs WHERE id = ? AND user_id = ?), NULL), COALESCE((SELECT last_skipped FROM songs WHERE id = ? AND user_id = ?), NULL))`)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to prepare song insert statement")
 	}
@@ -307,7 +337,7 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 
 	var failedSongs []string
 	for _, song := range songs {
-		_, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.ID, userID, song.ID, userID)
+		_, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.ID, userID, song.ID, userID, song.ID, userID, song.ID, userID)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"songId": song.ID,
@@ -334,6 +364,7 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 
 	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
 		COALESCE(last_played, '1970-01-01') as last_played, 
+		COALESCE(last_skipped, '1970-01-01') as last_skipped,
 		COALESCE(play_count, 0) as play_count, 
 		COALESCE(skip_count, 0) as skip_count,
 		COALESCE(cover_art, '') as cover_art 
@@ -347,9 +378,9 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	var songs []models.Song
 	for rows.Next() {
 		var song models.Song
-		var lastPlayedStr string
+		var lastPlayedStr, lastSkippedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
+			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song")
 			continue
@@ -357,6 +388,10 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 
 		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+		}
+
+		if lastSkippedStr != DefaultDateString {
+			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
 		}
 
 		songs = append(songs, song)
@@ -400,6 +435,7 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 
 	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
 		COALESCE(last_played, '1970-01-01') as last_played, 
+		COALESCE(last_skipped, '1970-01-01') as last_skipped,
 		COALESCE(play_count, 0) as play_count, 
 		COALESCE(skip_count, 0) as skip_count,
 		COALESCE(cover_art, '') as cover_art 
@@ -416,9 +452,9 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 	var songs []models.Song
 	for rows.Next() {
 		var song models.Song
-		var lastPlayedStr string
+		var lastPlayedStr, lastSkippedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
+			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"userID": userID,
@@ -430,6 +466,10 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 
 		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+		}
+
+		if lastSkippedStr != DefaultDateString {
+			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
 		}
 
 		songs = append(songs, song)
@@ -464,11 +504,12 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, excludePla
 
 	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
 		COALESCE(last_played, '1970-01-01') as last_played, 
+		COALESCE(last_skipped, '1970-01-01') as last_skipped,
 		COALESCE(play_count, 0) as play_count, 
 		COALESCE(skip_count, 0) as skip_count,
 		COALESCE(cover_art, '') as cover_art 
-		FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?)
-		ORDER BY id LIMIT ? OFFSET ?`, userID, cutoffStr, limit, offset)
+		FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?) AND (last_skipped IS NULL OR last_skipped = '1970-01-01' OR last_skipped < ?)
+		ORDER BY id LIMIT ? OFFSET ?`, userID, cutoffStr, cutoffStr, limit, offset)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query filtered songs batch").
 			WithContext("userID", userID).
@@ -481,9 +522,9 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, excludePla
 	var songs []models.Song
 	for rows.Next() {
 		var song models.Song
-		var lastPlayedStr string
+		var lastPlayedStr, lastSkippedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
+			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"userID":                  userID,
@@ -496,6 +537,10 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, excludePla
 
 		if lastPlayedStr != DefaultDateString {
 			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+		}
+
+		if lastSkippedStr != DefaultDateString {
+			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
 		}
 
 		songs = append(songs, song)
@@ -524,8 +569,8 @@ func (db *DB) GetSongCountFiltered(userID string, excludePlayedWithinDays int) (
 	cutoffStr := cutoffDate.Format("2006-01-02 15:04:05")
 
 	var count int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?)`,
-		userID, cutoffStr).Scan(&count)
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM songs WHERE user_id = ? AND (last_played IS NULL OR last_played = '1970-01-01' OR last_played < ?) AND (last_skipped IS NULL OR last_skipped = '1970-01-01' OR last_skipped < ?)`,
+		userID, cutoffStr, cutoffStr).Scan(&count)
 	if err != nil {
 		return 0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get filtered song count").
 			WithContext("userID", userID).
@@ -657,7 +702,7 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 				WithContext("song_id", songID)
 		}
 	} else if eventType == "skip" {
-		_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1 WHERE id = ? AND user_id = ?`, songID, userID)
+		_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1, last_skipped = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
 		if err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song skip count").
 				WithContext("user_id", userID).

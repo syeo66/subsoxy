@@ -70,6 +70,7 @@ The database connection pool includes proper goroutine lifecycle management:
 - `album` (TEXT): Album name
 - `duration` (INTEGER): Song duration in seconds
 - `last_played` (DATETIME): Last time the song was played by this user
+- `last_skipped` (DATETIME): Last time the song was skipped by this user ✅ **NEW**
 - `play_count` (INTEGER): Number of times the song was played by this user
 - `skip_count` (INTEGER): Number of times the song was skipped by this user
 - `cover_art` (TEXT): Cover art identifier for use with `/rest/getCoverArt` endpoint ✅ **NEW**
@@ -110,7 +111,9 @@ The songs table now includes cover art support with automatic migration:
 - **Migration Safe**: Automatically added to existing databases without data loss
 - **Subsonic Compatible**: Identifiers work with `/rest/getCoverArt` endpoint
 
-### Automatic Migration
+### Automatic Migration ✅ **ENHANCED**
+
+#### Cover Art Column Migration
 **Migration Process**:
 - **Detection**: Checks for existing `cover_art` column using `pragma_table_info`
 - **Safe Addition**: Uses `ALTER TABLE` to add column if missing
@@ -124,6 +127,22 @@ SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='cover_art'
 
 -- Add column if missing
 ALTER TABLE songs ADD COLUMN cover_art TEXT
+```
+
+#### Last Skipped Column Migration ✅ **NEW**
+**Migration Process**:
+- **Detection**: Checks for existing `last_skipped` column using `pragma_table_info`
+- **Safe Addition**: Uses `ALTER TABLE` to add column if missing
+- **Skip Tracking**: Enables 2-week replay prevention for skipped songs
+- **Backward Compatible**: Existing data remains intact
+
+**Migration Code**:
+```sql
+-- Check if last_skipped column exists
+SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='last_skipped'
+
+-- Add column if missing
+ALTER TABLE songs ADD COLUMN last_skipped DATETIME
 ```
 
 ### Cover Art API Integration

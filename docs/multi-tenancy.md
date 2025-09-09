@@ -7,7 +7,7 @@ The proxy implements **complete multi-tenancy** with full user data isolation at
 ### Complete User Isolation
 - **User-Specific Libraries**: Isolated song collections per user
 - **Isolated Play History**: Play/skip events tracked per user with no data bleeding
-- **Per-User Statistics**: Play counts, skip counts, last played timestamps
+- **Per-User Statistics**: Play counts, skip counts, last played timestamps, last skipped timestamps
 - **Isolated Transition Data**: Song transition probabilities calculated independently
 - **Per-User Shuffle**: Weighted recommendations based on individual preferences
 
@@ -23,6 +23,7 @@ The proxy implements **complete multi-tenancy** with full user data isolation at
 - `album` (TEXT): Album name
 - `duration` (INTEGER): Song duration in seconds
 - `last_played` (DATETIME): Last time the song was played by this user
+- `last_skipped` (DATETIME): Last time the song was skipped by this user ✅ **NEW**
 - `play_count` (INTEGER): Number of times the song was played by this user
 - `skip_count` (INTEGER): Number of times the song was skipped by this user
 
@@ -58,7 +59,7 @@ Optimized `user_id` indexes on all tables:
 
 ### Differential Sync for Song Removal ✅ **NEW**
 - **Intelligent Library Management**: Automatically removes songs from local database that no longer exist on upstream Subsonic server
-- **Data Preservation**: Preserves user listening history (play counts, skip counts, last played timestamps) for existing songs during sync
+- **Data Preservation**: Preserves user listening history (play counts, skip counts, last played timestamps, last skipped timestamps) for existing songs during sync
 - **Historical Data Integrity**: Maintains play events and transition data as historical records even when songs are removed
 - **Efficient Algorithm**: Uses map-based comparison to identify songs to add, update, and delete in single transaction
 - **Prevents Database Bloat**: Eliminates "zombie songs" that persist locally after removal from upstream library

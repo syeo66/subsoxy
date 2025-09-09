@@ -33,11 +33,11 @@ const (
 
 // Server operation constants
 const (
-	SongSyncInterval      = 1 * time.Hour
-	CleanupInterval       = 1 * time.Minute // Check for timed-out pending songs every minute
-	UserSyncStaggerDelay  = 2 * time.Second
-	CORSMaxAge            = "86400"
-	SubsonicAPIVersion    = "1.15.0"
+	SongSyncInterval     = 1 * time.Hour
+	CleanupInterval      = 1 * time.Minute // Check for timed-out pending songs every minute
+	UserSyncStaggerDelay = 2 * time.Second
+	CORSMaxAge           = "86400"
+	SubsonicAPIVersion   = "1.15.0"
 	ClientName           = "subsoxy"
 )
 
@@ -48,13 +48,13 @@ const (
 )
 
 type ProxyServer struct {
-	config       *config.Config
-	logger       *logrus.Logger
-	proxy        *httputil.ReverseProxy
-	hooks        map[string][]models.Hook
-	db           *database.DB
-	credentials  *credentials.Manager
-	handlers     *handlers.Handler
+	config        *config.Config
+	logger        *logrus.Logger
+	proxy         *httputil.ReverseProxy
+	hooks         map[string][]models.Hook
+	db            *database.DB
+	credentials   *credentials.Manager
+	handlers      *handlers.Handler
 	shuffle       *shuffle.Service
 	server        *http.Server
 	syncTicker    *time.Ticker
