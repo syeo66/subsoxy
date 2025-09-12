@@ -201,8 +201,9 @@ func (s *Service) CheckForSkip(userID string, newSong *models.Song) (*models.Son
 }
 
 // GetWeightedShuffledSongs returns a shuffled list of songs based on user listening history
-// with 2-week replay prevention. Songs played within the last 14 days are avoided unless
-// there are insufficient alternatives to fulfill the request.
+// with robust 2-week replay prevention. Songs played OR skipped within the last 14 days are 
+// avoided unless there are insufficient alternatives to fulfill the request.
+// Uses consistent cutoff time calculation and improved database filtering for reliability.
 func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {
 	// For small libraries, use the original algorithm
 	totalSongs, err := s.db.GetSongCount(userID)
@@ -221,7 +222,8 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		return nil, err
 	}
 
-	// Filter songs to prefer those not played within 2 weeks
+	// Calculate cutoff time once for consistency to prevent edge cases
+	// from multiple time.Now() calls across components
 	now := time.Now()
 	twoWeeksAgo := now.AddDate(0, 0, -TwoWeekReplayThreshold)
 
@@ -294,14 +296,20 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 }
 
 // getWeightedShuffledSongsOptimized implements a memory-efficient shuffle algorithm
-// for large song libraries using reservoir sampling and batch processing with 2-week
+// for large song libraries using reservoir sampling and batch processing with robust 2-week
 // replay prevention. Filters at the database level for optimal memory usage.
+// Uses consistent cutoff time passed to database methods for timing consistency.
 func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, totalSongs int) ([]models.Song, error) {
 	const batchSize = BatchSize
 	result := make([]models.Song, 0, count)
 
+	// Calculate cutoff time once for consistency to prevent edge cases
+	// from multiple time.Now() calls across database methods
+	now := time.Now()
+	cutoffTime := now.AddDate(0, 0, -TwoWeekReplayThreshold)
+
 	// First try to get songs that haven't been played within 2 weeks
-	eligibleSongs, err := s.db.GetSongCountFiltered(userID, TwoWeekReplayThreshold)
+	eligibleSongs, err := s.db.GetSongCountFiltered(userID, cutoffTime)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +358,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 		var err error
 
 		if useFiltered {
-			batch, err = s.db.GetSongsBatchFiltered(userID, batchSize, offset, TwoWeekReplayThreshold)
+			batch, err = s.db.GetSongsBatchFiltered(userID, batchSize, offset, cutoffTime)
 		} else {
 			batch, err = s.db.GetSongsBatch(userID, batchSize, offset)
 		}

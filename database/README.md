@@ -27,8 +27,10 @@ CREATE TABLE songs (
     album TEXT NOT NULL,
     duration INTEGER NOT NULL,
     last_played DATETIME,
+    last_skipped DATETIME,    -- ✅ FIXED: Tracks when songs were skipped
     play_count INTEGER DEFAULT 0,
     skip_count INTEGER DEFAULT 0,
+    cover_art TEXT,           -- ✅ NEW: Cover art support
     PRIMARY KEY (id, user_id)
 );
 ```
@@ -140,6 +142,23 @@ prob, err := db.GetTransitionProbability(userID, "song1", "song2")
 
 // Each user's events and transitions are completely isolated
 bobProb, err := db.GetTransitionProbability("bob", "song1", "song2")  // Independent from alice's data
+```
+
+### Multi-Tenant Filtered Song Retrieval ✅ **FIXED**
+```go
+// Get count of songs for a user excluding recently played/skipped songs
+cutoffTime := time.Now().AddDate(0, 0, -14)  // 2 weeks ago
+eligibleCount, err := db.GetSongCountFiltered(userID, cutoffTime)
+
+// Get batch of songs excluding recently played/skipped songs (for 2-week replay prevention)
+songs, err := db.GetSongsBatchFiltered(userID, limit, offset, cutoffTime)
+
+// Improved filtering logic with consistent NULL handling:
+// WHERE (COALESCE(last_played, '1970-01-01') < cutoff) AND 
+//       (COALESCE(last_skipped, '1970-01-01') < cutoff)
+
+// Each user gets filtered results based only on their own play/skip history
+bobSongs, err := db.GetSongsBatchFiltered("bob", 50, 0, cutoffTime)  // Independent filtering
 ```
 
 ### Connection Pool Management

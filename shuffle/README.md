@@ -16,8 +16,8 @@ This module provides:
 
 The weighted shuffle algorithm considers three main factors **per user** to provide personalized recommendations:
 
-### 1. User-Specific Time Decay Weight
-Reduces likelihood of recently played songs **for each individual user** to encourage variety.
+### 1. User-Specific Time Decay Weight with 2-Week Replay Prevention ✅ **FIXED**
+Reduces likelihood of recently played OR skipped songs **for each individual user** to encourage variety. Now includes robust 2-week replay prevention.
 
 ```go
 func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
@@ -33,6 +33,10 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
     
     return 1.0 + math.Min(daysSinceLastPlayed/DaysPerYear, 1.0)
 }
+
+// 2-Week Replay Prevention - Both played AND skipped songs are filtered
+// Database filtering with consistent timing prevents songs from being 
+// included in shuffle results for 14 days after last play OR skip
 ```
 
 ### 2. Per-User Play/Skip Ratio Weight

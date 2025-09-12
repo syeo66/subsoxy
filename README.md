@@ -6,7 +6,7 @@ A high-performance Go-based proxy server that enhances your Subsonic music serve
 
 **Subsoxy** sits between your music client and Subsonic server to add powerful features:
 
-- **🎯 Smart Shuffle**: Personalized song recommendations with 2-week replay prevention for both played and skipped songs
+- **🎯 Smart Shuffle**: Personalized song recommendations with robust 2-week replay prevention for both played and skipped songs
 - **📊 Play Tracking**: Automatic monitoring of what you play, skip, and enjoy
 - **👥 Multi-User**: Complete isolation - each user gets their own personalized experience  
 - **🔄 Auto-Sync**: Keeps your music library updated automatically
@@ -52,7 +52,7 @@ That's it! Subsoxy will automatically:
 ### Intelligent Music Recommendations
 Your `/rest/getRandomSongs` requests now return personalized recommendations instead of random songs:
 - **Learns Your Taste**: Tracks what you play vs skip with enhanced, preload-resistant skip detection
-- **2-Week Replay Prevention**: Songs won't repeat for 14 days after being played OR skipped (unless no other options available)
+- **2-Week Replay Prevention**: Songs won't repeat for 14 days after being played OR skipped with consistent timing and robust filtering (unless no other options available)
 - **Smart Transitions**: Considers song flow and your listening patterns
 - **Individual Learning**: Each user gets their own personalized experience
 - **Cover Art Included**: Full cover art support in both JSON and XML responses
