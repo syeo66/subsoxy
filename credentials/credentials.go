@@ -84,11 +84,14 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 	cm.validCredentials[username] = encryptedCred
 	cm.mutex.Unlock()
 
-	// Log differently for token vs password auth
-	if strings.HasPrefix(password, "TOKEN:") {
-		cm.logger.WithField("username", username).Info("Token-based credentials validated and stored")
-	} else {
-		cm.logger.WithField("username", username).Info("Password-based credentials validated and stored")
+	// Only log when credentials are actually new or changed
+	if isNewCredential {
+		// Log differently for token vs password auth
+		if strings.HasPrefix(password, "TOKEN:") {
+			cm.logger.WithField("username", username).Info("Token-based credentials validated and stored")
+		} else {
+			cm.logger.WithField("username", username).Info("Password-based credentials validated and stored")
+		}
 	}
 	return isNewCredential, nil
 }
@@ -158,7 +161,6 @@ func (cm *Manager) validate(username, password string) error {
 	if subsonicResp, ok := pingResp["subsonic-response"].(map[string]interface{}); ok {
 		if status, ok := subsonicResp["status"].(string); ok {
 			if status == "ok" {
-				cm.logger.WithField("username", username).Info("Successfully validated credentials")
 				return nil
 			} else {
 				return errors.ErrInvalidCredentials.WithContext("username", username).
