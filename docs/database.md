@@ -176,6 +176,7 @@ ALTER TABLE songs ADD COLUMN last_skipped DATETIME
 - **User-Isolated Automatic Song Sync**: Fetches all songs from the Subsonic API every hour using validated credentials, with smart startup timing that waits for client requests before syncing
 - **Immediate Sync on New Credentials ✅ NEW**: Automatically triggers full library sync when new credentials are first captured, providing instant user experience instead of waiting for hourly cycle
 - **Directory Traversal Sync ✅ NEW**: Uses proper Subsonic API methodology (`getMusicFolders` → `getIndexes` → `getMusicDirectory`) for reliable and complete library discovery
+- **Differential Sync with Accurate Change Detection ✅ ENHANCED**: Only counts songs as "updated" when metadata actually changes, provides precise sync statistics with added/updated/unchanged/deleted counts
 - **Per-User Play Tracking**: Records when songs are started, played completely, or skipped with complete user isolation
 - **User-Specific Transition Probability Analysis**: Builds transition probabilities between songs for each user independently
 - **Isolated Historical Data**: Maintains complete event history for analysis per user

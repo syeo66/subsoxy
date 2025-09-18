@@ -611,6 +611,57 @@ func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
 	return songIDs, nil
 }
 
+// GetSongsByIDs returns songs by their IDs for a specific user
+func (db *DB) GetSongsByIDs(userID string, songIDs []string) (map[string]models.Song, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if len(songIDs) == 0 {
+		return make(map[string]models.Song), nil
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(songIDs))
+	args := make([]interface{}, 0, len(songIDs)+1)
+	args = append(args, userID)
+
+	for i, songID := range songIDs {
+		placeholders[i] = "?"
+		args = append(args, songID)
+	}
+
+	query := `SELECT id, title, artist, album, duration,
+		COALESCE(cover_art, '') as cover_art
+		FROM songs WHERE user_id = ? AND id IN (` +
+		strings.Join(placeholders, ",") + `)`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query songs by IDs").
+			WithContext("userID", userID).
+			WithContext("songCount", len(songIDs))
+	}
+	defer rows.Close()
+
+	songs := make(map[string]models.Song)
+	for rows.Next() {
+		var song models.Song
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, &song.Duration, &song.CoverArt)
+		if err != nil {
+			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song")
+			continue
+		}
+		songs[song.ID] = song
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during songs by IDs iteration").
+			WithContext("userID", userID)
+	}
+
+	return songs, nil
+}
+
 // DeleteSongs removes songs by ID for a user while preserving user data integrity
 func (db *DB) DeleteSongs(userID string, songIDs []string) error {
 	if userID == "" {

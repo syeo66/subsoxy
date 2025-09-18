@@ -627,9 +627,31 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 
 	// Calculate actually new songs (not just updated ones)
 	var newSongs []models.Song
+	var existingSongsToCheck []string
 	for _, song := range allSongs {
 		if !existingSongIDs[song.ID] {
 			newSongs = append(newSongs, song)
+		} else {
+			existingSongsToCheck = append(existingSongsToCheck, song.ID)
+		}
+	}
+
+	// Fetch existing songs to compare for actual changes
+	var actuallyUpdatedCount int
+	if len(existingSongsToCheck) > 0 {
+		existingSongs, err := ps.db.GetSongsByIDs(username, existingSongsToCheck)
+		if err != nil {
+			ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Warn("Failed to fetch existing songs for comparison, counting all as updated")
+			actuallyUpdatedCount = len(existingSongsToCheck)
+		} else {
+			// Compare each existing song with its new version to detect actual changes
+			for _, song := range allSongs {
+				if existingSong, exists := existingSongs[song.ID]; exists {
+					if songHasChanged(existingSong, song) {
+						actuallyUpdatedCount++
+					}
+				}
+			}
 		}
 	}
 
@@ -640,11 +662,12 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	}
 
 	ps.logger.WithFields(logrus.Fields{
-		"user":    sanitizeUsername(username),
-		"total":   len(allSongs),
-		"deleted": len(songsToDelete),
-		"added":   len(newSongs),
-		"updated": len(allSongs) - len(newSongs),
+		"user":       sanitizeUsername(username),
+		"total":      len(allSongs),
+		"deleted":    len(songsToDelete),
+		"added":      len(newSongs),
+		"updated":    actuallyUpdatedCount,
+		"unchanged":  len(existingSongsToCheck) - actuallyUpdatedCount,
 	}).Info("Successfully completed differential sync for user")
 
 	return nil
@@ -903,6 +926,15 @@ func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
 	}
 
 	return nil
+}
+
+// songHasChanged compares two songs to detect if metadata has actually changed
+func songHasChanged(existing, new models.Song) bool {
+	return existing.Title != new.Title ||
+		existing.Artist != new.Artist ||
+		existing.Album != new.Album ||
+		existing.Duration != new.Duration ||
+		existing.CoverArt != new.CoverArt
 }
 
 // AddPendingSong adds a song to the pending list when streaming starts

@@ -57,13 +57,16 @@ Optimized `user_id` indexes on all tables:
 - **Background Processing**: Immediate sync runs in background without blocking client requests
 - **Zero Configuration**: Works automatically with no additional setup required
 
-### Differential Sync for Song Removal ✅ **NEW**
+### Differential Sync with Accurate Change Detection ✅ **ENHANCED**
 - **Intelligent Library Management**: Automatically removes songs from local database that no longer exist on upstream Subsonic server
+- **Precise Change Detection**: Only counts songs as "updated" when metadata actually changes (title, artist, album, duration, cover art)
+- **Accurate Sync Reporting**: Distinguishes between new, updated, unchanged, and deleted songs with precise counts
 - **Data Preservation**: Preserves user listening history (play counts, skip counts, last played timestamps, last skipped timestamps) for existing songs during sync
 - **Historical Data Integrity**: Maintains play events and transition data as historical records even when songs are removed
-- **Efficient Algorithm**: Uses map-based comparison to identify songs to add, update, and delete in single transaction
+- **Efficient Algorithm**: Uses map-based comparison combined with metadata comparison to identify actual changes
+- **Performance Optimization**: Fetches existing songs in batches for efficient metadata comparison
 - **Prevents Database Bloat**: Eliminates "zombie songs" that persist locally after removal from upstream library
-- **Comprehensive Logging**: Detailed sync statistics showing added, updated, and deleted song counts per user
+- **Enhanced Logging**: Detailed sync statistics showing added, updated, unchanged, and deleted song counts per user
 
 ## Security & Validation
 

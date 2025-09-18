@@ -120,6 +120,10 @@ songs, err := db.GetAllSongs(userID)
 // Get existing song IDs for differential sync (NEW)
 existingIDs, err := db.GetExistingSongIDs(userID)
 
+// Get existing songs by IDs for change detection (NEW)
+songIDs := []string{"song1", "song2", "song3"}
+existingSongs, err := db.GetSongsByIDs(userID, songIDs)
+
 // Delete songs that no longer exist upstream (NEW)
 songsToDelete := []string{"song1", "song2"}
 err := db.DeleteSongs(userID, songsToDelete)
@@ -258,13 +262,16 @@ Context: {"field": "songID"}
 - Preserves existing play/skip counts when updating song metadata
 - Batch processing with transactions for performance
 
-### Differential Sync ✅ **NEW**
+### Differential Sync with Change Detection ✅ **ENHANCED**
 - **GetExistingSongIDs()**: Efficiently retrieves all existing song IDs for a user as a map for O(1) lookup
+- **GetSongsByIDs()**: Fetches existing songs by IDs for metadata comparison and change detection
+- **Change Detection**: Only counts songs as "updated" when metadata actually changes (title, artist, album, duration, cover art)
+- **Accurate Sync Reporting**: Distinguishes between new, updated, unchanged, and deleted songs
 - **DeleteSongs()**: Removes songs by ID while preserving historical play events and transition data
 - **Data Preservation**: Maintains user listening history even when songs are removed from the library
 - **Historical Integrity**: Intentionally preserves play_events and song_transitions as historical records
 - **Transaction Safety**: All operations use transactions to ensure atomicity and consistency
-- **Comprehensive Logging**: Detailed logging of deletion operations with success/failure statistics
+- **Comprehensive Logging**: Detailed logging with accurate change counts (added, updated, unchanged, deleted)
 
 ### Event Recording
 - Automatically updates song statistics (play_count, skip_count, last_played)

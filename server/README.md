@@ -307,8 +307,63 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
         }
     }
     
-    // Store all songs for this user
-    return ps.db.StoreSongs(username, allSongs)
+    // Implement differential sync with accurate change detection
+    existingSongIDs, err := ps.db.GetExistingSongIDs(username)
+    if err != nil {
+        return err
+    }
+
+    // Calculate new songs and songs to check for changes
+    var newSongs []models.Song
+    var existingSongsToCheck []string
+    for _, song := range allSongs {
+        if !existingSongIDs[song.ID] {
+            newSongs = append(newSongs, song)
+        } else {
+            existingSongsToCheck = append(existingSongsToCheck, song.ID)
+        }
+    }
+
+    // Fetch existing songs for comparison
+    var actuallyUpdatedCount int
+    if len(existingSongsToCheck) > 0 {
+        existingSongs, err := ps.db.GetSongsByIDs(username, existingSongsToCheck)
+        if err == nil {
+            // Compare metadata to detect actual changes
+            for _, song := range allSongs {
+                if existingSong, exists := existingSongs[song.ID]; exists {
+                    if songHasChanged(existingSong, song) {
+                        actuallyUpdatedCount++
+                    }
+                }
+            }
+        }
+    }
+
+    // Store all songs (preserves play history for existing songs)
+    if err := ps.db.StoreSongs(username, allSongs); err != nil {
+        return err
+    }
+
+    // Log accurate sync statistics
+    ps.logger.WithFields(logrus.Fields{
+        "user":       username,
+        "total":      len(allSongs),
+        "added":      len(newSongs),
+        "updated":    actuallyUpdatedCount,
+        "unchanged":  len(existingSongsToCheck) - actuallyUpdatedCount,
+    }).Info("Successfully completed differential sync for user")
+
+    return nil
+}
+
+// songHasChanged compares two songs to detect if metadata has actually changed
+func songHasChanged(existing, new models.Song) bool {
+    return existing.Title != new.Title ||
+        existing.Artist != new.Artist ||
+        existing.Album != new.Album ||
+        existing.Duration != new.Duration ||
+        existing.CoverArt != new.CoverArt
 }
 ```
 
