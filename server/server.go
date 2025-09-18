@@ -625,6 +625,14 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		}).Info("Removed songs no longer in upstream library")
 	}
 
+	// Calculate actually new songs (not just updated ones)
+	var newSongs []models.Song
+	for _, song := range allSongs {
+		if !existingSongIDs[song.ID] {
+			newSongs = append(newSongs, song)
+		}
+	}
+
 	// Store/update current upstream songs (preserves existing play counts)
 	if err := ps.db.StoreSongs(username, allSongs); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
@@ -635,7 +643,8 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		"user":    sanitizeUsername(username),
 		"total":   len(allSongs),
 		"deleted": len(songsToDelete),
-		"added":   len(allSongs) - (len(existingSongIDs) - len(songsToDelete)),
+		"added":   len(newSongs),
+		"updated": len(allSongs) - len(newSongs),
 	}).Info("Successfully completed differential sync for user")
 
 	return nil
