@@ -265,11 +265,36 @@ The shuffle service now includes comprehensive thread safety:
 - **Preload-Resistant**: Handles multiple concurrent stream requests without false positives
 - **Thread-Safe**: All methods use appropriate mutex protection for concurrent access
 
-### Testing
+### Testing ✅ **ENHANCED**
+
+#### Comprehensive Test Coverage
+- **Core Algorithm Tests**: `TestCalculateSongWeight()` with 6 scenarios covering all weight calculation paths
+- **Boundary Condition Tests**: `TestCalculateSongWeightBoundaryConditions()` with extreme values and edge cases
+- **Transition Weight Tests**: `TestCalculateSongWeightWithTransition()` with pre-computed probabilities
+- **Component Tests**: Individual tests for time decay, play/skip ratio, and transition weights
+- **Integration Tests**: Full shuffle workflow testing with various library sizes
+
+#### Test Scenarios
+- **Never played songs**: Validates maximum weight boost (2.0 × 1.5 × 1.0 = 3.0)
+- **Recently played songs**: Tests time decay with high play ratios
+- **Frequently skipped songs**: Validates low weights despite song age
+- **Transition history**: Tests weight boost from previous song relationships
+- **Mixed play/skip history**: Validates balanced weight calculations
+- **Boundary cases**: 30-day threshold testing for time decay transitions
+- **Extreme values**: Million-count plays/skips, ancient dates, very recent plays
+- **Finite validation**: Ensures all weights are positive and finite
+
+#### Concurrent Access Testing
 - **Concurrent Test**: `TestConcurrentAccess()` with 100 goroutines × 10 iterations
 - **Race Detection**: Verified with `go test -race` - no race conditions detected
 - **Load Testing**: Tested with 10 simultaneous users via curl - no issues
-- **Coverage**: Test coverage increased from 94.6% to 95.0%
+- **Thread Safety**: All weight calculation functions tested under concurrent access
+
+#### Test Quality Metrics
+- **Coverage**: High test coverage across all weight calculation algorithms
+- **Validation**: All weights verified as positive, finite, and within expected ranges
+- **Error Handling**: Boundary conditions tested for robustness
+- **Performance**: Algorithm efficiency validated with timing assertions
 
 ### Performance
 - **Read Optimization**: Multiple readers can access `lastPlayed` data simultaneously

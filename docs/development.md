@@ -65,9 +65,9 @@ This document provides information for developers working on the Subsonic proxy 
 go mod tidy
 ```
 
-### Testing
+### Testing ✅ **ENHANCED**
 ```bash
-# Run all tests - all tests pass with comprehensive coverage (78.4% overall)
+# Run all tests - all tests pass with comprehensive coverage (78.4%+ overall)
 go test ./...
 
 # Run tests with race detection (recommended)
@@ -77,6 +77,11 @@ go test ./... -race
 go test ./database -run="ErrorHandling"  # Database error scenarios
 go test ./handlers -run="BoundaryConditions"  # Input validation tests
 go test ./credentials -run="Network"  # Network failure scenarios
+
+# Run enhanced shuffle algorithm tests
+go test ./shuffle -v -run="TestCalculateSongWeight"  # Core weight calculation tests
+go test ./shuffle -v -run="TestCalculateSongWeightBoundaryConditions"  # Edge case tests
+go test ./shuffle -v -run="TestCalculateSongWeightWithTransition"  # Transition weight tests
 
 # Run benchmarks
 go test ./shuffle/... -bench=BenchmarkShuffle -benchtime=3s
@@ -94,13 +99,22 @@ rm subsoxy
 
 ## Testing Strategies
 
-### Test Categories
+### Test Categories ✅ **ENHANCED**
+- **Algorithm Correctness**: Core shuffle weight calculations with mathematical precision validation
 - **Error Handling**: Complete database operation error scenarios with validation testing
-- **Boundary Conditions**: Input validation limits, edge cases, parameter validation
+- **Boundary Conditions**: Input validation limits, edge cases, parameter validation, extreme values
 - **Security Testing**: SQL injection prevention, malicious input patterns
 - **Network Scenarios**: Timeouts, failures, slow responses, connection testing
 - **Concurrent Access**: Thread safety and race condition prevention verification
 - **Performance Testing**: Large datasets, memory efficiency, concurrent operations
+
+### Enhanced Weight Calculation Testing
+- **Mathematical Validation**: Precise weight calculations with tolerance checking
+- **Edge Case Coverage**: Zero values, extreme counts, ancient timestamps, recent plays
+- **Finite Validation**: Ensures all weights are positive, finite, and within bounds
+- **Component Testing**: Individual validation of time decay, play/skip ratios, transitions
+- **Scenario Coverage**: Never played, recently played, skipped, mixed history songs
+- **Boundary Testing**: 30-day thresholds, million-count extremes, 10-year-old dates
 
 ### Multi-User Testing
 ```bash
@@ -217,12 +231,15 @@ The application implements graceful error recovery:
 - Test security fixes thoroughly
 - Keep credentials in structured, protected storage
 
-### Testing Best Practices
+### Testing Best Practices ✅ **ENHANCED**
 - Write tests for both happy path and error scenarios
-- Include boundary condition tests
-- Test concurrent access patterns
-- Use table-driven tests where appropriate
-- Mock external dependencies
+- Include boundary condition tests with extreme value validation
+- Test concurrent access patterns with race detection
+- Use table-driven tests where appropriate with comprehensive scenario coverage
+- Mock external dependencies for isolated testing
+- Validate mathematical correctness with tolerance checking
+- Ensure all calculated values are finite and within expected ranges
+- Test algorithm components individually and in integration
 
 ## Contributing
 

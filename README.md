@@ -185,14 +185,20 @@ Optimized for real-world usage:
 
 For performance details, see [Weighted Shuffle Guide](docs/weighted-shuffle.md).
 
-## 🧪 Testing
+## 🧪 Testing ✅ **ENHANCED**
 
 ```bash
-# Run all tests
+# Run all tests with comprehensive coverage
 go test ./...
 
-# Run with race detection
+# Run with race detection (recommended)
 go test ./... -race
+
+# Run enhanced shuffle algorithm tests
+go test ./shuffle -v -run="TestCalculateSongWeight"
+
+# Test boundary conditions and edge cases
+go test ./shuffle -v -run="TestCalculateSongWeightBoundaryConditions"
 
 # Test with real Subsonic server
 ./subsoxy -upstream https://your-server.com &

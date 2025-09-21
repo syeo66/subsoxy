@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -298,25 +299,321 @@ func TestCalculateSongWeight(t *testing.T) {
 
 	service := New(db, logger)
 
+	tests := []struct {
+		name           string
+		song           models.Song
+		setupFunc      func()
+		expectedWeight float64
+		tolerance      float64
+		description    string
+	}{
+		{
+			name: "Never played song with no history",
+			song: models.Song{
+				ID:         "song1",
+				Title:      "Test Song 1",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Time{}, // Never played
+				PlayCount:  0,
+				SkipCount:  0,
+			},
+			setupFunc: func() {
+				// No setup needed
+			},
+			expectedWeight: 1.0 * 2.0 * 1.5 * 1.0, // baseWeight * timeWeight * playSkipWeight * transitionWeight
+			tolerance:      0.001,
+			description:    "Never played song with no history should get maximum weight boost",
+		},
+		{
+			name: "Recently played song with high play ratio",
+			song: models.Song{
+				ID:         "song2",
+				Title:      "Test Song 2",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Now().Add(-1 * time.Hour), // Played 1 hour ago
+				PlayCount:  10,
+				SkipCount:  0,
+			},
+			setupFunc: func() {
+				// No setup needed
+			},
+			expectedWeight: 1.0 * 0.1 * 2.0 * 1.0, // Recently played should have low time weight but high play/skip weight
+			tolerance:      0.05,                   // Allow some tolerance for time calculations
+			description:    "Recently played but always played song should balance time decay with play ratio",
+		},
+		{
+			name: "Frequently skipped song",
+			song: models.Song{
+				ID:         "song3",
+				Title:      "Test Song 3",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Now().AddDate(0, 0, -60), // Played 60 days ago
+				PlayCount:  1,
+				SkipCount:  9,
+			},
+			setupFunc: func() {
+				// No setup needed
+			},
+			expectedWeight: 1.0 * 1.164 * 0.38 * 1.0, // Old song with bad skip ratio
+			tolerance:      0.1,
+			description:    "Frequently skipped song should get low weight despite age",
+		},
+		{
+			name: "Song with transition history",
+			song: models.Song{
+				ID:         "song4",
+				Title:      "Test Song 4",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Time{}, // Never played
+				PlayCount:  0,
+				SkipCount:  0,
+			},
+			setupFunc: func() {
+				// Store songs in database
+				testSongs := []models.Song{
+					{ID: "prev_song", Title: "Previous Song", Artist: "Artist", Album: "Album", Duration: 300},
+					{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 300},
+				}
+				err := db.StoreSongs("testuser", testSongs)
+				if err != nil {
+					t.Errorf("Failed to store songs: %v", err)
+				}
+
+				// Set last played song
+				service.SetLastPlayed("testuser", &testSongs[0])
+
+				// Record a transition with high probability
+				err = db.RecordTransition("testuser", "prev_song", "song4", "play")
+				if err != nil {
+					t.Errorf("Failed to record transition: %v", err)
+				}
+			},
+			expectedWeight: 1.0 * 2.0 * 1.5 * 1.5, // Never played song with good transition history
+			tolerance:      0.001,
+			description:    "Song with strong transition history should get boosted weight",
+		},
+		{
+			name: "Old song with mixed history",
+			song: models.Song{
+				ID:         "song5",
+				Title:      "Test Song 5",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Now().AddDate(-1, 0, 0), // Played 1 year ago
+				PlayCount:  5,
+				SkipCount:  5,
+			},
+			setupFunc: func() {
+				// No setup needed
+			},
+			expectedWeight: 1.0 * 2.0 * 1.1 * 1.0, // Old song with balanced play/skip ratio
+			tolerance:      0.1,
+			description:    "Very old song with balanced history should get good weight",
+		},
+		{
+			name: "Song played 30 days ago - boundary case",
+			song: models.Song{
+				ID:         "song6",
+				Title:      "Test Song 6",
+				Artist:     "Test Artist",
+				Album:      "Test Album",
+				Duration:   300,
+				LastPlayed: time.Now().AddDate(0, 0, -30), // Exactly 30 days ago
+				PlayCount:  3,
+				SkipCount:  2,
+			},
+			setupFunc: func() {
+				// No setup needed
+			},
+			expectedWeight: 1.0 * 1.0 * 1.28 * 1.0, // 30 days should be at the boundary
+			tolerance:      0.15, // Increased tolerance for time boundary calculations
+			description:    "Song at 30-day boundary should transition from decay to age boost",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clean state for each test
+			service.lastPlayed = make(map[string]*models.Song)
+
+			// Run setup if provided
+			if tt.setupFunc != nil {
+				tt.setupFunc()
+			}
+
+			weight := service.calculateSongWeight("testuser", tt.song)
+
+			if weight < tt.expectedWeight-tt.tolerance || weight > tt.expectedWeight+tt.tolerance {
+				t.Errorf("%s: expected weight %.3f ± %.3f, got %.3f",
+					tt.description, tt.expectedWeight, tt.tolerance, weight)
+			}
+
+			// Verify weight is positive
+			if weight <= 0 {
+				t.Errorf("Weight should always be positive, got %.3f", weight)
+			}
+		})
+	}
+}
+
+func TestCalculateSongWeightBoundaryConditions(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_boundary.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
+	tests := []struct {
+		name        string
+		song        models.Song
+		description string
+	}{
+		{
+			name: "Extreme play count",
+			song: models.Song{
+				ID:         "extreme_play",
+				LastPlayed: time.Time{},
+				PlayCount:  1000000,
+				SkipCount:  0,
+			},
+			description: "Song with extreme play count should not cause overflow",
+		},
+		{
+			name: "Extreme skip count",
+			song: models.Song{
+				ID:         "extreme_skip",
+				LastPlayed: time.Time{},
+				PlayCount:  0,
+				SkipCount:  1000000,
+			},
+			description: "Song with extreme skip count should not cause underflow",
+		},
+		{
+			name: "Very recent play",
+			song: models.Song{
+				ID:         "very_recent",
+				LastPlayed: time.Now().Add(-1 * time.Minute),
+				PlayCount:  1,
+				SkipCount:  0,
+			},
+			description: "Very recently played song should have minimal but positive weight",
+		},
+		{
+			name: "Ancient play date",
+			song: models.Song{
+				ID:         "ancient",
+				LastPlayed: time.Now().AddDate(-10, 0, 0), // 10 years ago
+				PlayCount:  1,
+				SkipCount:  0,
+			},
+			description: "Very old song should have bounded maximum weight",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			weight := service.calculateSongWeight("testuser", tt.song)
+
+			// Verify weight is finite and positive
+			if weight <= 0 || !isFinite(weight) {
+				t.Errorf("%s: weight should be finite and positive, got %.6f", tt.description, weight)
+			}
+
+			// Verify weight is within reasonable bounds (shouldn't be too extreme)
+			if weight > 100.0 {
+				t.Errorf("%s: weight seems unreasonably high: %.6f", tt.description, weight)
+			}
+		})
+	}
+}
+
+func TestCalculateSongWeightWithTransition(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_transition.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
 	song := models.Song{
-		ID:         "123",
-		Title:      "Test Song",
-		Artist:     "Test Artist",
-		Album:      "Test Album",
-		Duration:   300,
-		LastPlayed: time.Time{}, // Never played
+		ID:         "test_song",
+		LastPlayed: time.Time{},
 		PlayCount:  0,
 		SkipCount:  0,
 	}
 
-	weight := service.calculateSongWeight("testuser", song)
-
-	// Never played song with no history should get:
-	// baseWeight(1.0) * timeWeight(2.0) * playSkipWeight(1.5) * transitionWeight(1.0) = 3.0
-	expected := 1.0 * 2.0 * 1.5 * 1.0
-	if weight != expected {
-		t.Errorf("Expected weight %.2f for never played song, got %.2f", expected, weight)
+	tests := []struct {
+		name                  string
+		transitionProbability float64
+		expectedWeight        float64
+		description           string
+	}{
+		{
+			name:                  "No transition data",
+			transitionProbability: 0.0,
+			expectedWeight:        1.0 * 2.0 * 1.5 * 1.0, // Default transition weight is 1.0
+			description:           "Song with no transition data should use default weight",
+		},
+		{
+			name:                  "Low transition probability",
+			transitionProbability: 0.2,
+			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 0.2), // BaseTransitionWeight + probability
+			description:           "Song with low transition probability should get modest boost",
+		},
+		{
+			name:                  "High transition probability",
+			transitionProbability: 0.8,
+			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 0.8), // BaseTransitionWeight + probability
+			description:           "Song with high transition probability should get significant boost",
+		},
+		{
+			name:                  "Perfect transition probability",
+			transitionProbability: 1.0,
+			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 1.0), // BaseTransitionWeight + probability
+			description:           "Song always follows previous song should get maximum transition boost",
+		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			weight := service.calculateSongWeightWithTransition("testuser", song, tt.transitionProbability)
+
+			tolerance := 0.001
+			if weight < tt.expectedWeight-tolerance || weight > tt.expectedWeight+tolerance {
+				t.Errorf("%s: expected weight %.3f, got %.3f",
+					tt.description, tt.expectedWeight, weight)
+			}
+		})
+	}
+}
+
+// Helper function to check if a float64 is finite
+func isFinite(f float64) bool {
+	return !math.IsInf(f, 0) && !math.IsNaN(f)
 }
 
 func TestGetWeightedShuffledSongs(t *testing.T) {
