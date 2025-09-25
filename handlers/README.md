@@ -70,18 +70,19 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 ```
 
 ### Event Recording Handlers
-Handlers that record play events for analytics and machine learning.
+Handlers that implement simplified skip detection and play event recording.
 
 ```go
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), addPendingFunc func(string, string), setStartedFunc func(string, string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string) bool {
     userID := r.URL.Query().Get("u")
     songID := r.URL.Query().Get("id")
+
+    // Stream handler now only logs requests - no longer used for skip detection
     if songID != "" {
-        // Add song to pending list (no immediate skip detection)
-        addPendingFunc(userID, songID)
-        // Record that this song started (for compatibility)
-        setStartedFunc(userID, songID)
-        recordFunc(userID, songID, "start", nil)
+        h.logger.WithFields(logrus.Fields{
+            "song_id": SanitizeForLogging(songID),
+            "user_id": SanitizeForLogging(userID),
+        }).Debug("Stream request logged (no tracking for skip detection)")
     }
     return false // Continue with normal proxy behavior
 }
@@ -91,18 +92,17 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
     songID := r.URL.Query().Get("id")
     submission := r.URL.Query().Get("submission")
     isSubmission := submission == "true"
-    
+
     if songID != "" {
-        // Process pending songs first (may mark earlier songs as skipped)
+        // Simplified scrobble-only skip detection:
+        // 1. Process scrobble (marks previous non-submission scrobbles as skipped)
         processScrobbleFunc(userID, songID, isSubmission)
-        
+
+        // 2. Only record definitive plays (submission=true)
         if isSubmission {
             recordFunc(userID, songID, "play", nil)
             setLastPlayed(userID, songID)
         }
-        // Note: submission=false is processed for pending song cleanup,
-        // but doesn't count as a play. True skips occur when songs are
-        // never scrobbled or when later songs get scrobbled first.
     }
     return false // Continue with normal proxy behavior
 }

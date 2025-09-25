@@ -34,7 +34,6 @@ const (
 // Server operation constants
 const (
 	SongSyncInterval     = 1 * time.Hour
-	CleanupInterval      = 1 * time.Minute // Check for timed-out pending songs every minute
 	UserSyncStaggerDelay = 2 * time.Second
 	CORSMaxAge           = "86400"
 	SubsonicAPIVersion   = "1.15.0"
@@ -48,20 +47,19 @@ const (
 )
 
 type ProxyServer struct {
-	config        *config.Config
-	logger        *logrus.Logger
-	proxy         *httputil.ReverseProxy
-	hooks         map[string][]models.Hook
-	db            *database.DB
-	credentials   *credentials.Manager
-	handlers      *handlers.Handler
-	shuffle       *shuffle.Service
-	server        *http.Server
-	syncTicker    *time.Ticker
-	cleanupTicker *time.Ticker
-	syncMutex     sync.RWMutex
-	shutdownChan  chan struct{}
-	rateLimiter   *rate.Limiter
+	config       *config.Config
+	logger       *logrus.Logger
+	proxy        *httputil.ReverseProxy
+	hooks        map[string][]models.Hook
+	db           *database.DB
+	credentials  *credentials.Manager
+	handlers     *handlers.Handler
+	shuffle      *shuffle.Service
+	server       *http.Server
+	syncTicker   *time.Ticker
+	syncMutex    sync.RWMutex
+	shutdownChan chan struct{}
+	rateLimiter  *rate.Limiter
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -140,7 +138,6 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	go server.syncSongs()
-	go server.cleanupPendingSongs()
 
 	return server, nil
 }
@@ -363,13 +360,10 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 
 	close(ps.shutdownChan)
 
-	// Safely stop the tickers
+	// Safely stop the ticker
 	ps.syncMutex.RLock()
 	if ps.syncTicker != nil {
 		ps.syncTicker.Stop()
-	}
-	if ps.cleanupTicker != nil {
-		ps.cleanupTicker.Stop()
 	}
 	ps.syncMutex.RUnlock()
 
@@ -426,49 +420,7 @@ func (ps *ProxyServer) syncSongs() {
 	}
 }
 
-func (ps *ProxyServer) cleanupPendingSongs() {
-	// Safely create and store the cleanup ticker
-	ps.syncMutex.Lock()
-	ps.cleanupTicker = time.NewTicker(CleanupInterval)
-	ps.syncMutex.Unlock()
-
-	defer func() {
-		ps.syncMutex.Lock()
-		if ps.cleanupTicker != nil {
-			ps.cleanupTicker.Stop()
-		}
-		ps.syncMutex.Unlock()
-	}()
-
-	ps.logger.Info("Pending songs cleanup routine started")
-
-	for {
-		ps.syncMutex.RLock()
-		ticker := ps.cleanupTicker
-		ps.syncMutex.RUnlock()
-
-		if ticker == nil {
-			return
-		}
-
-		select {
-		case <-ticker.C:
-			recordSkipFunc := func(userID string, song *models.Song) {
-				err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
-				if err != nil {
-					ps.logger.WithError(err).WithFields(logrus.Fields{
-						"user_id": userID,
-						"song_id": song.ID,
-					}).Error("Failed to record skip event during cleanup")
-				}
-			}
-			ps.shuffle.CleanupTimedOutPendingSongs(recordSkipFunc)
-		case <-ps.shutdownChan:
-			ps.logger.Info("Stopping pending songs cleanup goroutine")
-			return
-		}
-	}
-}
+// cleanupPendingSongs method removed - no longer needed with simplified skip detection
 
 func (ps *ProxyServer) fetchAndStoreSongs() {
 	// Get all valid credentials for multi-user sync
@@ -914,19 +866,6 @@ func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
 	ps.shuffle.SetLastPlayed(userID, song)
 }
 
-// CheckAndRecordSkip checks if the previous song was skipped and records it (deprecated)
-func (ps *ProxyServer) CheckAndRecordSkip(userID, newSongID string) error {
-	newSong := &models.Song{ID: newSongID}
-
-	// Check if the previous song was skipped
-	skippedSong, wasSkipped := ps.shuffle.CheckForSkip(userID, newSong)
-	if wasSkipped {
-		// Record the skip event
-		return ps.db.RecordPlayEvent(userID, skippedSong.ID, "skip", nil)
-	}
-
-	return nil
-}
 
 // songHasChanged compares two songs to detect if metadata has actually changed
 func songHasChanged(existing, new models.Song) bool {
@@ -937,11 +876,6 @@ func songHasChanged(existing, new models.Song) bool {
 		existing.CoverArt != new.CoverArt
 }
 
-// AddPendingSong adds a song to the pending list when streaming starts
-func (ps *ProxyServer) AddPendingSong(userID, songID string) {
-	song := &models.Song{ID: songID}
-	ps.shuffle.AddPendingSong(userID, song)
-}
 
 // ProcessScrobble processes a scrobble event and handles pending songs
 func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) {
@@ -957,11 +891,6 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 	ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
 
-// SetLastStarted records when a song starts streaming
-func (ps *ProxyServer) SetLastStarted(userID, songID string) {
-	song := &models.Song{ID: songID}
-	ps.shuffle.SetLastStarted(userID, song)
-}
 
 func (ps *ProxyServer) GetHandlers() *handlers.Handler {
 	return ps.handlers

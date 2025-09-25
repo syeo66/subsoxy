@@ -360,40 +360,10 @@ func TestHandleStream(t *testing.T) {
 		req := httptest.NewRequest("GET", "/rest/stream?u=testuser&id=123", nil)
 		w := httptest.NewRecorder()
 
-		var recordedSongID string
-		var recordedEventType string
-		var recordedPreviousSong *string
-
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
-			recordedSongID = songID
-			recordedEventType = eventType
-			recordedPreviousSong = previousSong
-		}
-
-		// Mock add pending and set started functions
-		addPendingFunc := func(userID, songID string) {
-			// Track that this song was added as pending
-		}
-		setStartedFunc := func(userID, songID string) {
-			// Track that this song started
-		}
-
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream")
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
-		}
-
-		if recordedSongID != "123" {
-			t.Errorf("Expected recorded song ID '123', got '%s'", recordedSongID)
-		}
-
-		if recordedEventType != "start" {
-			t.Errorf("Expected recorded event type 'start', got '%s'", recordedEventType)
-		}
-
-		if recordedPreviousSong != nil {
-			t.Errorf("Expected no previous song, got %v", recordedPreviousSong)
 		}
 	})
 
@@ -401,27 +371,10 @@ func TestHandleStream(t *testing.T) {
 		req := httptest.NewRequest("GET", "/rest/stream?u=testuser", nil)
 		w := httptest.NewRecorder()
 
-		var recordCalled bool
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
-			recordCalled = true
-		}
-
-		// Mock functions - should not be called
-		addPendingFunc := func(userID, songID string) {
-			t.Error("AddPending function should not be called without song ID")
-		}
-		setStartedFunc := func(userID, songID string) {
-			t.Error("SetStarted function should not be called without song ID")
-		}
-
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream")
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
-		}
-
-		if recordCalled {
-			t.Error("Record function should not be called without song ID")
 		}
 	})
 
@@ -429,27 +382,10 @@ func TestHandleStream(t *testing.T) {
 		req := httptest.NewRequest("GET", "/rest/stream?u=testuser&id=", nil)
 		w := httptest.NewRecorder()
 
-		var recordCalled bool
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
-			recordCalled = true
-		}
-
-		// Mock functions - should not be called
-		addPendingFunc := func(userID, songID string) {
-			t.Error("AddPending function should not be called with empty song ID")
-		}
-		setStartedFunc := func(userID, songID string) {
-			t.Error("SetStarted function should not be called with empty song ID")
-		}
-
-		handled := handler.HandleStream(w, req, "/rest/stream", recordFunc, addPendingFunc, setStartedFunc)
+		handled := handler.HandleStream(w, req, "/rest/stream")
 
 		if handled {
 			t.Error("HandleStream should return false (not handled)")
-		}
-
-		if recordCalled {
-			t.Error("Record function should not be called with empty song ID")
 		}
 	})
 }

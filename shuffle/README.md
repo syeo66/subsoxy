@@ -99,29 +99,30 @@ songs, err := shuffleService.GetWeightedShuffledSongs(userID, 50)
 bobSongs, err := shuffleService.GetWeightedShuffledSongs("bob", 50)
 ```
 
-### Setting User-Specific Last Played Song (Thread-Safe)
+### Setting User-Specific Last Played Song and Simplified Skip Detection (Thread-Safe)
 ```go
-// Set last played song for a specific user - now thread-safe
+// Set last played song for a specific user - thread-safe
 userID := "alice"
 song := &models.Song{ID: "song123"}
 shuffleService.SetLastPlayed(userID, song) // Protected by mutex
 
-// Add song to pending list when streaming starts (enhanced skip detection)
-shuffleService.AddPendingSong(userID, &models.Song{ID: "song456"})
-
-// Process scrobble and handle pending songs
+// Process scrobble with simplified skip detection (scrobble-only logic)
 recordSkipFunc := func(userID string, song *models.Song) {
     // Record skip event in database
     fmt.Printf("Song %s was skipped by %s\n", song.ID, userID)
 }
-shuffleService.ProcessScrobble(userID, "song456", true, recordSkipFunc) // submission=true
 
-// Cleanup timed-out pending songs (runs automatically in background)
-shuffleService.CleanupTimedOutPendingSongs(recordSkipFunc)
+// Two-case skip detection:
+// 1. Non-submission scrobble followed by another scrobble = skip previous
+shuffleService.ProcessScrobble(userID, "song456", false, recordSkipFunc) // submission=false
+shuffleService.ProcessScrobble(userID, "song789", false, recordSkipFunc) // song456 marked as skip
+
+// 2. Submission scrobble = definitive play
+shuffleService.ProcessScrobble(userID, "song789", true, recordSkipFunc) // song789 marked as play
 
 // Multiple goroutines can safely access different users concurrently
 go shuffleService.SetLastPlayed("alice", songA)
-go shuffleService.SetLastStarted("bob", songB)   // Safe concurrent access
+go shuffleService.ProcessScrobble("bob", "songB", true, recordSkipFunc) // Safe concurrent access
 ```
 
 ## Multi-Tenant Weight Calculation ✅ **UPDATED**
@@ -256,13 +257,12 @@ The shuffle service now includes comprehensive thread safety:
 - **Read Protection**: `CheckForSkip()` and `calculateTransitionWeight()` use shared locks (`RLock()/RUnlock()`)
 - **Concurrent Users**: Multiple users can safely access the service simultaneously
 
-### Enhanced Skip Detection Methods ✅ **UPDATED**
-- **AddPendingSong**: Adds songs to pending list when streaming starts (no immediate skip detection)
-- **ProcessScrobble**: Processes scrobble events and marks earlier unscrobbled songs as skipped
-- **CleanupTimedOutPendingSongs**: Removes songs pending >5 minutes and marks them as skipped
-- **SetLastStarted**: Records when a song begins streaming (compatibility method)
-- **CheckForSkip**: Legacy skip detection method (deprecated but maintained for compatibility)
-- **Preload-Resistant**: Handles multiple concurrent stream requests without false positives
+### Simplified Skip Detection Methods ✅ **SIMPLIFIED**
+- **ProcessScrobble**: Implements streamlined 2-case scrobble-only skip detection logic
+- **SetLastPlayed**: Records when a song is successfully played (only definitive plays)
+- **No Stream Tracking**: Stream events no longer influence skip detection
+- **No Timeout Logic**: Removed complex pending song timeout system
+- **Cleaner Implementation**: Focuses solely on user scrobble behavior
 - **Thread-Safe**: All methods use appropriate mutex protection for concurrent access
 
 ### Testing ✅ **ENHANCED**

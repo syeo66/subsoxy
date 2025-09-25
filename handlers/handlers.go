@@ -184,7 +184,7 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 	return false
 }
 
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), addPendingFunc func(string, string), setStartedFunc func(string, string)) bool {
+func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 
@@ -200,17 +200,10 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 			return false
 		}
 
-		// Add this song to pending list (no immediate skip detection)
-		addPendingFunc(userID, songID)
-
-		// Record that this song started (for compatibility)
-		setStartedFunc(userID, songID)
-		recordFunc(userID, songID, "start", nil)
-
 		h.logger.WithFields(logrus.Fields{
 			"song_id": SanitizeForLogging(songID),
 			"user_id": SanitizeForLogging(userID),
-		}).Debug("Added pending song and recorded stream start event")
+		}).Debug("Stream request logged (no tracking for skip detection)")
 	} else {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Stream request missing song ID")
