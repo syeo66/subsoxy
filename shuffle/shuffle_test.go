@@ -99,9 +99,9 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 		{
 			name:        "Never played",
 			lastPlayed:  time.Time{},
-			expectedMin: 2.0,
-			expectedMax: 2.0,
-			description: "Never played songs should get 2.0x boost",
+			expectedMin: 4.0,
+			expectedMax: 4.0,
+			description: "Never played songs should get 4.0x boost",
 		},
 		{
 			name:        "Played today",
@@ -322,7 +322,7 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 2.0 * 1.5 * 1.0, // baseWeight * timeWeight * playSkipWeight * transitionWeight
+			expectedWeight: 1.0 * 4.0 * 1.5 * 1.0, // baseWeight * timeWeight * playSkipWeight * transitionWeight
 			tolerance:      0.001,
 			description:    "Never played song with no history should get maximum weight boost",
 		},
@@ -396,7 +396,7 @@ func TestCalculateSongWeight(t *testing.T) {
 					t.Errorf("Failed to record transition: %v", err)
 				}
 			},
-			expectedWeight: 1.0 * 2.0 * 1.5 * 1.5, // Never played song with good transition history
+			expectedWeight: 1.0 * 4.0 * 1.5 * 1.5, // Never played song with good transition history
 			tolerance:      0.001,
 			description:    "Song with strong transition history should get boosted weight",
 		},
@@ -575,25 +575,25 @@ func TestCalculateSongWeightWithTransition(t *testing.T) {
 		{
 			name:                  "No transition data",
 			transitionProbability: 0.0,
-			expectedWeight:        1.0 * 2.0 * 1.5 * 1.0, // Default transition weight is 1.0
+			expectedWeight:        1.0 * 4.0 * 1.5 * 1.0, // Default transition weight is 1.0
 			description:           "Song with no transition data should use default weight",
 		},
 		{
 			name:                  "Low transition probability",
 			transitionProbability: 0.2,
-			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 0.2), // BaseTransitionWeight + probability
+			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 0.2), // BaseTransitionWeight + probability
 			description:           "Song with low transition probability should get modest boost",
 		},
 		{
 			name:                  "High transition probability",
 			transitionProbability: 0.8,
-			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 0.8), // BaseTransitionWeight + probability
+			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 0.8), // BaseTransitionWeight + probability
 			description:           "Song with high transition probability should get significant boost",
 		},
 		{
 			name:                  "Perfect transition probability",
 			transitionProbability: 1.0,
-			expectedWeight:        1.0 * 2.0 * 1.5 * (0.5 + 1.0), // BaseTransitionWeight + probability
+			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 1.0), // BaseTransitionWeight + probability
 			description:           "Song always follows previous song should get maximum transition boost",
 		},
 	}
