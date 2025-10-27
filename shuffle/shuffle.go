@@ -99,8 +99,8 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 }
 
 // GetWeightedShuffledSongs returns a shuffled list of songs based on user listening history
-// with robust 2-week replay prevention. Songs played OR skipped within the last 14 days are 
-// avoided unless there are insufficient alternatives to fulfill the request.
+// with strict 2-week replay prevention. Songs played OR skipped within the last 14 days are
+// strictly excluded from the results.
 // Uses consistent cutoff time calculation and improved database filtering for reliability.
 func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {
 	// For small libraries, use the original algorithm
@@ -144,15 +144,9 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		"requestedCount": count,
 	}).Debug("Filtered songs by 2-week replay threshold")
 
-	// Use eligible songs first, fall back to recent songs if needed
-	songsToUse := eligibleSongs
-	if len(eligibleSongs) < count && len(recentSongs) > 0 {
-		s.logger.WithField("userID", userID).Debug("Not enough eligible songs, including recent songs")
-		songsToUse = songs // Use all songs if we don't have enough eligible ones
-	}
-
-	weightedSongs := make([]models.WeightedSong, 0, len(songsToUse))
-	for _, song := range songsToUse {
+	// Only use eligible songs - no fallback to recent songs
+	weightedSongs := make([]models.WeightedSong, 0, len(eligibleSongs))
+	for _, song := range eligibleSongs {
 		weight := s.calculateSongWeight(userID, song)
 		weightedSongs = append(weightedSongs, models.WeightedSong{
 			Song:   song,
@@ -194,7 +188,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 }
 
 // getWeightedShuffledSongsOptimized implements a memory-efficient shuffle algorithm
-// for large song libraries using reservoir sampling and batch processing with robust 2-week
+// for large song libraries using reservoir sampling and batch processing with strict 2-week
 // replay prevention. Filters at the database level for optimal memory usage.
 // Uses consistent cutoff time passed to database methods for timing consistency.
 func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, totalSongs int) ([]models.Song, error) {
@@ -212,32 +206,16 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 		return nil, err
 	}
 
-	var songsToSampleFrom, fallbackSongs int
-	var useFiltered bool
+	// Always use filtered songs - no fallback to recent songs
+	songsToSampleFrom := eligibleSongs
+	useFiltered := true
 
-	if eligibleSongs >= count {
-		// We have enough songs that haven't been played in 2 weeks
-		songsToSampleFrom = eligibleSongs
-		useFiltered = true
-		s.logger.WithFields(logrus.Fields{
-			"userID":         userID,
-			"eligibleSongs":  eligibleSongs,
-			"totalSongs":     totalSongs,
-			"requestedCount": count,
-		}).Debug("Using filtered songs (not played within 2 weeks)")
-	} else {
-		// Not enough eligible songs, use all songs but log the situation
-		songsToSampleFrom = totalSongs
-		fallbackSongs = totalSongs - eligibleSongs
-		useFiltered = false
-		s.logger.WithFields(logrus.Fields{
-			"userID":         userID,
-			"eligibleSongs":  eligibleSongs,
-			"totalSongs":     totalSongs,
-			"fallbackSongs":  fallbackSongs,
-			"requestedCount": count,
-		}).Debug("Not enough eligible songs, including recent songs")
-	}
+	s.logger.WithFields(logrus.Fields{
+		"userID":         userID,
+		"eligibleSongs":  eligibleSongs,
+		"totalSongs":     totalSongs,
+		"requestedCount": count,
+	}).Debug("Using filtered songs (not played within 2 weeks)")
 
 	// Use reservoir sampling approach to avoid loading all songs
 	// We'll sample more songs than needed to account for weight distribution

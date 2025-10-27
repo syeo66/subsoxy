@@ -4,12 +4,12 @@ The `/rest/getRandomSongs` endpoint provides intelligent song shuffling using a 
 
 ## 2-Week Replay Prevention ✅ **ENHANCED**
 
-The shuffle system now prevents songs from being replayed too frequently:
+The shuffle system strictly prevents songs from being replayed too frequently:
 
 - **Minimum Replay Interval**: Songs are not replayed for at least 14 days after being played OR skipped
 - **Skip Tracking**: Skipped songs are now tracked with `last_skipped` timestamps and excluded from replay
 - **Comprehensive Prevention**: Both played and skipped songs respect the 2-week prevention period
-- **Intelligent Fallback**: When fewer than the requested number of songs are available outside the 2-week window, the system gracefully includes recent songs
+- **Strict Enforcement**: Songs within the 2-week window are strictly excluded from results
 - **Database-Level Filtering**: For large libraries (>5,000 songs), filtering happens at the database level for memory efficiency
 - **Configurable**: `TwoWeekReplayThreshold = 14` constant can be adjusted if needed
 
@@ -91,8 +91,8 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 ## Multi-Tenancy Benefits
 
 - **Personalized Recommendations**: Each user gets recommendations based on their individual listening history
-- **2-Week Replay Prevention**: ✅ **ENHANCED** - Each user's songs are prevented from replaying for 14 days after being played OR skipped individually
-- **User-Specific Repetition Reduction**: Recently played songs by each user are less likely to appear in their shuffle
+- **2-Week Replay Prevention**: ✅ **ENHANCED** - Each user's songs are strictly prevented from replaying for 14 days after being played OR skipped individually
+- **User-Specific Repetition Reduction**: Recently played songs by each user are excluded from their shuffle for 14 days
 - **Individual Preference Learning**: Songs each user tends to play (vs skip) are weighted higher for that user only
 - **Per-User Context Awareness**: Considers what song was played previously by each user for smoother transitions
 - **Individual Discovery**: New and unplayed songs get a boost per user to encourage personalized exploration
@@ -116,10 +116,10 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 
 ### Memory-Efficient Implementation
 
-For large libraries, the system uses reservoir sampling with replay prevention:
+For large libraries, the system uses reservoir sampling with strict replay prevention:
 - **Pre-filtering**: Database-level filtering excludes songs played OR skipped within 14 days
 - **Sampling**: Samples 3x the requested number of songs from eligible candidates
-- **Fallback**: Includes all songs if insufficient eligible songs are available
+- **Strict Filtering**: Only returns songs outside the 2-week replay window
 - **Batch Processing**: Processes songs in batches to control memory usage
 - **High Quality**: Maintains recommendation quality with reduced memory footprint
 - **Automatic Switching**: Switches to this mode for libraries >5,000 songs
