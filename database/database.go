@@ -29,6 +29,28 @@ const (
 	DefaultDateString            = "1970-01-01"
 )
 
+// parseTimestamp tries multiple datetime formats to parse SQLite timestamps
+// Handles both Go's time.Time format (with timezone) and SQLite's datetime() format (without timezone)
+func parseTimestamp(s string) (time.Time, error) {
+	formats := []string{
+		"2006-01-02 15:04:05.999999-07:00", // Go's time.Time format with timezone and fractional seconds
+		"2006-01-02 15:04:05",              // SQLite's datetime() format
+		"2006-01-02T15:04:05.999999-07:00", // RFC3339 variant with T separator
+		"2006-01-02T15:04:05Z07:00",        // RFC3339 without fractional seconds
+	}
+
+	var lastErr error
+	for _, format := range formats {
+		if t, err := time.Parse(format, s); err == nil {
+			return t, nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	return time.Time{}, lastErr
+}
+
 type DB struct {
 	conn         *sql.DB
 	logger       *logrus.Logger
@@ -387,11 +409,11 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 		}
 
 		if lastPlayedStr != DefaultDateString {
-			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+			song.LastPlayed, _ = parseTimestamp(lastPlayedStr)
 		}
 
 		if lastSkippedStr != DefaultDateString {
-			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
+			song.LastSkipped, _ = parseTimestamp(lastSkippedStr)
 		}
 
 		songs = append(songs, song)
@@ -465,11 +487,11 @@ func (db *DB) GetSongsBatch(userID string, limit, offset int) ([]models.Song, er
 		}
 
 		if lastPlayedStr != DefaultDateString {
-			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+			song.LastPlayed, _ = parseTimestamp(lastPlayedStr)
 		}
 
 		if lastSkippedStr != DefaultDateString {
-			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
+			song.LastSkipped, _ = parseTimestamp(lastSkippedStr)
 		}
 
 		songs = append(songs, song)
@@ -536,11 +558,11 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime
 		}
 
 		if lastPlayedStr != DefaultDateString {
-			song.LastPlayed, _ = time.Parse("2006-01-02 15:04:05", lastPlayedStr)
+			song.LastPlayed, _ = parseTimestamp(lastPlayedStr)
 		}
 
 		if lastSkippedStr != DefaultDateString {
-			song.LastSkipped, _ = time.Parse("2006-01-02 15:04:05", lastSkippedStr)
+			song.LastSkipped, _ = parseTimestamp(lastSkippedStr)
 		}
 
 		songs = append(songs, song)

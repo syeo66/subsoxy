@@ -721,12 +721,19 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 	}
 
 	// Test that songs are returned (we can't easily test randomness, but we can verify functionality)
+	// Note: Only 1 song should be eligible because the other 2 have recent play/skip events
+	// within the 2-week replay prevention window
 	songs, err := service.GetWeightedShuffledSongs("testuser", 2)
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
-	if len(songs) != 2 {
-		t.Errorf("Expected 2 songs, got %d", len(songs))
+	// Should return only 1 song (song "3") because songs "1" and "2" were recently played/skipped
+	if len(songs) != 1 {
+		t.Errorf("Expected 1 song (due to 2-week replay prevention), got %d", len(songs))
+	}
+	// Verify it's song "3" (the only eligible one)
+	if len(songs) == 1 && songs[0].ID != "3" {
+		t.Errorf("Expected song '3', got '%s'", songs[0].ID)
 	}
 }
 
