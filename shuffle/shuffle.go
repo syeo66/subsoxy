@@ -22,7 +22,7 @@ const (
 
 // Weight calculation constants
 const (
-	NeverPlayedWeight      = 2.0
+	NeverPlayedWeight      = 4.0
 	HoursPerDay            = 24.0
 	TimeDecayDaysThreshold = 30
 	TimeDecayMinWeight     = 0.1
