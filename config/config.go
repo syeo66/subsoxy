@@ -40,6 +40,7 @@ const (
 	DefaultStrictTransportSecurity = "max-age=31536000; includeSubDomains"
 	DefaultContentSecurityPolicy   = "default-src 'self'; script-src 'self'; object-src 'none';"
 	DefaultReferrerPolicy          = "strict-origin-when-cross-origin"
+	DefaultDebugMode               = false
 )
 
 // Validation limits
@@ -83,6 +84,8 @@ type Config struct {
 	StrictTransportSecurity string
 	ContentSecurityPolicy   string
 	ReferrerPolicy          string
+	// Debug mode
+	DebugMode bool
 }
 
 func New() (*Config, error) {
@@ -115,6 +118,7 @@ func New() (*Config, error) {
 		strictTransportSecurity = flag.String("strict-transport-security", getEnvOrDefault("STRICT_TRANSPORT_SECURITY", DefaultStrictTransportSecurity), "Strict-Transport-Security header value")
 		contentSecurityPolicy   = flag.String("content-security-policy", getEnvOrDefault("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy), "Content-Security-Policy header value")
 		referrerPolicy          = flag.String("referrer-policy", getEnvOrDefault("REFERRER_POLICY", DefaultReferrerPolicy), "Referrer-Policy header value")
+		debugMode               = flag.Bool("debug-mode", getEnvBoolOrDefault("DEBUG", DefaultDebugMode), "Enable debug endpoint")
 	)
 	flag.Parse()
 
@@ -144,6 +148,7 @@ func New() (*Config, error) {
 		StrictTransportSecurity: *strictTransportSecurity,
 		ContentSecurityPolicy:   *contentSecurityPolicy,
 		ReferrerPolicy:          *referrerPolicy,
+		DebugMode:               *debugMode,
 	}
 
 	if err := config.Validate(); err != nil {

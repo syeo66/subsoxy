@@ -43,11 +43,11 @@ type ScrobbleInfo struct {
 }
 
 type Service struct {
-	db            *database.DB
-	logger        *logrus.Logger
-	lastPlayed    map[string]*models.Song    // Map userID to last played song
-	lastScrobble  map[string]*ScrobbleInfo   // Map userID to last scrobble info
-	mu            sync.RWMutex               // Protects all maps
+	db           *database.DB
+	logger       *logrus.Logger
+	lastPlayed   map[string]*models.Song  // Map userID to last played song
+	lastScrobble map[string]*ScrobbleInfo // Map userID to last scrobble info
+	mu           sync.RWMutex             // Protects all maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
@@ -64,7 +64,6 @@ func (s *Service) SetLastPlayed(userID string, song *models.Song) {
 	defer s.mu.Unlock()
 	s.lastPlayed[userID] = song
 }
-
 
 // ProcessScrobble processes a scrobble event with simplified skip detection
 func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) {
@@ -431,4 +430,37 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 	}
 
 	return BaseTransitionWeight + probability
+}
+
+// GetAllSongsWithWeights returns all songs for a user with their calculated weights
+// This is primarily used for debugging purposes to visualize weight calculations
+func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, error) {
+	songs, err := s.db.GetAllSongs(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	weightedSongs := make([]models.WeightedSong, 0, len(songs))
+	for _, song := range songs {
+		weight := s.calculateSongWeight(userID, song)
+		weightedSongs = append(weightedSongs, models.WeightedSong{
+			Song:   song,
+			Weight: weight,
+		})
+	}
+
+	// Sort by weight descending
+	sort.Slice(weightedSongs, func(i, j int) bool {
+		return weightedSongs[i].Weight > weightedSongs[j].Weight
+	})
+
+	return weightedSongs, nil
+}
+
+// GetWeightComponents returns individual weight components for debugging
+func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight float64) {
+	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed)
+	playSkipWeight = s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
+	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
+	return
 }

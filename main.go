@@ -53,6 +53,14 @@ func main() {
 		return handlers.HandleShuffle(w, r, endpoint)
 	})
 
+	// Register debug endpoint only when DEBUG=1 is set
+	if cfg.DebugMode {
+		proxyServer.AddHook("/debug", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+			return handlers.HandleDebug(w, r, endpoint)
+		})
+		fmt.Println("Debug endpoint enabled at /debug")
+	}
+
 	if err := proxyServer.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start proxy server: %v\n", err)
 		os.Exit(1)

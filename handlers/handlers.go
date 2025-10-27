@@ -257,3 +257,134 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 
 	return false
 }
+
+func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	userID := r.URL.Query().Get("u")
+	if userID == "" {
+		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
+			Warn("Debug request missing user ID")
+		http.Error(w, "Missing user parameter", http.StatusBadRequest)
+		return true
+	}
+
+	songs, err := h.shuffle.GetAllSongsWithWeights(userID)
+	if err != nil {
+		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get songs for debug")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return true
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	html := `<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<title>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+		h1 { color: #333; }
+		table { border-collapse: collapse; width: 100%; background-color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+		th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+		th { background-color: #4CAF50; color: white; position: sticky; top: 0; }
+		tr:nth-child(even) { background-color: #f2f2f2; }
+		tr:hover { background-color: #ddd; }
+		.num { text-align: right; font-family: monospace; }
+		.date { font-family: monospace; font-size: 0.9em; }
+		.never { color: #999; font-style: italic; }
+		.high-weight { background-color: #c8e6c9; }
+		.medium-weight { background-color: #fff9c4; }
+		.low-weight { background-color: #ffccbc; }
+		.info { margin: 20px 0; padding: 15px; background-color: #e3f2fd; border-left: 4px solid #2196F3; }
+	</style>
+</head>
+<body>
+	<h1>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</h1>
+	<div class="info">
+		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
+		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight × Transition Weight<br>
+		<strong>Color Legend:</strong>
+		<span style="background-color: #c8e6c9; padding: 2px 6px;">High (≥2.0)</span>
+		<span style="background-color: #fff9c4; padding: 2px 6px;">Medium (1.0-2.0)</span>
+		<span style="background-color: #ffccbc; padding: 2px 6px;">Low (&lt;1.0)</span>
+	</div>
+	<table>
+		<thead>
+			<tr>
+				<th>Song ID</th>
+				<th>Title</th>
+				<th>Artist</th>
+				<th>Album</th>
+				<th class="num">Duration (s)</th>
+				<th class="num">Play Count</th>
+				<th class="num">Skip Count</th>
+				<th>Last Played</th>
+				<th>Last Skipped</th>
+				<th class="num">Time Weight</th>
+				<th class="num">Play/Skip Weight</th>
+				<th class="num">Transition Weight</th>
+				<th class="num">Final Weight</th>
+			</tr>
+		</thead>
+		<tbody>
+`
+
+	for _, songWeight := range songs {
+		song := songWeight.Song
+
+		// Format dates
+		lastPlayed := `<span class="never">Never</span>`
+		if !song.LastPlayed.IsZero() {
+			lastPlayed = `<span class="date">` + song.LastPlayed.Format("2006-01-02 15:04:05") + `</span>`
+		}
+
+		lastSkipped := `<span class="never">Never</span>`
+		if !song.LastSkipped.IsZero() {
+			lastSkipped = `<span class="date">` + song.LastSkipped.Format("2006-01-02 15:04:05") + `</span>`
+		}
+
+		// Calculate individual weight components
+		timeWeight, playSkipWeight, transitionWeight := h.shuffle.GetWeightComponents(userID, song)
+
+		// Determine row class based on final weight
+		rowClass := ""
+		if songWeight.Weight >= 2.0 {
+			rowClass = " class=\"high-weight\""
+		} else if songWeight.Weight >= 1.0 {
+			rowClass = " class=\"medium-weight\""
+		} else {
+			rowClass = " class=\"low-weight\""
+		}
+
+		html += `<tr` + rowClass + `>
+				<td>` + song.ID + `</td>
+				<td>` + song.Title + `</td>
+				<td>` + song.Artist + `</td>
+				<td>` + song.Album + `</td>
+				<td class="num">` + strconv.Itoa(song.Duration) + `</td>
+				<td class="num">` + strconv.Itoa(song.PlayCount) + `</td>
+				<td class="num">` + strconv.Itoa(song.SkipCount) + `</td>
+				<td>` + lastPlayed + `</td>
+				<td>` + lastSkipped + `</td>
+				<td class="num">` + strconv.FormatFloat(timeWeight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(playSkipWeight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(transitionWeight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(songWeight.Weight, 'f', 4, 64) + `</td>
+			</tr>
+`
+	}
+
+	html += `		</tbody>
+	</table>
+</body>
+</html>`
+
+	w.Write([]byte(html))
+
+	h.logger.WithFields(logrus.Fields{
+		"userID":    SanitizeForLogging(userID),
+		"songCount": len(songs),
+	}).Info("Served debug request")
+
+	return true
+}
