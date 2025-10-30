@@ -227,6 +227,9 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	// Create reservoir for sampling
 	reservoir := make([]models.Song, 0, sampleSize)
 
+	// Track total number of songs processed (not database offset)
+	totalProcessed := 0
+
 	// Process songs in batches to control memory usage
 	for offset := 0; offset < songsToSampleFrom; offset += batchSize {
 		var batch []models.Song
@@ -244,11 +247,12 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 
 		// Apply reservoir sampling to this batch
 		for _, song := range batch {
+			totalProcessed++
 			if len(reservoir) < sampleSize {
 				reservoir = append(reservoir, song)
 			} else {
 				// Replace with probability sampleSize/totalProcessed
-				randomIndex := rand.Intn(offset + len(reservoir))
+				randomIndex := rand.Intn(totalProcessed)
 				if randomIndex < sampleSize {
 					reservoir[randomIndex] = song
 				}
