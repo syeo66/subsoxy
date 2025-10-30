@@ -43,9 +43,10 @@ The shuffle system automatically adapts to library size for optimal performance:
 
 The shuffle algorithm calculates a weight for each song **per user** based on:
 
-1. **User-Specific Time Decay**: Songs played recently by the user (within 30 days) receive lower weights to encourage variety
-2. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
-3. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
+1. **Never-Played Boost**: Songs that have never been played receive a 4.0x weight multiplier to encourage discovery
+2. **User-Specific Time Decay**: Songs played recently by the user (within 30 days) receive lower weights to encourage variety
+3. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
+4. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
 
 ## Database Performance Optimizations ✅ **UPDATED**
 
@@ -109,10 +110,11 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 ### Weight Calculation Factors
 
 1. **2-Week Replay Filter**: ✅ **ENHANCED** - Songs played OR skipped within 14 days are excluded first
-2. **Time Decay Weight**: Recent songs (< 30 days) receive lower weights
-3. **Play/Skip Ratio Weight**: Based on user's historical play behavior
-4. **Transition Probability Weight**: Uses probabilities from user's last played song
-5. **Final Weight**: All factors multiplied together per user
+2. **Never-Played Bonus**: ✅ **INCREASED** - Songs with zero plays receive 4.0x weight (increased from 2.0x to prioritize discovery)
+3. **Time Decay Weight**: Recent songs (< 30 days) receive lower weights
+4. **Play/Skip Ratio Weight**: Based on user's historical play behavior
+5. **Transition Probability Weight**: Uses probabilities from user's last played song
+6. **Final Weight**: All factors multiplied together per user
 
 ### Memory-Efficient Implementation
 

@@ -147,6 +147,21 @@ curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=50&f=json"
 time curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=1000&f=json" > /dev/null
 ```
 
+### Debug Endpoint Testing
+```bash
+# Start server with debug mode enabled
+./subsoxy -debug-mode &
+
+# Access debug UI in browser to visualize song weights
+open "http://localhost:8080/debug?u=testuser&p=testpass"
+
+# Debug UI shows:
+# - All songs with calculated weights
+# - Individual weight components (time decay, play/skip ratio, transition probability)
+# - Color-coded weight visualization (high/medium/low)
+# - Sortable table with play counts, skip counts, last played/skipped timestamps
+```
+
 ### CORS Testing
 ```bash
 # Test CORS headers
@@ -170,6 +185,7 @@ The server includes built-in hooks for:
 - `/rest/stream` - Records song start events for play tracking
 - `/rest/scrobble` - Records song play/skip events and updates transition data
 - `/rest/getRandomSongs` - Returns weighted shuffle of songs based on play history and preferences
+- `/debug` - HTML UI for visualizing song weights (only enabled with `-debug-mode` flag or `DEBUG=1`)
 
 ### Adding Custom Hooks
 
