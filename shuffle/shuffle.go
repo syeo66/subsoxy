@@ -32,7 +32,9 @@ const (
 	PlayRatioMinWeight     = 0.2
 	PlayRatioMaxWeight     = 1.8
 	BaseTransitionWeight   = 0.5
-	TwoWeekReplayThreshold = 14 // Minimum days before a song can be replayed (unless no alternatives)
+	TwoWeekReplayThreshold = 14  // Minimum days before a song can be replayed (unless no alternatives)
+	ArtistRatioMinWeight   = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
+	ArtistRatioMaxWeight   = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
 )
 
 // ScrobbleInfo tracks the last scrobble for skip detection
@@ -348,8 +350,9 @@ func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed)
 	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
 	transitionWeight := s.calculateTransitionWeight(userID, song.ID)
+	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
-	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight
+	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight * artistWeight
 
 	s.logger.WithFields(logrus.Fields{
 		"userID":           userID,
@@ -357,6 +360,7 @@ func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 		"timeWeight":       timeWeight,
 		"playSkipWeight":   playSkipWeight,
 		"transitionWeight": transitionWeight,
+		"artistWeight":     artistWeight,
 		"finalWeight":      finalWeight,
 	}).Debug("Calculated song weight")
 
@@ -370,6 +374,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed)
 	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
+	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
 	// Use provided transition probability or default to 1.0 if not available
 	transitionWeight := 1.0
@@ -377,7 +382,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 		transitionWeight = BaseTransitionWeight + transitionProbability
 	}
 
-	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight
+	finalWeight := baseWeight * timeWeight * playSkipWeight * transitionWeight * artistWeight
 
 	s.logger.WithFields(logrus.Fields{
 		"userID":           userID,
@@ -385,6 +390,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 		"timeWeight":       timeWeight,
 		"playSkipWeight":   playSkipWeight,
 		"transitionWeight": transitionWeight,
+		"artistWeight":     artistWeight,
 		"finalWeight":      finalWeight,
 	}).Debug("Calculated song weight (optimized)")
 
@@ -436,6 +442,40 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 	return BaseTransitionWeight + probability
 }
 
+func (s *Service) calculateArtistWeight(userID, artist string) float64 {
+	stats, err := s.db.GetArtistStats(userID, artist)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logrus.Fields{
+			"user_id": userID,
+			"artist":  artist,
+		}).Debug("Failed to get artist stats, using default weight")
+		return 1.0
+	}
+
+	// If the artist has no play/skip history, use neutral weight
+	if stats.PlayCount == 0 && stats.SkipCount == 0 {
+		return 1.0
+	}
+
+	// Use the pre-calculated ratio from the database
+	// Map ratio [0.0, 1.0] to weight range [ArtistRatioMinWeight, ArtistRatioMaxWeight]
+	// ratio=0 (all skips) -> 0.5x weight
+	// ratio=0.5 (equal) -> 1.0x weight
+	// ratio=1.0 (all plays) -> 1.5x weight
+	artistWeight := ArtistRatioMinWeight + (stats.Ratio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
+
+	s.logger.WithFields(logrus.Fields{
+		"user_id":       userID,
+		"artist":        artist,
+		"play_count":    stats.PlayCount,
+		"skip_count":    stats.SkipCount,
+		"ratio":         stats.Ratio,
+		"artist_weight": artistWeight,
+	}).Debug("Calculated artist weight")
+
+	return artistWeight
+}
+
 // GetAllSongsWithWeights returns all songs for a user with their calculated weights
 // This is primarily used for debugging purposes to visualize weight calculations
 func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, error) {
@@ -462,9 +502,10 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 }
 
 // GetWeightComponents returns individual weight components for debugging
-func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight float64) {
+func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight, artistWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed)
 	playSkipWeight = s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
 	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
+	artistWeight = s.calculateArtistWeight(userID, song.Artist)
 	return
 }

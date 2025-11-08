@@ -940,3 +940,147 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Error("Expected shuffled songs after concurrent access")
 	}
 }
+
+func TestCalculateArtistWeight(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
+	userID := "testuser"
+
+	// Setup test data - create songs and artist stats
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Great Artist", Album: "Album 1", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Poor Artist", Album: "Album 2", Duration: 200},
+		{ID: "3", Title: "Song 3", Artist: "New Artist", Album: "Album 3", Duration: 220},
+		{ID: "4", Title: "Song 4", Artist: "Average Artist", Album: "Album 4", Duration: 240},
+	}
+
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Simulate play/skip events to create artist stats
+	// Great Artist: 10 plays, 0 skips (ratio = 1.0)
+	for i := 0; i < 10; i++ {
+		if err := db.RecordPlayEvent(userID, "1", "play", nil); err != nil {
+			t.Fatalf("Failed to record play event: %v", err)
+		}
+	}
+
+	// Poor Artist: 0 plays, 10 skips (ratio = 0.0)
+	for i := 0; i < 10; i++ {
+		if err := db.RecordPlayEvent(userID, "2", "skip", nil); err != nil {
+			t.Fatalf("Failed to record skip event: %v", err)
+		}
+	}
+
+	// Average Artist: 5 plays, 5 skips (ratio = 0.5)
+	for i := 0; i < 5; i++ {
+		if err := db.RecordPlayEvent(userID, "4", "play", nil); err != nil {
+			t.Fatalf("Failed to record play event: %v", err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if err := db.RecordPlayEvent(userID, "4", "skip", nil); err != nil {
+			t.Fatalf("Failed to record skip event: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		artist      string
+		expected    float64
+		description string
+	}{
+		{
+			name:        "Great artist (all plays)",
+			artist:      "Great Artist",
+			expected:    1.5, // ArtistRatioMinWeight (0.5) + ratio (1.0) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 1.0 * 1.0 = 1.5
+			description: "Artist with all plays should get 1.5x weight",
+		},
+		{
+			name:        "Poor artist (all skips)",
+			artist:      "Poor Artist",
+			expected:    0.5, // ArtistRatioMinWeight (0.5) + ratio (0.0) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 0.0 * 1.0 = 0.5
+			description: "Artist with all skips should get 0.5x weight",
+		},
+		{
+			name:        "New artist (no history)",
+			artist:      "New Artist",
+			expected:    1.0,
+			description: "Artist with no history should get 1.0 (neutral) weight",
+		},
+		{
+			name:        "Average artist (50% play ratio)",
+			artist:      "Average Artist",
+			expected:    1.0, // ArtistRatioMinWeight (0.5) + ratio (0.5) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 0.5 * 1.0 = 1.0
+			description: "Artist with 50% play ratio should get 1.0x weight",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			weight := service.calculateArtistWeight(userID, tt.artist)
+			// Use approximate comparison for floating point values
+			if math.Abs(weight-tt.expected) > 0.001 {
+				t.Errorf("%s: expected weight %.3f, got %.3f",
+					tt.description, tt.expected, weight)
+			}
+		})
+	}
+}
+
+func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
+	userID := "testuser"
+
+	// Test with extreme values
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Popular Artist", Album: "Album 1", Duration: 180},
+	}
+
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Simulate 100 plays, 0 skips
+	for i := 0; i < 100; i++ {
+		if err := db.RecordPlayEvent(userID, "1", "play", nil); err != nil {
+			t.Fatalf("Failed to record play event: %v", err)
+		}
+	}
+
+	weight := service.calculateArtistWeight(userID, "Popular Artist")
+	if weight != 1.5 {
+		t.Errorf("Expected weight 1.5 for artist with 100 plays, got %.3f", weight)
+	}
+
+	// Verify weight is finite and positive
+	if math.IsInf(weight, 0) || math.IsNaN(weight) || weight < 0 {
+		t.Errorf("Invalid weight value: %.3f (should be finite, positive number)", weight)
+	}
+}

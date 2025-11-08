@@ -302,7 +302,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	<h1>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</h1>
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
-		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight × Transition Weight<br>
+		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight × Transition Weight × Artist Weight<br>
 		<strong>Color Legend:</strong>
 		<span style="background-color: #c8e6c9; padding: 2px 6px;">High (≥2.0)</span>
 		<span style="background-color: #fff9c4; padding: 2px 6px;">Medium (1.0-2.0)</span>
@@ -323,6 +323,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<th class="num">Time Weight</th>
 				<th class="num">Play/Skip Weight</th>
 				<th class="num">Transition Weight</th>
+				<th class="num">Artist Weight</th>
 				<th class="num">Final Weight</th>
 			</tr>
 		</thead>
@@ -344,7 +345,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		}
 
 		// Calculate individual weight components
-		timeWeight, playSkipWeight, transitionWeight := h.shuffle.GetWeightComponents(userID, song)
+		timeWeight, playSkipWeight, transitionWeight, artistWeight := h.shuffle.GetWeightComponents(userID, song)
 
 		// Determine row class based on final weight
 		rowClass := ""
@@ -369,6 +370,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td class="num">` + strconv.FormatFloat(timeWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(playSkipWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(transitionWeight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(artistWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(songWeight.Weight, 'f', 4, 64) + `</td>
 			</tr>
 `

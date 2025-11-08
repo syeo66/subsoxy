@@ -622,6 +622,12 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		"unchanged":  len(existingSongsToCheck) - actuallyUpdatedCount,
 	}).Info("Successfully completed differential sync for user")
 
+	// Calculate artist statistics after sync completes
+	if err := ps.db.CalculateInitialArtistStats(username); err != nil {
+		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Warn("Failed to calculate artist statistics")
+		// Don't fail the entire sync if artist stats calculation fails
+	}
+
 	return nil
 }
 

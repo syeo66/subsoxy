@@ -191,12 +191,22 @@ func (db *DB) createTables() error {
 			FOREIGN KEY (from_song_id, user_id) REFERENCES songs(id, user_id),
 			FOREIGN KEY (to_song_id, user_id) REFERENCES songs(id, user_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS artist_stats (
+			user_id TEXT NOT NULL,
+			artist TEXT NOT NULL,
+			play_count INTEGER DEFAULT 0,
+			skip_count INTEGER DEFAULT 0,
+			ratio REAL DEFAULT 0.5,
+			PRIMARY KEY (user_id, artist)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_songs_user_id ON songs(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_user_id ON play_events(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_song_id ON play_events(song_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_timestamp ON play_events(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_song_transitions_user_id ON song_transitions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_song_transitions_from ON song_transitions(from_song_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_artist_stats_user_id ON artist_stats(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_artist_stats_artist ON artist_stats(artist)`,
 	}
 
 	for _, query := range queries {
@@ -219,6 +229,12 @@ func (db *DB) createTables() error {
 	// Add last_skipped column if it doesn't exist
 	if err := db.addLastSkippedColumn(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add last_skipped column")
+	}
+
+	// Migrate artist statistics for existing users
+	if err := db.MigrateArtistStats(); err != nil {
+		db.logger.WithError(err).Warn("Failed to migrate artist statistics (non-fatal)")
+		// Don't fail the entire initialization if artist stats migration fails
 	}
 
 	return nil
@@ -767,6 +783,15 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 			WithContext("event_type", eventType)
 	}
 
+	// Get the artist name for this song to update artist stats
+	var artist string
+	err = tx.QueryRow(`SELECT artist FROM songs WHERE id = ? AND user_id = ?`, songID, userID).Scan(&artist)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist for song").
+			WithContext("user_id", userID).
+			WithContext("song_id", songID)
+	}
+
 	if eventType == "play" {
 		_, err := tx.Exec(`UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
 		if err != nil {
@@ -774,12 +799,40 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 				WithContext("user_id", userID).
 				WithContext("song_id", songID)
 		}
+
+		// Update artist stats for play
+		_, err = tx.Exec(`
+			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+			VALUES (?, ?, 1, 0, 1.0)
+			ON CONFLICT(user_id, artist) DO UPDATE SET
+				play_count = play_count + 1,
+				ratio = CAST(play_count + 1 AS REAL) / CAST(play_count + 1 + skip_count AS REAL)
+		`, userID, artist)
+		if err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for play").
+				WithContext("user_id", userID).
+				WithContext("artist", artist)
+		}
 	} else if eventType == "skip" {
 		_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1, last_skipped = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
 		if err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song skip count").
 				WithContext("user_id", userID).
 				WithContext("song_id", songID)
+		}
+
+		// Update artist stats for skip
+		_, err = tx.Exec(`
+			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+			VALUES (?, ?, 0, 1, 0.0)
+			ON CONFLICT(user_id, artist) DO UPDATE SET
+				skip_count = skip_count + 1,
+				ratio = CAST(play_count AS REAL) / CAST(play_count + skip_count + 1 AS REAL)
+		`, userID, artist)
+		if err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for skip").
+				WithContext("user_id", userID).
+				WithContext("artist", artist)
 		}
 	}
 
@@ -1027,6 +1080,237 @@ func (db *DB) UpdatePoolConfig(config *ConnectionPool) error {
 		"conn_max_idle_time": config.ConnMaxIdleTime,
 		"health_check":       config.HealthCheck,
 	}).Info("Database connection pool configuration updated")
+
+	return nil
+}
+
+// GetArtistStats retrieves the play/skip statistics for a specific artist and user
+func (db *DB) GetArtistStats(userID, artist string) (*models.ArtistStats, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var stats models.ArtistStats
+	err := db.conn.QueryRow(`
+		SELECT user_id, artist, play_count, skip_count, ratio
+		FROM artist_stats
+		WHERE user_id = ? AND artist = ?
+	`, userID, artist).Scan(&stats.UserID, &stats.Artist, &stats.PlayCount, &stats.SkipCount, &stats.Ratio)
+
+	if err == sql.ErrNoRows {
+		// Return default stats if artist not found
+		return &models.ArtistStats{
+			UserID:    userID,
+			Artist:    artist,
+			PlayCount: 0,
+			SkipCount: 0,
+			Ratio:     0.5,
+		}, nil
+	}
+
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist stats").
+			WithContext("user_id", userID).
+			WithContext("artist", artist)
+	}
+
+	return &stats, nil
+}
+
+// UpdateArtistStats updates the play/skip statistics for an artist
+// This should be called when a song by this artist is played or skipped
+func (db *DB) UpdateArtistStats(userID, artist, eventType string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction for artist stats update").
+			WithContext("user_id", userID).
+			WithContext("artist", artist)
+	}
+	defer tx.Rollback()
+
+	// Insert or update the artist stats
+	if eventType == "play" {
+		_, err = tx.Exec(`
+			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+			VALUES (?, ?, 1, 0, 1.0)
+			ON CONFLICT(user_id, artist) DO UPDATE SET
+				play_count = play_count + 1,
+				ratio = CAST(play_count AS REAL) / CAST(play_count + skip_count AS REAL)
+		`, userID, artist)
+	} else if eventType == "skip" {
+		_, err = tx.Exec(`
+			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+			VALUES (?, ?, 0, 1, 0.0)
+			ON CONFLICT(user_id, artist) DO UPDATE SET
+				skip_count = skip_count + 1,
+				ratio = CAST(play_count AS REAL) / CAST(play_count + skip_count AS REAL)
+		`, userID, artist)
+	}
+
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "UPDATE_FAILED", "failed to update artist stats").
+			WithContext("user_id", userID).
+			WithContext("artist", artist).
+			WithContext("event_type", eventType)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "COMMIT_FAILED", "failed to commit artist stats update").
+			WithContext("user_id", userID).
+			WithContext("artist", artist)
+	}
+
+	return nil
+}
+
+// CalculateInitialArtistStats calculates artist statistics from existing song data
+// This should be called on application startup to populate the artist_stats table
+func (db *DB) CalculateInitialArtistStats(userID string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	db.logger.WithField("user_id", userID).Info("Calculating initial artist statistics")
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction for artist stats calculation").
+			WithContext("user_id", userID)
+	}
+	defer tx.Rollback()
+
+	// Aggregate play/skip counts by artist from songs table
+	_, err = tx.Exec(`
+		INSERT OR REPLACE INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+		SELECT
+			user_id,
+			artist,
+			SUM(play_count) as total_plays,
+			SUM(skip_count) as total_skips,
+			CASE
+				WHEN (SUM(play_count) + SUM(skip_count)) = 0 THEN 0.5
+				ELSE CAST(SUM(play_count) AS REAL) / CAST(SUM(play_count) + SUM(skip_count) AS REAL)
+			END as ratio
+		FROM songs
+		WHERE user_id = ?
+		GROUP BY user_id, artist
+	`, userID)
+
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "INSERT_FAILED", "failed to calculate artist stats").
+			WithContext("user_id", userID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "COMMIT_FAILED", "failed to commit artist stats calculation").
+			WithContext("user_id", userID)
+	}
+
+	// Log the number of artists processed
+	var count int
+	db.conn.QueryRow("SELECT COUNT(*) FROM artist_stats WHERE user_id = ?", userID).Scan(&count)
+	db.logger.WithFields(logrus.Fields{
+		"user_id":       userID,
+		"artist_count":  count,
+	}).Info("Artist statistics calculated successfully")
+
+	return nil
+}
+
+// MigrateArtistStats populates artist statistics for all users in the database
+// This is used for migrating existing databases when upgrading to a version with artist stats
+func (db *DB) MigrateArtistStats() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	db.logger.Info("Starting artist statistics migration for all users")
+
+	// Get all distinct users from the songs table
+	rows, err := db.conn.Query(`SELECT DISTINCT user_id FROM songs`)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get users for migration")
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			db.logger.WithError(err).Warn("Failed to scan user ID during migration")
+			continue
+		}
+		users = append(users, userID)
+	}
+
+	if len(users) == 0 {
+		db.logger.Info("No users found for artist stats migration")
+		return nil
+	}
+
+	// Calculate artist stats for each user
+	migratedCount := 0
+	for _, userID := range users {
+		// Check if artist stats already exist for this user
+		var count int
+		err := db.conn.QueryRow(`SELECT COUNT(*) FROM artist_stats WHERE user_id = ?`, userID).Scan(&count)
+		if err != nil {
+			db.logger.WithError(err).WithField("user_id", userID).Warn("Failed to check artist stats")
+			continue
+		}
+
+		// Only migrate if no artist stats exist yet
+		if count == 0 {
+			tx, err := db.conn.Begin()
+			if err != nil {
+				db.logger.WithError(err).WithField("user_id", userID).Warn("Failed to begin transaction for migration")
+				continue
+			}
+
+			_, err = tx.Exec(`
+				INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+				SELECT
+					user_id,
+					artist,
+					SUM(play_count) as total_plays,
+					SUM(skip_count) as total_skips,
+					CASE
+						WHEN (SUM(play_count) + SUM(skip_count)) = 0 THEN 0.5
+						ELSE CAST(SUM(play_count) AS REAL) / CAST(SUM(play_count) + SUM(skip_count) AS REAL)
+					END as ratio
+				FROM songs
+				WHERE user_id = ?
+				GROUP BY user_id, artist
+			`, userID)
+
+			if err != nil {
+				tx.Rollback()
+				db.logger.WithError(err).WithField("user_id", userID).Warn("Failed to migrate artist stats for user")
+				continue
+			}
+
+			if err := tx.Commit(); err != nil {
+				db.logger.WithError(err).WithField("user_id", userID).Warn("Failed to commit artist stats migration")
+				continue
+			}
+
+			// Count migrated artists
+			var artistCount int
+			db.conn.QueryRow("SELECT COUNT(*) FROM artist_stats WHERE user_id = ?", userID).Scan(&artistCount)
+
+			db.logger.WithFields(logrus.Fields{
+				"user_id":      userID,
+				"artist_count": artistCount,
+			}).Info("Migrated artist statistics for user")
+
+			migratedCount++
+		}
+	}
+
+	db.logger.WithFields(logrus.Fields{
+		"total_users":    len(users),
+		"migrated_users": migratedCount,
+	}).Info("Completed artist statistics migration")
 
 	return nil
 }

@@ -37,6 +37,14 @@ type SongTransition struct {
 	Probability float64 `json:"probability"`
 }
 
+type ArtistStats struct {
+	UserID    string  `json:"userId"`
+	Artist    string  `json:"artist"`
+	PlayCount int     `json:"playCount"`
+	SkipCount int     `json:"skipCount"`
+	Ratio     float64 `json:"ratio"`
+}
+
 type WeightedSong struct {
 	Song   Song    `json:"song"`
 	Weight float64 `json:"weight"`
