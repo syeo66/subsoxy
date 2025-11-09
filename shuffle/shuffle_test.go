@@ -92,27 +92,55 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 	tests := []struct {
 		name        string
 		lastPlayed  time.Time
+		lastSkipped time.Time
 		expectedMin float64
 		expectedMax float64
 		description string
 	}{
 		{
-			name:        "Never played",
+			name:        "Never played or skipped",
 			lastPlayed:  time.Time{},
+			lastSkipped: time.Time{},
 			expectedMin: 4.0,
 			expectedMax: 4.0,
-			description: "Never played songs should get 4.0x boost",
+			description: "Never played/skipped songs should get 4.0x boost",
 		},
 		{
 			name:        "Played today",
 			lastPlayed:  time.Now(),
+			lastSkipped: time.Time{},
 			expectedMin: 0.1,
 			expectedMax: 0.2,
 			description: "Recently played songs should get low weight",
 		},
 		{
+			name:        "Skipped today, never played",
+			lastPlayed:  time.Time{},
+			lastSkipped: time.Now(),
+			expectedMin: 0.1,
+			expectedMax: 0.2,
+			description: "Recently skipped songs should get low weight even if never played",
+		},
+		{
+			name:        "Played 30 days ago, skipped today",
+			lastPlayed:  time.Now().AddDate(0, 0, -30),
+			lastSkipped: time.Now(),
+			expectedMin: 0.1,
+			expectedMax: 0.2,
+			description: "Should use more recent timestamp (skip)",
+		},
+		{
+			name:        "Skipped 30 days ago, played today",
+			lastPlayed:  time.Now(),
+			lastSkipped: time.Now().AddDate(0, 0, -30),
+			expectedMin: 0.1,
+			expectedMax: 0.2,
+			description: "Should use more recent timestamp (play)",
+		},
+		{
 			name:        "Played 15 days ago",
 			lastPlayed:  time.Now().AddDate(0, 0, -15),
+			lastSkipped: time.Time{},
 			expectedMin: 0.5,
 			expectedMax: 0.6,
 			description: "Songs played 15 days ago should be mid-range",
@@ -120,6 +148,7 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 		{
 			name:        "Played 30 days ago",
 			lastPlayed:  time.Now().AddDate(0, 0, -30),
+			lastSkipped: time.Time{},
 			expectedMin: 0.9,
 			expectedMax: 1.1,
 			description: "Songs played 30 days ago should get near 1.0 weight",
@@ -127,6 +156,7 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 		{
 			name:        "Played 60 days ago",
 			lastPlayed:  time.Now().AddDate(0, 0, -60),
+			lastSkipped: time.Time{},
 			expectedMin: 1.1,
 			expectedMax: 1.3,
 			description: "Older songs should get higher weight",
@@ -134,6 +164,7 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 		{
 			name:        "Played 365 days ago",
 			lastPlayed:  time.Now().AddDate(-1, 0, 0),
+			lastSkipped: time.Time{},
 			expectedMin: 1.9,
 			expectedMax: 2.1,
 			description: "Very old songs should get near 2.0 weight",
@@ -142,7 +173,7 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateTimeDecayWeight(tt.lastPlayed)
+			weight := service.calculateTimeDecayWeight(tt.lastPlayed, tt.lastSkipped)
 			if weight < tt.expectedMin || weight > tt.expectedMax {
 				t.Errorf("%s: expected weight between %.2f and %.2f, got %.2f",
 					tt.description, tt.expectedMin, tt.expectedMax, weight)

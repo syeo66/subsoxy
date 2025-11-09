@@ -23,10 +23,12 @@ type Song struct {
     Album       string    `json:"album"`
     Duration    int       `json:"duration"`
     LastPlayed  time.Time `json:"lastPlayed"`
+    LastSkipped time.Time `json:"lastSkipped"`  // ✅ Tracks when song was last skipped
     PlayCount   int       `json:"playCount"`
     SkipCount   int       `json:"skipCount"`
     IsDir       bool      `json:"isDir"`       // Indicates if this is a directory (album)
     Name        string    `json:"name"`        // Alternative name field for directories
+    CoverArt    string    `json:"coverArt,omitempty"` // ✅ Cover art identifier for /rest/getCoverArt
 }
 ```
 

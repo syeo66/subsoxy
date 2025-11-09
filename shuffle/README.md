@@ -16,26 +16,33 @@ This module provides:
 
 The weighted shuffle algorithm considers three main factors **per user** to provide personalized recommendations:
 
-### 1. User-Specific Time Decay Weight with 2-Week Replay Prevention ✅ **FIXED**
-Reduces likelihood of recently played OR skipped songs **for each individual user** to encourage variety. Now includes robust 2-week replay prevention.
+### 1. User-Specific Time Decay Weight with 2-Week Replay Prevention ✅ **ENHANCED**
+Reduces likelihood of recently played OR skipped songs **for each individual user** to encourage variety. Uses the most recent timestamp between `lastPlayed` and `lastSkipped` to accurately track when a song was presented to the listener.
 
 ```go
-func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
-    if lastPlayed.IsZero() {
-        return NeverPlayedWeight // Boost for never-played songs by this user
+func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) float64 {
+    // Use the most recent timestamp between lastPlayed and lastSkipped
+    // since both represent when the song was presented to the listener
+    lastPresented := lastPlayed
+    if !lastSkipped.IsZero() && (lastPlayed.IsZero() || lastSkipped.After(lastPlayed)) {
+        lastPresented = lastSkipped
     }
-    
-    daysSinceLastPlayed := time.Since(lastPlayed).Hours() / HoursPerDay
-    
-    if daysSinceLastPlayed < TimeDecayDaysThreshold {
-        return TimeDecayMinWeight + (daysSinceLastPlayed/TimeDecayDaysThreshold)*TimeDecayMaxWeight
+
+    if lastPresented.IsZero() {
+        return NeverPlayedWeight // Boost for never-played/skipped songs by this user
     }
-    
-    return 1.0 + math.Min(daysSinceLastPlayed/DaysPerYear, 1.0)
+
+    daysSinceLastPresented := time.Since(lastPresented).Hours() / HoursPerDay
+
+    if daysSinceLastPresented < TimeDecayDaysThreshold {
+        return TimeDecayMinWeight + (daysSinceLastPresented/TimeDecayDaysThreshold)*TimeDecayMaxWeight
+    }
+
+    return 1.0 + math.Min(daysSinceLastPresented/DaysPerYear, 1.0)
 }
 
 // 2-Week Replay Prevention - Both played AND skipped songs are filtered
-// Database filtering with consistent timing prevents songs from being 
+// Database filtering with consistent timing prevents songs from being
 // included in shuffle results for 14 days after last play OR skip
 ```
 

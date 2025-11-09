@@ -347,7 +347,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 	baseWeight := 1.0
 
-	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed)
+	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
 	transitionWeight := s.calculateTransitionWeight(userID, song.ID)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
@@ -372,7 +372,7 @@ func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 func (s *Service) calculateSongWeightWithTransition(userID string, song models.Song, transitionProbability float64) float64 {
 	baseWeight := 1.0
 
-	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed)
+	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
@@ -397,18 +397,25 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 	return finalWeight
 }
 
-func (s *Service) calculateTimeDecayWeight(lastPlayed time.Time) float64 {
-	if lastPlayed.IsZero() {
+func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) float64 {
+	// Use the most recent timestamp between lastPlayed and lastSkipped
+	// since both represent when the song was presented to the listener
+	lastPresented := lastPlayed
+	if !lastSkipped.IsZero() && (lastPlayed.IsZero() || lastSkipped.After(lastPlayed)) {
+		lastPresented = lastSkipped
+	}
+
+	if lastPresented.IsZero() {
 		return NeverPlayedWeight
 	}
 
-	daysSinceLastPlayed := time.Since(lastPlayed).Hours() / HoursPerDay
+	daysSinceLastPresented := time.Since(lastPresented).Hours() / HoursPerDay
 
-	if daysSinceLastPlayed < TimeDecayDaysThreshold {
-		return TimeDecayMinWeight + (daysSinceLastPlayed/TimeDecayDaysThreshold)*TimeDecayMaxWeight
+	if daysSinceLastPresented < TimeDecayDaysThreshold {
+		return TimeDecayMinWeight + (daysSinceLastPresented/TimeDecayDaysThreshold)*TimeDecayMaxWeight
 	}
 
-	return 1.0 + math.Min(daysSinceLastPlayed/DaysPerYear, 1.0)
+	return 1.0 + math.Min(daysSinceLastPresented/DaysPerYear, 1.0)
 }
 
 func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
@@ -503,7 +510,7 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 
 // GetWeightComponents returns individual weight components for debugging
 func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight, artistWeight float64) {
-	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed)
+	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight = s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
 	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
 	artistWeight = s.calculateArtistWeight(userID, song.Artist)
