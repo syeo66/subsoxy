@@ -784,57 +784,56 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 	}
 
 	// Get the artist name for this song to update artist stats
+	// If the song doesn't exist in the database, we skip updating stats but still record the event
 	var artist string
 	err = tx.QueryRow(`SELECT artist FROM songs WHERE id = ? AND user_id = ?`, songID, userID).Scan(&artist)
-	if err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist for song").
-			WithContext("user_id", userID).
-			WithContext("song_id", songID)
-	}
+	if err == nil {
+		// Song exists, update stats
+		if eventType == "play" {
+			_, err := tx.Exec(`UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
+			if err != nil {
+				return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song play count").
+					WithContext("user_id", userID).
+					WithContext("song_id", songID)
+			}
 
-	if eventType == "play" {
-		_, err := tx.Exec(`UPDATE songs SET play_count = play_count + 1, last_played = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song play count").
-				WithContext("user_id", userID).
-				WithContext("song_id", songID)
-		}
+			// Update artist stats for play
+			_, err = tx.Exec(`
+				INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+				VALUES (?, ?, 1, 0, 1.0)
+				ON CONFLICT(user_id, artist) DO UPDATE SET
+					play_count = play_count + 1,
+					ratio = CAST(play_count + 1 AS REAL) / CAST(play_count + 1 + skip_count AS REAL)
+			`, userID, artist)
+			if err != nil {
+				return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for play").
+					WithContext("user_id", userID).
+					WithContext("artist", artist)
+			}
+		} else if eventType == "skip" {
+			_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1, last_skipped = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
+			if err != nil {
+				return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song skip count").
+					WithContext("user_id", userID).
+					WithContext("song_id", songID)
+			}
 
-		// Update artist stats for play
-		_, err = tx.Exec(`
-			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
-			VALUES (?, ?, 1, 0, 1.0)
-			ON CONFLICT(user_id, artist) DO UPDATE SET
-				play_count = play_count + 1,
-				ratio = CAST(play_count + 1 AS REAL) / CAST(play_count + 1 + skip_count AS REAL)
-		`, userID, artist)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for play").
-				WithContext("user_id", userID).
-				WithContext("artist", artist)
-		}
-	} else if eventType == "skip" {
-		_, err := tx.Exec(`UPDATE songs SET skip_count = skip_count + 1, last_skipped = ? WHERE id = ? AND user_id = ?`, now, songID, userID)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song skip count").
-				WithContext("user_id", userID).
-				WithContext("song_id", songID)
-		}
-
-		// Update artist stats for skip
-		_, err = tx.Exec(`
-			INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
-			VALUES (?, ?, 0, 1, 0.0)
-			ON CONFLICT(user_id, artist) DO UPDATE SET
-				skip_count = skip_count + 1,
-				ratio = CAST(play_count AS REAL) / CAST(play_count + skip_count + 1 AS REAL)
-		`, userID, artist)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for skip").
-				WithContext("user_id", userID).
-				WithContext("artist", artist)
+			// Update artist stats for skip
+			_, err = tx.Exec(`
+				INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+				VALUES (?, ?, 0, 1, 0.0)
+				ON CONFLICT(user_id, artist) DO UPDATE SET
+					skip_count = skip_count + 1,
+					ratio = CAST(play_count AS REAL) / CAST(play_count + skip_count + 1 AS REAL)
+			`, userID, artist)
+			if err != nil {
+				return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update artist stats for skip").
+					WithContext("user_id", userID).
+					WithContext("artist", artist)
+			}
 		}
 	}
+	// If song doesn't exist (err != nil), we skip stats updates but continue to record the event
 
 	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction")

@@ -47,6 +47,7 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 2. **User-Specific Time Decay**: Songs played recently by the user (within 30 days) receive lower weights to encourage variety
 3. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
 4. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
+5. **Artist Preference Weighting**: ✅ **NEW** - Artists with better play/skip ratios for this user receive higher weight multipliers (0.5x to 1.5x)
 
 ## Database Performance Optimizations ✅ **UPDATED**
 
@@ -97,6 +98,7 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 - **Individual Preference Learning**: Songs each user tends to play (vs skip) are weighted higher for that user only
 - **Per-User Context Awareness**: Considers what song was played previously by each user for smoother transitions
 - **Individual Discovery**: New and unplayed songs get a boost per user to encourage personalized exploration
+- **Artist-Level Learning**: ✅ **NEW** - Learns each user's artist preferences and boosts/reduces songs accordingly
 - **Complete Isolation**: User recommendations don't affect each other's shuffle algorithms
 
 ## Error Handling
@@ -114,7 +116,8 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 3. **Time Decay Weight**: Recent songs (< 30 days) receive lower weights
 4. **Play/Skip Ratio Weight**: Based on user's historical play behavior
 5. **Transition Probability Weight**: Uses probabilities from user's last played song
-6. **Final Weight**: All factors multiplied together per user
+6. **Artist Preference Weight**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio
+7. **Final Weight**: All factors multiplied together per user
 
 ### Memory-Efficient Implementation
 

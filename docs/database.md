@@ -93,11 +93,22 @@ The database connection pool includes proper goroutine lifecycle management:
 - `probability` (REAL): Calculated probability of playing (vs skipping) this transition for this user
 - **PRIMARY KEY**: `(user_id, from_song_id, to_song_id)` for per-user transition isolation
 
+### artist_stats (Multi-Tenant) ✅ **NEW**
+- `user_id` (TEXT): User identifier for data isolation
+- `artist` (TEXT): Artist name
+- `play_count` (INTEGER): Total number of times this user played songs by this artist
+- `skip_count` (INTEGER): Total number of times this user skipped songs by this artist
+- `ratio` (REAL): Calculated play ratio (play_count / (play_count + skip_count))
+- **PRIMARY KEY**: `(user_id, artist)` for per-user artist preference isolation
+- **Purpose**: Tracks artist-level preferences to weight songs in shuffle algorithm
+
 ### Multi-Tenancy Database Indexes
 - **Performance Optimized**: User-specific indexes on all tables
   - `idx_songs_user_id` on songs(user_id)
   - `idx_play_events_user_id` on play_events(user_id)
   - `idx_song_transitions_user_id` on song_transitions(user_id)
+  - `idx_artist_stats_user_id` on artist_stats(user_id) ✅ **NEW**
+  - `idx_artist_stats_artist` on artist_stats(artist) ✅ **NEW**
 - **Query Optimization**: All database operations filter by user_id for optimal performance
 
 ## Cover Art Support ✅ **NEW**
@@ -144,6 +155,46 @@ SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='last_skipped'
 -- Add column if missing
 ALTER TABLE songs ADD COLUMN last_skipped DATETIME
 ```
+
+#### Artist Statistics Migration ✅ **NEW**
+**Migration Process**:
+- **Automatic Initialization**: Artist stats table created automatically on database initialization
+- **Historical Data Migration**: Calculates initial artist statistics from existing play_events data
+- **Non-Blocking**: Migration failures don't prevent application startup
+- **Per-User Processing**: Processes each user's play history independently
+- **Efficient Aggregation**: Uses SQL GROUP BY for optimal performance
+
+**Migration Code**:
+```sql
+-- Create artist_stats table
+CREATE TABLE IF NOT EXISTS artist_stats (
+    user_id TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    play_count INTEGER DEFAULT 0,
+    skip_count INTEGER DEFAULT 0,
+    ratio REAL DEFAULT 0.5,
+    PRIMARY KEY (user_id, artist)
+)
+
+-- Calculate initial stats from play_events
+INSERT INTO artist_stats (user_id, artist, play_count, skip_count, ratio)
+SELECT
+    pe.user_id,
+    s.artist,
+    SUM(CASE WHEN pe.event_type = 'play' THEN 1 ELSE 0 END) as play_count,
+    SUM(CASE WHEN pe.event_type = 'skip' THEN 1 ELSE 0 END) as skip_count,
+    CAST(SUM(CASE WHEN pe.event_type = 'play' THEN 1 ELSE 0 END) AS REAL) /
+    CAST(COUNT(*) AS REAL) as ratio
+FROM play_events pe
+JOIN songs s ON pe.song_id = s.id AND pe.user_id = s.user_id
+WHERE pe.event_type IN ('play', 'skip')
+GROUP BY pe.user_id, s.artist
+```
+
+**Automatic Updates**:
+- Artist stats are automatically updated when play/skip events are recorded
+- Ratio is recalculated on every update: `play_count / (play_count + skip_count)`
+- Used by the shuffle algorithm to weight songs based on artist preferences
 
 ### Cover Art API Integration
 **Response Enhancement**:

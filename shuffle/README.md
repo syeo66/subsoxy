@@ -66,17 +66,35 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
     s.mu.RLock()
     lastPlayed, exists := s.lastPlayed[userID]
     s.mu.RUnlock()
-    
+
     if !exists || lastPlayed == nil {
         return 1.0 // Neutral weight if no previous song for this user
     }
-    
+
     probability, err := s.db.GetTransitionProbability(userID, lastPlayed.ID, songID)
     if err != nil {
         return 1.0
     }
-    
+
     return BaseTransitionWeight + probability // Based on user's transition history
+}
+```
+
+### 4. Per-User Artist Valuation Weight ✅ **NEW**
+Applies a weight multiplier based on the user's historical preference for the song's artist. Artists that the user tends to play (vs skip) get higher weights.
+
+```go
+func (s *Service) calculateArtistWeight(userID, artist string) float64 {
+    stats, err := s.db.GetArtistStats(userID, artist)
+    if err != nil || (stats.PlayCount == 0 && stats.SkipCount == 0) {
+        return 1.0 // Neutral weight for new/unknown artists
+    }
+
+    // Map ratio [0.0, 1.0] to weight range [0.5, 1.5]
+    // ratio=0.0 (all skips) -> 0.5x weight
+    // ratio=0.5 (balanced) -> 1.0x weight
+    // ratio=1.0 (all plays) -> 1.5x weight
+    return ArtistRatioMinWeight + (stats.Ratio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
 }
 ```
 
@@ -129,7 +147,7 @@ go shuffleService.ProcessScrobble("bob", "songB", true, recordSkipFunc) // Safe 
 
 The final weight is calculated **per user** as:
 ```
-final_weight = base_weight × user_time_weight × user_play_skip_weight × user_transition_weight
+final_weight = base_weight × user_time_weight × user_play_skip_weight × user_transition_weight × artist_weight
 ```
 
 Where:
@@ -137,6 +155,7 @@ Where:
 - `user_time_weight` = 0.1 to 2.0 (lower for recently played by this user)
 - `user_play_skip_weight` = 0.2 to 2.0 (higher for frequently played by this user)
 - `user_transition_weight` = 0.5 to 1.5 (higher for good transitions for this user)
+- `artist_weight` = 0.5 to 1.5 (higher for artists this user tends to play) ✅ **NEW**
 
 ## Multi-Tenant Selection Process ✅ **UPDATED**
 
@@ -194,7 +213,9 @@ const (
     PlayRatioMinWeight     = 0.2
     PlayRatioMaxWeight     = 1.8
     BaseTransitionWeight   = 0.5
-    MaxTransitionWeight = 1.5     // Maximum transition weight
+    MaxTransitionWeight    = 1.5  // Maximum transition weight
+    ArtistRatioMinWeight   = 0.5  // Minimum weight for unpopular artists ✅ **NEW**
+    ArtistRatioMaxWeight   = 1.5  // Maximum weight for popular artists ✅ **NEW**
 )
 ```
 
@@ -246,6 +267,7 @@ for _, song := range bobSongs {
 - **Individual Learning**: Each user's preferences are learned and applied independently
 - **Thread Safety**: ✅ **NEW** - Concurrent access from multiple users is fully protected with mutex locks
 - **Race Condition Free**: ✅ **NEW** - No data corruption under high concurrent load (verified with Go race detector)
+- **Artist Preference Learning**: ✅ **NEW** - Learns and applies artist-level preferences per user for better recommendations
 
 ## Thread Safety Implementation ✅ **NEW**
 

@@ -64,11 +64,25 @@ CREATE TABLE song_transitions (
 );
 ```
 
+### artist_stats (Multi-Tenant) ✅ **NEW**
+```sql
+CREATE TABLE artist_stats (
+    user_id TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    play_count INTEGER DEFAULT 0,
+    skip_count INTEGER DEFAULT 0,
+    ratio REAL DEFAULT 0.5,
+    PRIMARY KEY (user_id, artist)
+);
+```
+
 ### Performance Indexes
 ```sql
 CREATE INDEX idx_songs_user_id ON songs(user_id);
 CREATE INDEX idx_play_events_user_id ON play_events(user_id);
 CREATE INDEX idx_song_transitions_user_id ON song_transitions(user_id);
+CREATE INDEX idx_artist_stats_user_id ON artist_stats(user_id);
+CREATE INDEX idx_artist_stats_artist ON artist_stats(artist);
 ```
 
 ## API
@@ -163,6 +177,27 @@ songs, err := db.GetSongsBatchFiltered(userID, limit, offset, cutoffTime)
 
 // Each user gets filtered results based only on their own play/skip history
 bobSongs, err := db.GetSongsBatchFiltered("bob", 50, 0, cutoffTime)  // Independent filtering
+```
+
+### Artist Statistics ✅ **NEW**
+```go
+// Get artist statistics for a specific user and artist
+userID := "alice"
+stats, err := db.GetArtistStats(userID, "The Beatles")
+if err != nil {
+    // handle error
+}
+fmt.Printf("Play count: %d, Skip count: %d, Ratio: %.2f\n",
+    stats.PlayCount, stats.SkipCount, stats.Ratio)
+
+// Artist stats are automatically updated when play/skip events are recorded
+// The ratio is calculated as: play_count / (play_count + skip_count)
+
+// Manually trigger artist stats migration for a user (usually automatic)
+err = db.CalculateInitialArtistStats(userID)
+
+// Migrate artist stats for all users (called automatically on database initialization)
+err = db.MigrateArtistStats()
 ```
 
 ### Connection Pool Management
@@ -273,11 +308,13 @@ Context: {"field": "songID"}
 - **Transaction Safety**: All operations use transactions to ensure atomicity and consistency
 - **Comprehensive Logging**: Detailed logging with accurate change counts (added, updated, unchanged, deleted)
 
-### Event Recording
-- Automatically updates song statistics (play_count, skip_count, last_played)
+### Event Recording ✅ **ENHANCED**
+- Automatically updates song statistics (play_count, skip_count, last_played, last_skipped)
 - Records transition data for recommendation engine
 - Maintains complete event history
 - **Accurate Skip Detection**: Only increments skip_count for actual user skips, not songs that ended without meeting play thresholds
+- **Artist Statistics Integration**: ✅ **NEW** - Automatically updates artist-level play/skip stats for weighted shuffle algorithm
+- **Robust Error Handling**: ✅ **IMPROVED** - Still records play events even when song doesn't exist in database (gracefully skips stats updates)
 
 ### Enhanced Skip Detection Logic ✅ **ENHANCED**
 The system now implements robust, preload-resistant skip detection:

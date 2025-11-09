@@ -52,6 +52,7 @@ That's it! Subsoxy will automatically:
 ### Intelligent Music Recommendations
 Your `/rest/getRandomSongs` requests now return personalized recommendations instead of random songs:
 - **Learns Your Taste**: Tracks what you play vs skip with enhanced, preload-resistant skip detection
+- **Artist Preferences**: ✅ **NEW** - Learns which artists you prefer and boosts/reduces songs accordingly
 - **2-Week Replay Prevention**: Songs are strictly excluded for 14 days after being played OR skipped with consistent timing and robust filtering
 - **Smart Transitions**: Considers song flow and your listening patterns
 - **Individual Learning**: Each user gets their own personalized experience
