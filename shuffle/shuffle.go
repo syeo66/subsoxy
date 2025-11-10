@@ -76,7 +76,8 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 	lastScrobble, hadPreviousScrobble := s.lastScrobble[userID]
 
 	// If there was a previous scrobble that wasn't a definitive play, mark it as skipped
-	if hadPreviousScrobble && !lastScrobble.IsSubmission {
+	// BUT only if it's a different song (same song being scrobbled again should just update status)
+	if hadPreviousScrobble && !lastScrobble.IsSubmission && lastScrobble.Song.ID != songID {
 		recordSkipFunc(userID, lastScrobble.Song)
 		s.logger.WithFields(logrus.Fields{
 			"user_id": userID,
