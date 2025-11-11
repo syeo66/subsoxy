@@ -58,13 +58,13 @@ Your `/rest/getRandomSongs` requests now return personalized recommendations ins
 - **Individual Learning**: Each user gets their own personalized experience
 - **Cover Art Included**: Full cover art support in both JSON and XML responses
 
-#### Enhanced Skip Detection ✅ **IMPROVED**
-The system now implements robust, preload-resistant skip detection that handles modern music clients:
-- **Preload Support**: Multiple track preloading doesn't trigger false skip detection
-- **Real Skips**: Only counted when songs are never played or when later songs get played first
-- **Timeout Protection**: Songs pending >5 minutes without scrobble are marked as skipped
-- **Client Agnostic**: Works with aggressive preloading strategies used by modern clients
-- **Precise Analytics**: Your skip counts reflect actual listening behavior, not technical preloading
+#### Simplified Skip Detection ✅ **CURRENT**
+The system implements streamlined, accurate skip detection based on scrobble events:
+- **Scrobble-Based**: Uses only scrobble events (submission=true/false) for detection
+- **Duplicate Prevention**: Same song scrobbled multiple times doesn't double-count plays
+- **Real Skips**: Songs marked as skipped when another song is scrobbled without definitive play
+- **Same-Song Safe**: Scrobbling the same song again updates status, doesn't mark as skipped
+- **Accurate Analytics**: Skip counts reflect actual listening behavior without complex state tracking
 
 ### Multi-User Support ✅ **NEW**
 - **Complete Isolation**: Each user has their own music library and preferences
@@ -125,8 +125,8 @@ export LOG_LEVEL=info
 | Endpoint | Enhancement |
 |----------|-------------|
 | `/rest/getRandomSongs` | Intelligent shuffle with 2-week replay prevention and cover art |
-| `/rest/stream` | Tracks song starts for learning |
-| `/rest/scrobble` | Records plays/skips for personalization |
+| `/rest/stream` | Logged for debugging (no longer used for skip detection) |
+| `/rest/scrobble` | Records plays/skips for personalization with duplicate prevention |
 | All others | Transparent proxy with full compatibility |
 
 ## 🔧 Advanced Configuration
