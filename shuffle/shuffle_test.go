@@ -1115,3 +1115,233 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 		t.Errorf("Invalid weight value: %.3f (should be finite, positive number)", weight)
 	}
 }
+
+// TestProcessScrobbleDuplicateDetection tests that duplicate submissions don't result in double-counting
+func TestProcessScrobbleDuplicateDetection(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
+	userID := "testuser"
+	song1 := "song1"
+	song2 := "song2"
+
+	// Mock skip recording function
+	skipRecords := make(map[string]int)
+	recordSkipFunc := func(userID string, song *models.Song) {
+		skipRecords[song.ID]++
+	}
+
+	t.Run("First submission should allow recording", func(t *testing.T) {
+		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		if !shouldRecord {
+			t.Error("First submission should allow recording")
+		}
+	})
+
+	t.Run("Duplicate submission for same song should NOT allow recording", func(t *testing.T) {
+		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		if shouldRecord {
+			t.Error("Duplicate submission for same song should NOT allow recording")
+		}
+	})
+
+	t.Run("Third duplicate submission should still NOT allow recording", func(t *testing.T) {
+		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		if shouldRecord {
+			t.Error("Third duplicate submission for same song should NOT allow recording")
+		}
+	})
+
+	t.Run("Different song submission should allow recording", func(t *testing.T) {
+		shouldRecord := service.ProcessScrobble(userID, song2, true, recordSkipFunc)
+		if !shouldRecord {
+			t.Error("Submission for different song should allow recording")
+		}
+	})
+
+	t.Run("Non-submission scrobble followed by submission should allow recording", func(t *testing.T) {
+		song3 := "song3"
+
+		// First scrobble without submission (now playing)
+		shouldRecord := service.ProcessScrobble(userID, song3, false, recordSkipFunc)
+		if !shouldRecord {
+			t.Error("Non-submission scrobble should allow recording (though handler won't record it)")
+		}
+
+		// Then scrobble with submission (actual play)
+		shouldRecord = service.ProcessScrobble(userID, song3, true, recordSkipFunc)
+		if !shouldRecord {
+			t.Error("Submission after non-submission for same song should allow recording")
+		}
+	})
+
+	t.Run("Previous non-submission should be marked as skipped when different song is scrobbled", func(t *testing.T) {
+		song4 := "song4"
+		song5 := "song5"
+
+		// Clear skip records
+		skipRecords = make(map[string]int)
+
+		// Scrobble song4 without submission
+		service.ProcessScrobble(userID, song4, false, recordSkipFunc)
+
+		// Scrobble song5 without submission - should mark song4 as skipped
+		service.ProcessScrobble(userID, song5, false, recordSkipFunc)
+
+		if skipRecords[song4] != 1 {
+			t.Errorf("Expected song4 to be marked as skipped once, got %d", skipRecords[song4])
+		}
+	})
+
+	t.Run("Previous submission should NOT be marked as skipped", func(t *testing.T) {
+		song6 := "song6"
+		song7 := "song7"
+
+		// Clear skip records
+		skipRecords = make(map[string]int)
+
+		// Scrobble song6 WITH submission
+		service.ProcessScrobble(userID, song6, true, recordSkipFunc)
+
+		// Scrobble song7 - song6 should NOT be marked as skipped (it was a definitive play)
+		service.ProcessScrobble(userID, song7, true, recordSkipFunc)
+
+		if skipRecords[song6] != 0 {
+			t.Errorf("Expected song6 NOT to be marked as skipped, got %d", skipRecords[song6])
+		}
+	})
+}
+
+// TestProcessScrobbleIntegrationWithDatabase tests the full flow with database operations
+func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+
+	userID := "testuser"
+
+	// Store test songs
+	songs := []models.Song{
+		{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
+		{ID: "song2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
+	}
+
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Mock skip recording function that actually records to DB
+	recordSkipFunc := func(userID string, song *models.Song) {
+		if err := db.RecordPlayEvent(userID, song.ID, "skip", nil); err != nil {
+			t.Errorf("Failed to record skip event: %v", err)
+		}
+	}
+
+	t.Run("Single play should result in play_count=1", func(t *testing.T) {
+		// Process scrobble with submission=true
+		shouldRecord := service.ProcessScrobble(userID, "song1", true, recordSkipFunc)
+		if !shouldRecord {
+			t.Fatal("First submission should allow recording")
+		}
+
+		// Record the play event (this is what HandleScrobble does)
+		if err := db.RecordPlayEvent(userID, "song1", "play", nil); err != nil {
+			t.Fatalf("Failed to record play event: %v", err)
+		}
+
+		// Verify play_count is 1
+		allSongs, err := db.GetAllSongs(userID)
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+
+		for _, song := range allSongs {
+			if song.ID == "song1" {
+				if song.PlayCount != 1 {
+					t.Errorf("Expected play_count=1 for song1, got %d", song.PlayCount)
+				}
+				return
+			}
+		}
+		t.Error("song1 not found in database")
+	})
+
+	t.Run("Duplicate submission should NOT increment play_count again", func(t *testing.T) {
+		// Try to submit the same song again (duplicate/retry)
+		shouldRecord := service.ProcessScrobble(userID, "song1", true, recordSkipFunc)
+		if shouldRecord {
+			t.Fatal("Duplicate submission should NOT allow recording")
+		}
+
+		// Even if we try to record (which shouldn't happen in the real code),
+		// we're testing that ProcessScrobble returns false
+
+		// Verify play_count is still 1
+		allSongs, err := db.GetAllSongs(userID)
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+
+		for _, song := range allSongs {
+			if song.ID == "song1" {
+				if song.PlayCount != 1 {
+					t.Errorf("Expected play_count to remain 1 for song1, got %d", song.PlayCount)
+				}
+				return
+			}
+		}
+		t.Error("song1 not found in database")
+	})
+
+	t.Run("New song play should work correctly after duplicate", func(t *testing.T) {
+		// Process scrobble for song2 with submission=true
+		shouldRecord := service.ProcessScrobble(userID, "song2", true, recordSkipFunc)
+		if !shouldRecord {
+			t.Fatal("Submission for different song should allow recording")
+		}
+
+		// Record the play event
+		if err := db.RecordPlayEvent(userID, "song2", "play", nil); err != nil {
+			t.Fatalf("Failed to record play event: %v", err)
+		}
+
+		// Verify song2 play_count is 1 and song1 play_count is still 1
+		allSongs, err := db.GetAllSongs(userID)
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+
+		counts := make(map[string]int)
+		for _, song := range allSongs {
+			counts[song.ID] = song.PlayCount
+		}
+
+		if counts["song1"] != 1 {
+			t.Errorf("Expected play_count=1 for song1, got %d", counts["song1"])
+		}
+		if counts["song2"] != 1 {
+			t.Errorf("Expected play_count=1 for song2, got %d", counts["song2"])
+		}
+	})
+}

@@ -884,7 +884,8 @@ func songHasChanged(existing, new models.Song) bool {
 
 
 // ProcessScrobble processes a scrobble event and handles pending songs
-func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) {
+// Returns true if a play event should be recorded, false if it's a duplicate submission
+func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) bool {
 	recordSkipFunc := func(userID string, song *models.Song) {
 		err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
 		if err != nil {
@@ -894,7 +895,7 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 			}).Error("Failed to record skip event from pending song processing")
 		}
 	}
-	ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
+	return ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
 
 

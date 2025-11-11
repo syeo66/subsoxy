@@ -211,7 +211,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 	return false
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool)) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool) bool) bool {
 	userID := r.URL.Query().Get("u")
 	songID := r.URL.Query().Get("id")
 	submission := r.URL.Query().Get("submission")
@@ -239,15 +239,21 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 	isSubmission := submission == "true"
 
 	// Process pending songs first (may mark earlier songs as skipped)
-	processScrobbleFunc(userID, songID, isSubmission)
+	// Returns true if this is a new play event, false if it's a duplicate
+	shouldRecord := processScrobbleFunc(userID, songID, isSubmission)
 
-	if isSubmission {
+	if isSubmission && shouldRecord {
 		recordFunc(userID, songID, "play", nil)
 		setLastPlayed(userID, songID)
 		h.logger.WithFields(logrus.Fields{
 			"song_id": sanitizedSongID,
 			"user_id": sanitizedUserID,
 		}).Debug("Recorded play event and processed pending songs")
+	} else if isSubmission && !shouldRecord {
+		h.logger.WithFields(logrus.Fields{
+			"song_id": sanitizedSongID,
+			"user_id": sanitizedUserID,
+		}).Debug("Skipped duplicate play event for same song")
 	} else {
 		h.logger.WithFields(logrus.Fields{
 			"song_id": sanitizedSongID,

@@ -68,12 +68,24 @@ func (s *Service) SetLastPlayed(userID string, song *models.Song) {
 }
 
 // ProcessScrobble processes a scrobble event with simplified skip detection
-func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) {
+// Returns true if a play event should be recorded, false if it's a duplicate submission
+func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Check if there was a previous scrobble
 	lastScrobble, hadPreviousScrobble := s.lastScrobble[userID]
+
+	// Check if this is a duplicate submission for the same song
+	// This prevents double-counting when clients retry or send multiple submission=true requests
+	if hadPreviousScrobble && lastScrobble.IsSubmission && isSubmission && lastScrobble.Song.ID == songID {
+		s.logger.WithFields(logrus.Fields{
+			"user_id": userID,
+			"song_id": songID,
+			"reason":  "duplicate_submission",
+		}).Debug("Ignoring duplicate submission for same song")
+		return false // Don't record another play event
+	}
 
 	// If there was a previous scrobble that wasn't a definitive play, mark it as skipped
 	// BUT only if it's a different song (same song being scrobbled again should just update status)
@@ -98,6 +110,8 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 		"song_id":    songID,
 		"submission": isSubmission,
 	}).Debug("Processed scrobble")
+
+	return true // OK to record play event
 }
 
 // GetWeightedShuffledSongs returns a shuffled list of songs based on user listening history

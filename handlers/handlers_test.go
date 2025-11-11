@@ -425,8 +425,9 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedSongID = songID
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
+			return true // Allow recording
 		}
 
 		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
@@ -467,8 +468,9 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
+			return true // Allow recording
 		}
 
 		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
@@ -501,8 +503,9 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
+			return true // Allow recording
 		}
 
 		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
@@ -535,8 +538,9 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
+			return true // Allow recording
 		}
 
 		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
@@ -569,8 +573,9 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) {
+		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
+			return true // Allow recording
 		}
 
 		handled := handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, setLastPlayedFunc, processScrobbleFunc)
