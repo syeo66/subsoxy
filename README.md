@@ -138,6 +138,7 @@ Common settings:
 - **Database**: `-db-path ./music.db` (auto-created)
 - **Rate Limiting**: `-rate-limit-rps 100` (requests per second)
 - **Connection Pool**: `-db-max-open-conns 25` (database connections)
+- **Worker Pool**: `-credential-workers 100` (concurrent credential validations)
 - **CORS**: `-cors-allow-origins "*"` (for web clients)
 
 ## 🏗️ Architecture
@@ -145,10 +146,11 @@ Common settings:
 Subsoxy uses a modular architecture designed for reliability and performance:
 
 - **Multi-tenant database** with complete user isolation
-- **Connection pooling** for optimal database performance  
+- **Connection pooling** for optimal database performance
+- **Bounded worker pools** to prevent resource exhaustion under high load
 - **Memory-efficient algorithms** that scale to large music libraries
 - **Comprehensive error handling** with structured logging
-- **Thread-safe operations** for concurrent users
+- **Thread-safe operations** for concurrent users with graceful shutdown
 
 For technical details, see [Architecture Guide](docs/architecture.md).
 

@@ -22,6 +22,9 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-db-conn-max-idle-time duration`: Maximum connection idle time (default: 5m)
 - `-db-health-check`: Enable database health checks (default: true)
 
+### Performance Configuration
+- `-credential-workers int`: Maximum concurrent credential validation workers (default: 100)
+
 ### Rate Limiting Configuration
 - `-rate-limit-rps int`: Rate limit requests per second (default: 100)
 - `-rate-limit-burst int`: Rate limit burst size (default: 200)
@@ -60,6 +63,9 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `DB_CONN_MAX_IDLE_TIME`: Maximum connection idle time (default: 5m)
 - `DB_HEALTH_CHECK`: Enable database health checks (default: true)
 
+### Performance Configuration
+- `CREDENTIAL_WORKERS`: Maximum concurrent credential validation workers (default: 100)
+
 ### Rate Limiting Configuration
 - `RATE_LIMIT_RPS`: Rate limit requests per second (default: 100)
 - `RATE_LIMIT_BURST`: Rate limit burst size (default: 200)
@@ -95,6 +101,7 @@ The application validates all configuration parameters at startup:
 - **DB Max Open Connections**: Must be at least 1 connection
 - **DB Max Idle Connections**: Cannot be negative or exceed max open connections
 - **DB Connection Lifetimes**: Cannot be negative durations
+- **Credential Workers**: Must be at least 1 worker
 - **CORS Origins**: Cannot be empty when CORS is enabled
 - **CORS Methods**: Must be valid HTTP methods (GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH)
 - **CORS Headers**: Can be empty (optional)
@@ -148,6 +155,18 @@ DEBUG=1 ./subsoxy
 
 # Disable health checks
 ./subsoxy -db-health-check=false
+```
+
+### Performance Tuning Examples
+```bash
+# High-load setup with increased worker pool
+./subsoxy -credential-workers 200 -rate-limit-rps 200
+
+# Conservative setup for low resource environments
+./subsoxy -credential-workers 25 -rate-limit-rps 50
+
+# Default balanced setup (recommended)
+./subsoxy  # Uses 100 credential workers by default
 ```
 
 ### CORS Configuration Examples
@@ -206,9 +225,16 @@ export DEBUG=1
 
 ## Production Recommendations
 
+### Performance & Resource Management
+- **Credential Workers**: Controls goroutine pool size for credential validation
+  - **High-traffic servers**: 200-500 workers (handles many simultaneous users)
+  - **Standard servers**: 100 workers (default, handles most scenarios)
+  - **Low-resource environments**: 25-50 workers (limited memory/CPU)
+  - **Impact**: Prevents resource exhaustion under high load while maintaining responsiveness
+
 ### Rate Limiting
 - **Web servers**: 50-100 RPS with 100-200 burst
-- **API servers**: 20-50 RPS with 50-100 burst  
+- **API servers**: 20-50 RPS with 50-100 burst
 - **Public instances**: 5-20 RPS with 10-40 burst
 - **Development**: Disable rate limiting for easier testing
 

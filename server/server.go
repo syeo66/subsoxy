@@ -47,19 +47,21 @@ const (
 )
 
 type ProxyServer struct {
-	config       *config.Config
-	logger       *logrus.Logger
-	proxy        *httputil.ReverseProxy
-	hooks        map[string][]models.Hook
-	db           *database.DB
-	credentials  *credentials.Manager
-	handlers     *handlers.Handler
-	shuffle      *shuffle.Service
-	server       *http.Server
-	syncTicker   *time.Ticker
-	syncMutex    sync.RWMutex
-	shutdownChan chan struct{}
-	rateLimiter  *rate.Limiter
+	config            *config.Config
+	logger            *logrus.Logger
+	proxy             *httputil.ReverseProxy
+	hooks             map[string][]models.Hook
+	db                *database.DB
+	credentials       *credentials.Manager
+	handlers          *handlers.Handler
+	shuffle           *shuffle.Service
+	server            *http.Server
+	syncTicker        *time.Ticker
+	syncMutex         sync.RWMutex
+	shutdownChan      chan struct{}
+	rateLimiter       *rate.Limiter
+	credentialWorkers chan struct{}   // Semaphore for limiting concurrent credential validations
+	credentialWg      sync.WaitGroup   // WaitGroup for tracking in-flight credential validations
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -124,17 +126,24 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		logger.Info("Rate limiting disabled")
 	}
 
+	// Initialize credential validation worker pool
+	credentialWorkers := make(chan struct{}, cfg.CredentialWorkers)
+	logger.WithFields(logrus.Fields{
+		"max_workers": cfg.CredentialWorkers,
+	}).Info("Credential validation worker pool configured")
+
 	server := &ProxyServer{
-		config:       cfg,
-		logger:       logger,
-		proxy:        proxy,
-		hooks:        make(map[string][]models.Hook),
-		db:           db,
-		credentials:  credManager,
-		handlers:     handlersService,
-		shuffle:      shuffleService,
-		shutdownChan: make(chan struct{}),
-		rateLimiter:  rateLimiter,
+		config:            cfg,
+		logger:            logger,
+		proxy:             proxy,
+		hooks:             make(map[string][]models.Hook),
+		db:                db,
+		credentials:       credManager,
+		handlers:          handlersService,
+		shuffle:           shuffleService,
+		shutdownChan:      make(chan struct{}),
+		rateLimiter:       rateLimiter,
+		credentialWorkers: credentialWorkers,
 	}
 
 	go server.syncSongs()
@@ -278,7 +287,17 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
 			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
+
+			// Acquire a worker slot (blocks if all workers are busy)
+			ps.credentialWorkers <- struct{}{}
+			ps.credentialWg.Add(1)
+
 			go func() {
+				defer func() {
+					<-ps.credentialWorkers // Release worker slot
+					ps.credentialWg.Done()  // Mark goroutine as complete
+				}()
+
 				isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
 				if err != nil {
 					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
@@ -366,6 +385,21 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 		ps.syncTicker.Stop()
 	}
 	ps.syncMutex.RUnlock()
+
+	// Wait for in-flight credential validations to complete
+	ps.logger.Info("Waiting for credential validation workers to finish...")
+	done := make(chan struct{})
+	go func() {
+		ps.credentialWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		ps.logger.Info("All credential validation workers finished")
+	case <-ctx.Done():
+		ps.logger.Warn("Shutdown timeout reached, forcing shutdown")
+	}
 
 	if ps.db != nil {
 		if err := ps.db.Close(); err != nil {

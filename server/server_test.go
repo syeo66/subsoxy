@@ -17,13 +17,14 @@ import (
 
 func TestNew(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "info",
-		DatabasePath:     "test.db",
-		RateLimitRPS:     100,
-		RateLimitBurst:   200,
-		RateLimitEnabled: true,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "info",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  true,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -67,13 +68,14 @@ func TestNew(t *testing.T) {
 
 func TestNewWithInvalidUpstreamURL(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "://invalid-url", // This will definitely be invalid
-		LogLevel:         "info",
-		DatabasePath:     "test.db",
-		RateLimitRPS:     100,
-		RateLimitBurst:   200,
-		RateLimitEnabled: true,
+		ProxyPort:         "8080",
+		UpstreamURL:       "://invalid-url", // This will definitely be invalid
+		LogLevel:          "info",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  true,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -88,10 +90,11 @@ func TestNewWithInvalidUpstreamURL(t *testing.T) {
 
 func TestNewWithInvalidLogLevel(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "invalid-level",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "invalid-level",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -109,10 +112,11 @@ func TestNewWithInvalidLogLevel(t *testing.T) {
 
 func TestNewWithInvalidDatabase(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "info",
-		DatabasePath: "/nonexistent/path/test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "info",
+		DatabasePath:      "/nonexistent/path/test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 
 	_, err := New(cfg)
@@ -126,10 +130,11 @@ func TestNewWithInvalidDatabase(t *testing.T) {
 
 func TestAddHook(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "info",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "info",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -172,10 +177,11 @@ func TestAddHook(t *testing.T) {
 
 func TestProxyHandler(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "warn", // Reduce log noise
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn", // Reduce log noise
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -274,10 +280,11 @@ func TestProxyHandler(t *testing.T) {
 
 func TestStartAndShutdown(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "0", // Use random port
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "warn",
-		DatabasePath: "test.db",
+		ProxyPort:         "0", // Use random port
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -307,10 +314,11 @@ func TestStartAndShutdown(t *testing.T) {
 
 func TestShutdownWithoutStart(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "warn",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -331,10 +339,11 @@ func TestShutdownWithoutStart(t *testing.T) {
 
 func TestRecordPlayEvent(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "warn",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -521,10 +530,11 @@ func TestSyncSongsLifecycle(t *testing.T) {
 
 func TestProxyHandlerCredentialExtraction(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:    "8080",
-		UpstreamURL:  "http://localhost:4533",
-		LogLevel:     "warn",
-		DatabasePath: "test.db",
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -828,13 +838,14 @@ func TestConfigValidation(t *testing.T) {
 
 func TestRateLimitingEnabled(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "warn",
-		DatabasePath:     "test.db",
-		RateLimitRPS:     2,
-		RateLimitBurst:   3,
-		RateLimitEnabled: true,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      2,
+		RateLimitBurst:    3,
+		RateLimitEnabled:  true,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -877,13 +888,14 @@ func TestRateLimitingEnabled(t *testing.T) {
 
 func TestRateLimitingDisabled(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "warn",
-		DatabasePath:     "test.db",
-		RateLimitRPS:     1,
-		RateLimitBurst:   1,
-		RateLimitEnabled: false,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      1,
+		RateLimitBurst:    1,
+		RateLimitEnabled:  false,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -913,13 +925,14 @@ func TestRateLimitingDisabled(t *testing.T) {
 
 func TestRateLimitingWithHooks(t *testing.T) {
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "warn",
-		DatabasePath:     "test.db",
-		RateLimitRPS:     1,
-		RateLimitBurst:   1,
-		RateLimitEnabled: true,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      1,
+		RateLimitBurst:    1,
+		RateLimitEnabled:  true,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test.db")
 
@@ -975,13 +988,14 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 	os.Remove("test_multiuser.db")
 
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "warn",
-		DatabasePath:     "test_multiuser.db",
-		RateLimitRPS:     100,
-		RateLimitBurst:   200,
-		RateLimitEnabled: false,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test_multiuser.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  false,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test_multiuser.db")
 
@@ -1183,13 +1197,14 @@ func TestSyncSongsForUserError(t *testing.T) {
 	os.Remove("test_sync_error.db")
 
 	cfg := &config.Config{
-		ProxyPort:        "8080",
-		UpstreamURL:      "http://localhost:4533",
-		LogLevel:         "warn",
-		DatabasePath:     "test_sync_error.db",
-		RateLimitRPS:     100,
-		RateLimitBurst:   200,
-		RateLimitEnabled: false,
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test_sync_error.db",
+		RateLimitRPS:      100,
+		RateLimitBurst:    200,
+		RateLimitEnabled:  false,
+		CredentialWorkers: config.DefaultCredentialWorkers,
 	}
 	defer os.Remove("test_sync_error.db")
 

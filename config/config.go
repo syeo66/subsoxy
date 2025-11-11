@@ -41,6 +41,7 @@ const (
 	DefaultContentSecurityPolicy   = "default-src 'self'; script-src 'self'; object-src 'none';"
 	DefaultReferrerPolicy          = "strict-origin-when-cross-origin"
 	DefaultDebugMode               = false
+	DefaultCredentialWorkers       = 100 // Maximum concurrent credential validation workers
 )
 
 // Validation limits
@@ -50,9 +51,10 @@ const (
 	MinRateLimitRPS   = 1
 	MinRateLimitBurst = 1
 	MinDBMaxOpenConns = 1
-	MinDBMaxIdleConns = 0
-	MinDBConnLifetime = 0
-	MinDBConnIdleTime = 0
+	MinDBMaxIdleConns    = 0
+	MinDBConnLifetime    = 0
+	MinDBConnIdleTime    = 0
+	MinCredentialWorkers = 1
 )
 
 type Config struct {
@@ -86,6 +88,8 @@ type Config struct {
 	ReferrerPolicy          string
 	// Debug mode
 	DebugMode bool
+	// Credential validation worker pool
+	CredentialWorkers int
 }
 
 func New() (*Config, error) {
@@ -119,6 +123,7 @@ func New() (*Config, error) {
 		contentSecurityPolicy   = flag.String("content-security-policy", getEnvOrDefault("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy), "Content-Security-Policy header value")
 		referrerPolicy          = flag.String("referrer-policy", getEnvOrDefault("REFERRER_POLICY", DefaultReferrerPolicy), "Referrer-Policy header value")
 		debugMode               = flag.Bool("debug-mode", getEnvBoolOrDefault("DEBUG", DefaultDebugMode), "Enable debug endpoint")
+		credentialWorkers       = flag.Int("credential-workers", getEnvIntOrDefault("CREDENTIAL_WORKERS", DefaultCredentialWorkers), "Maximum concurrent credential validation workers")
 	)
 	flag.Parse()
 
@@ -149,6 +154,7 @@ func New() (*Config, error) {
 		ContentSecurityPolicy:   *contentSecurityPolicy,
 		ReferrerPolicy:          *referrerPolicy,
 		DebugMode:               *debugMode,
+		CredentialWorkers:       *credentialWorkers,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -189,6 +195,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.validateSecurityHeaders(); err != nil {
+		return err
+	}
+
+	if err := c.validateCredentialWorkers(); err != nil {
 		return err
 	}
 
@@ -463,6 +473,16 @@ func (c *Config) validateSecurityHeaders() error {
 				WithContext("x_frame_options", c.XFrameOptions).
 				WithContext("valid_options", validFrameOptions)
 		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateCredentialWorkers() error {
+	if c.CredentialWorkers < MinCredentialWorkers {
+		return errors.New(errors.CategoryConfig, "INVALID_CREDENTIAL_WORKERS", "credential workers must be at least 1").
+			WithContext("credential_workers", c.CredentialWorkers).
+			WithContext("min_credential_workers", MinCredentialWorkers)
 	}
 
 	return nil

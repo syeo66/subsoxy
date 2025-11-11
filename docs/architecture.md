@@ -13,7 +13,7 @@ The application uses a modular architecture with the following components:
 - **`database/`**: SQLite3 database operations with structured error handling and schema management
 - **`handlers/`**: HTTP request handlers for different Subsonic API endpoints with input validation
 - **`middleware/`**: HTTP middleware components including security headers with intelligent development mode detection
-- **`server/`**: Main proxy server logic and lifecycle management with error recovery
+- **`server/`**: Main proxy server logic, lifecycle management with error recovery, and bounded worker pools for resource safety
 - **`credentials/`**: Secure authentication and credential validation with AES-256-GCM encryption and timeout protection
 - **`shuffle/`**: Weighted song shuffling algorithm with intelligent preference learning and thread safety
 - **`errors/`**: Structured error handling with categorization and context
@@ -51,9 +51,10 @@ This application uses the following external libraries:
 The application includes several performance optimizations:
 
 - **Database Connection Pooling**: Advanced connection pool management with configurable limits and health monitoring
+- **Bounded Worker Pools**: Semaphore-based concurrency control for credential validation (default: 100 workers) prevents goroutine exhaustion under high load
 - **Memory-Efficient Shuffle Algorithms**: Automatic algorithm selection based on library size with reservoir sampling for large datasets
 - **Batch Database Queries**: Optimized query patterns eliminate N+1 query problems
 - **Concurrent Request Handling**: Thread-safe operations with proper synchronization
 - **Rate Limiting**: Token bucket algorithm for efficient request throttling
-- **Resource Management**: Automatic cleanup of connections and memory
+- **Resource Management**: Automatic cleanup of connections and memory with graceful shutdown tracking
 - **Health Monitoring**: Background health checks and performance metrics

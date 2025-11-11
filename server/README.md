@@ -23,18 +23,20 @@ The main server struct that coordinates all functionality:
 
 ```go
 type ProxyServer struct {
-    config      *config.Config
-    logger      *logrus.Logger
-    proxy       *httputil.ReverseProxy
-    hooks       map[string][]models.Hook
-    db          *database.DB
-    credentials *credentials.Manager
-    handlers    *handlers.Handler
-    shuffle     *shuffle.Service
-    server      *http.Server
-    syncTicker  *time.Ticker
-    shutdownChan chan struct{}
-    rateLimiter *rate.Limiter
+    config            *config.Config
+    logger            *logrus.Logger
+    proxy             *httputil.ReverseProxy
+    hooks             map[string][]models.Hook
+    db                *database.DB
+    credentials       *credentials.Manager
+    handlers          *handlers.Handler
+    shuffle           *shuffle.Service
+    server            *http.Server
+    syncTicker        *time.Ticker
+    shutdownChan      chan struct{}
+    rateLimiter       *rate.Limiter
+    credentialWorkers chan struct{}   // Bounded worker pool for credential validation
+    credentialWg      sync.WaitGroup   // Tracks in-flight credential validations
 }
 ```
 
@@ -51,9 +53,11 @@ if err != nil {
 }
 
 // The server logs connection pool configuration on startup:
-// time="..." level=info msg="Database connection pool configured" 
+// time="..." level=info msg="Database connection pool configured"
 //   max_open_conns=25 max_idle_conns=5 conn_max_lifetime=30m0s
 //   conn_max_idle_time=5m0s health_check=true
+// time="..." level=info msg="Credential validation worker pool configured"
+//   max_workers=100
 ```
 
 ### Server Lifecycle
@@ -65,13 +69,16 @@ if err := proxyServer.Start(); err != nil {
 // Server automatically starts:
 // - Song sync routine (hourly)
 
-// Graceful shutdown
+// Graceful shutdown (waits for in-flight credential validations)
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
 if err := proxyServer.Shutdown(ctx); err != nil {
     log.Error("Server forced shutdown:", err)
 }
+// Logs during shutdown:
+// time="..." level=info msg="Waiting for credential validation workers to finish..."
+// time="..." level=info msg="All credential validation workers finished"
 ```
 
 ### Hook Management
@@ -208,13 +215,22 @@ func (ps *ProxyServer) syncSongs() {
 }
 ```
 
-### Immediate Sync on New Credentials ✅ **NEW**
+### Immediate Sync on New Credentials ✅ **ENHANCED**
 
-When new credentials are captured for the first time, the system triggers an immediate sync:
+When new credentials are captured for the first time, the system triggers an immediate sync using a bounded worker pool to prevent resource exhaustion:
 
 ```go
-// In proxyHandler - credential validation
+// In proxyHandler - credential validation with bounded worker pool
+// Acquire a worker slot (blocks if all workers are busy)
+ps.credentialWorkers <- struct{}{}
+ps.credentialWg.Add(1)
+
 go func() {
+    defer func() {
+        <-ps.credentialWorkers // Release worker slot
+        ps.credentialWg.Done()  // Mark goroutine as complete
+    }()
+
     isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
     if err != nil {
         ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
@@ -225,6 +241,12 @@ go func() {
     }
 }()
 ```
+
+**Worker Pool Benefits:**
+- **Resource Safety**: Limits concurrent credential validations to prevent goroutine exhaustion
+- **Configurable**: Default 100 workers, adjustable via `-credential-workers` flag
+- **Graceful Shutdown**: Waits for in-flight validations to complete before shutdown
+- **Production Ready**: Handles high-load scenarios without resource depletion
 
 ### Song Fetching Process
 ```go

@@ -40,6 +40,7 @@ if err != nil {
 | `-db-conn-max-lifetime` | `DB_CONN_MAX_LIFETIME` | `30m` | ≥0 | Maximum connection lifetime |
 | `-db-conn-max-idle-time` | `DB_CONN_MAX_IDLE_TIME` | `5m` | ≥0 | Maximum connection idle time |
 | `-db-health-check` | `DB_HEALTH_CHECK` | `true` | true/false | Enable database health checks |
+| `-credential-workers` | `CREDENTIAL_WORKERS` | `100` | ≥1 | Maximum concurrent credential validation workers |
 
 ## Validation Details
 
@@ -71,6 +72,12 @@ if err != nil {
 - Error examples:
   - `[config:INVALID_DB_MAX_OPEN_CONNS] database max open connections must be at least 1`
   - `[config:INVALID_DB_MAX_IDLE_CONNS] database max idle connections cannot exceed max open connections`
+
+### Performance Configuration Validation ✅ **NEW**
+- **Credential Workers**: Must be at least 1 worker
+- Controls the size of the bounded worker pool for credential validation
+- Prevents goroutine exhaustion under high load
+- Error example: `[config:INVALID_CREDENTIAL_WORKERS] credential workers must be at least 1`
 
 ## Examples
 
