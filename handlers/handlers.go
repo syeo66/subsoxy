@@ -308,7 +308,8 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	<h1>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</h1>
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
-		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight × Transition Weight × Artist Weight<br>
+		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight<br>
+		<strong>Play/Skip Method:</strong> Bayesian Beta-Binomial model with α=2.0, β=2.0 for robust weighting<br>
 		<strong>Color Legend:</strong>
 		<span style="background-color: #c8e6c9; padding: 2px 6px;">High (≥2.0)</span>
 		<span style="background-color: #fff9c4; padding: 2px 6px;">Medium (1.0-2.0)</span>

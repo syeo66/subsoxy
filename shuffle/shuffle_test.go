@@ -215,36 +215,57 @@ func TestCalculatePlaySkipWeight(t *testing.T) {
 			name:        "Always played",
 			playCount:   10,
 			skipCount:   0,
-			expected:    2.0,
-			description: "Always played songs should get 2.0 weight",
+			expected:    1.743, // Bayesian: (10+2)/(10+0+2+2) = 12/14 = 0.857; 0.2 + 0.857*1.8 = 1.743
+			description: "Always played songs with Bayesian smoothing",
 		},
 		{
 			name:        "Always skipped",
 			playCount:   0,
 			skipCount:   10,
-			expected:    0.2,
-			description: "Always skipped songs should get 0.2 weight",
+			expected:    0.457, // Bayesian: (0+2)/(0+10+2+2) = 2/14 = 0.143; 0.2 + 0.143*1.8 = 0.457
+			description: "Always skipped songs with Bayesian smoothing",
 		},
 		{
 			name:        "Half played",
 			playCount:   5,
 			skipCount:   5,
-			expected:    1.1,
+			expected:    1.1, // Bayesian: (5+2)/(5+5+2+2) = 7/14 = 0.5; 0.2 + 0.5*1.8 = 1.1
 			description: "Half played songs should get 1.1 weight",
 		},
 		{
 			name:        "Mostly played",
 			playCount:   8,
 			skipCount:   2,
-			expected:    1.64,
-			description: "Mostly played songs should get high weight",
+			expected:    1.486, // Bayesian: (8+2)/(8+2+2+2) = 10/14 = 0.714; 0.2 + 0.714*1.8 = 1.486
+			description: "Mostly played songs with Bayesian smoothing",
 		},
 		{
 			name:        "Mostly skipped",
 			playCount:   2,
 			skipCount:   8,
-			expected:    0.56,
-			description: "Mostly skipped songs should get low weight",
+			expected:    0.714, // Bayesian: (2+2)/(2+8+2+2) = 4/14 = 0.286; 0.2 + 0.286*1.8 = 0.714
+			description: "Mostly skipped songs with Bayesian smoothing",
+		},
+		{
+			name:        "Single play (demonstrates Bayesian regularization)",
+			playCount:   1,
+			skipCount:   0,
+			expected:    1.28, // Bayesian: (1+2)/(1+0+2+2) = 3/5 = 0.6; 0.2 + 0.6*1.8 = 1.28
+			description: "Single play is regularized toward 50% instead of 100%",
+		},
+		{
+			name:        "Single skip (demonstrates Bayesian regularization)",
+			playCount:   0,
+			skipCount:   1,
+			expected:    0.92, // Bayesian: (0+2)/(0+1+2+2) = 2/5 = 0.4; 0.2 + 0.4*1.8 = 0.92
+			description: "Single skip is regularized toward 50% instead of 0%",
+		},
+		{
+			name:        "Many plays converge to true ratio",
+			playCount:   100,
+			skipCount:   0,
+			expected:    1.965, // Bayesian: (100+2)/(100+0+2+2) = 102/104 = 0.981; 0.2 + 0.981*1.8 = 1.965
+			description: "With many observations, Bayesian estimate converges to true ratio",
 		},
 	}
 
@@ -372,8 +393,8 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 0.1 * 2.0 * 1.0, // Recently played should have low time weight but high play/skip weight
-			tolerance:      0.05,                   // Allow some tolerance for time calculations
+			expectedWeight: 1.0 * 0.1 * 1.743 * 1.0, // Recently played with Bayesian-smoothed play ratio
+			tolerance:      0.05,
 			description:    "Recently played but always played song should balance time decay with play ratio",
 		},
 		{
@@ -391,9 +412,9 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 1.164 * 0.38 * 1.0, // Old song with bad skip ratio
+			expectedWeight: 1.0 * 1.164 * 0.586 * 1.0, // Old song with bad skip ratio (Bayesian regularization)
 			tolerance:      0.1,
-			description:    "Frequently skipped song should get low weight despite age",
+			description:    "Frequently skipped song gets moderate penalty with Bayesian regularization",
 		},
 		{
 			name: "Song with transition history",
@@ -465,8 +486,8 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 1.0 * 1.28 * 1.0, // 30 days should be at the boundary
-			tolerance:      0.15, // Increased tolerance for time boundary calculations
+			expectedWeight: 1.0 * 1.0 * 1.2 * 1.0, // 30 days with Bayesian-smoothed play ratio
+			tolerance:      0.15,
 			description:    "Song at 30-day boundary should transition from decay to age boost",
 		},
 	}

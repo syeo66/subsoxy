@@ -45,7 +45,7 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 
 1. **Never-Presented Boost**: Songs that have never been played OR skipped receive a 4.0x weight multiplier to encourage discovery
 2. **User-Specific Time Decay**: ✅ **ENHANCED** - Uses the most recent timestamp between last_played and last_skipped to accurately track when a song was presented to the listener. Recently presented songs (within 30 days) receive lower weights to encourage variety
-3. **Per-User Play/Skip Ratio**: Songs with better play-to-skip ratios for this specific user are more likely to be selected
+3. **Per-User Play/Skip Ratio with Bayesian Categorization**: ✅ **ENHANCED** - Uses Bayesian Beta-Binomial model for robust weight calculation that handles uncertainty in small sample sizes. Songs with better play-to-skip ratios for this specific user are more likely to be selected, with conservative estimates for songs with few plays/skips
 4. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
 5. **Artist Preference Weighting**: ✅ **NEW** - Artists with better play/skip ratios for this user receive higher weight multipliers (0.5x to 1.5x)
 
@@ -114,7 +114,11 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 1. **2-Week Replay Filter**: ✅ **ENHANCED** - Songs played OR skipped within 14 days are excluded first
 2. **Never-Presented Bonus**: ✅ **ENHANCED** - Songs that have never been played OR skipped receive 4.0x weight (increased from 2.0x to prioritize discovery)
 3. **Time Decay Weight**: ✅ **ENHANCED** - Uses the most recent timestamp between last_played and last_skipped. Recently presented songs (< 30 days) receive lower weights (0.1x-0.9x), while songs presented long ago receive higher weights (up to 2.0x)
-4. **Play/Skip Ratio Weight**: Based on user's historical play behavior
+4. **Play/Skip Ratio Weight with Bayesian Categorization**: ✅ **ENHANCED** - Uses Beta-Binomial model for robust weight calculation:
+   - **Formula**: `bayesianPlayRatio = (playCount + 2) / (playCount + skipCount + 4)`
+   - **Range**: 0.2x to 2.0x based on Bayesian-smoothed play ratio
+   - **Benefits**: Conservative estimates for songs with few observations, converges to true ratio with more data
+   - **Example**: Song with 1 play, 0 skips gets 1.28x (not 2.0x), preventing extreme weights from small samples
 5. **Transition Probability Weight**: Uses probabilities from user's last played song
 6. **Artist Preference Weight**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio
 7. **Final Weight**: All factors multiplied together per user

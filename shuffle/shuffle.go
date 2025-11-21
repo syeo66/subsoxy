@@ -35,6 +35,10 @@ const (
 	TwoWeekReplayThreshold = 14  // Minimum days before a song can be replayed (unless no alternatives)
 	ArtistRatioMinWeight   = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
 	ArtistRatioMaxWeight   = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
+	// Bayesian prior parameters for Beta-Binomial model
+	// These represent "pseudo-observations" that regularize estimates when sample size is small
+	BayesianPriorAlpha = 2.0 // Prior "plays" - assumes slight tendency toward playing
+	BayesianPriorBeta  = 2.0 // Prior "skips" - assumes slight tendency toward skipping
 )
 
 // ScrobbleInfo tracks the last scrobble for skip detection
@@ -433,18 +437,30 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 	return 1.0 + math.Min(daysSinceLastPresented/DaysPerYear, 1.0)
 }
 
+// calculatePlaySkipWeight uses a Bayesian approach (Beta-Binomial model) to calculate
+// the weight based on play/skip history. This approach is more robust than simple ratios
+// because it accounts for uncertainty when sample sizes are small.
+//
+// The Bayesian posterior mean is: (playCount + α) / (playCount + skipCount + α + β)
+// where α and β are prior parameters representing "pseudo-observations".
+//
+// Benefits:
+// - Songs with few observations get conservative estimates (closer to 50% play rate)
+// - Songs with many observations converge to their true play ratio
+// - Prevents extreme weights from small sample sizes (e.g., 1 play, 0 skips)
 func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
 	if playCount == 0 && skipCount == 0 {
 		return UnplayedSongWeight
 	}
 
-	totalEvents := playCount + skipCount
-	if totalEvents == 0 {
-		return 1.0
-	}
+	// Calculate Bayesian posterior mean using Beta-Binomial model
+	// This gives us a regularized estimate of the play ratio
+	posteriorPlays := float64(playCount) + BayesianPriorAlpha
+	posteriorTotal := float64(playCount+skipCount) + BayesianPriorAlpha + BayesianPriorBeta
+	bayesianPlayRatio := posteriorPlays / posteriorTotal
 
-	playRatio := float64(playCount) / float64(totalEvents)
-	return PlayRatioMinWeight + (playRatio * PlayRatioMaxWeight)
+	// Map the Bayesian ratio to the weight range [PlayRatioMinWeight, PlayRatioMaxWeight]
+	return PlayRatioMinWeight + (bayesianPlayRatio * PlayRatioMaxWeight)
 }
 
 func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
