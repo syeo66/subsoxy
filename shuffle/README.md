@@ -46,44 +46,46 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 // included in shuffle results for 14 days after last play OR skip
 ```
 
-### 2. Per-User Play/Skip Ratio Weight with Bayesian Categorization ✅ **ENHANCED**
-Favors songs with better play-to-skip ratios **for each specific user** using a **Bayesian Beta-Binomial model** for more robust and fair weighting.
+### 2. Per-User Play/Skip Ratio Weight with Empirical Bayesian Categorization ✅ **ENHANCED**
+Favors songs with better play-to-skip ratios **for each specific user** using an **empirical Bayesian Beta-Binomial model**. Priors are **dynamically calculated from each user's overall listening patterns** for more personalized and adaptive weighting.
 
-**Why Bayesian?**
+**Why Empirical Bayes?**
+- **Adaptive Priors**: Priors adjust to each user's behavior (e.g., users who skip 80% have higher β)
 - **Handles Uncertainty**: Accounts for uncertainty when sample sizes are small
-- **Conservative Estimates**: Songs with few observations get weights closer to neutral (50% play rate)
+- **User-Specific**: Songs with few observations get conservative estimates based on that user's tendencies
 - **Converges to Truth**: Songs with many observations converge to their true play ratio
 - **Prevents Extremes**: Avoids extreme weights from insufficient data (e.g., 1 play, 0 skips)
 
 ```go
-// calculatePlaySkipWeight uses a Bayesian approach (Beta-Binomial model) to calculate
-// the weight based on play/skip history. This approach is more robust than simple ratios
-// because it accounts for uncertainty when sample sizes are small.
-func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
+// calculatePlaySkipWeight uses an empirical Bayesian approach (Beta-Binomial model)
+// where priors are derived from the user's overall listening patterns
+func (s *Service) calculatePlaySkipWeight(userID string, playCount, skipCount int) float64 {
     if playCount == 0 && skipCount == 0 {
         return UnplayedSongWeight // Boost for new songs for this user
     }
 
+    // Get empirical priors based on user's overall listening patterns
+    alpha, beta := s.getEmpiricalPriors(userID)
+
     // Calculate Bayesian posterior mean using Beta-Binomial model
-    // This gives us a regularized estimate of the play ratio
-    posteriorPlays := float64(playCount) + BayesianPriorAlpha
-    posteriorTotal := float64(playCount+skipCount) + BayesianPriorAlpha + BayesianPriorBeta
+    posteriorPlays := float64(playCount) + alpha
+    posteriorTotal := float64(playCount+skipCount) + alpha + beta
     bayesianPlayRatio := posteriorPlays / posteriorTotal
 
-    // Map the Bayesian ratio to the weight range [PlayRatioMinWeight, PlayRatioMaxWeight]
-    return PlayRatioMinWeight + (bayesianPlayRatio * PlayRatioMaxWeight)
+    // Map the Bayesian ratio to weight range using proper linear interpolation
+    return PlayRatioMinWeight + (bayesianPlayRatio * (PlayRatioMaxWeight - PlayRatioMinWeight))
 }
 ```
 
-**Bayesian Example Comparisons:**
+**Empirical Bayes Example Comparisons (with default priors α=2.0, β=2.0):**
 
-| Scenario | Simple Ratio | Bayesian | Benefit |
-|----------|-------------|----------|---------|
-| 1 play, 0 skips | 2.0x (100%) | 1.28x (60%) | Less extreme for small sample |
-| 1 play, 9 skips | 0.38x (10%) | 0.586x (21%) | More forgiving for small sample |
-| 10 plays, 0 skips | 2.0x (100%) | 1.743x (86%) | Slight regularization |
-| 100 plays, 0 skips | 2.0x (100%) | 1.965x (98%) | Converges to true ratio |
-| 5 plays, 5 skips | 1.1x (50%) | 1.1x (50%) | Identical for balanced |
+| Scenario | Simple Ratio | Empirical Bayes | Benefit |
+|----------|-------------|-----------------|---------|
+| 1 play, 0 skips | 2.0x (100%) | 1.16x (60%) | Less extreme for small sample |
+| 1 play, 9 skips | 0.38x (10%) | 0.543x (21.4%) | More forgiving for small sample |
+| 10 plays, 0 skips | 2.0x (100%) | 1.571x (85.7%) | Slight regularization |
+| 100 plays, 0 skips | 2.0x (100%) | 1.770x (98.1%) | Converges to true ratio |
+| 5 plays, 5 skips | 1.0x (50%) | 1.0x (50%) | Neutral weight for balanced |
 
 ### 3. User-Isolated Transition Probability Weight
 Uses **user-specific transition data** to prefer songs that historically follow well from the user's last played song. **Thread-safe access** with mutex protection.

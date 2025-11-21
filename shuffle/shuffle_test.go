@@ -197,6 +197,10 @@ func TestCalculatePlaySkipWeight(t *testing.T) {
 
 	service := New(db, logger)
 
+	// Test user ID for empirical priors
+	// Since the user has no data in the database, it will fall back to default priors (α=2.0, β=2.0)
+	testUserID := "test-user"
+
 	tests := []struct {
 		name        string
 		playCount   int
@@ -215,63 +219,63 @@ func TestCalculatePlaySkipWeight(t *testing.T) {
 			name:        "Always played",
 			playCount:   10,
 			skipCount:   0,
-			expected:    1.743, // Bayesian: (10+2)/(10+0+2+2) = 12/14 = 0.857; 0.2 + 0.857*1.8 = 1.743
+			expected:    1.571, // Bayesian: (10+2)/(10+0+2+2) = 12/14 = 0.857; 0.2 + 0.857*1.6 = 1.571
 			description: "Always played songs with Bayesian smoothing",
 		},
 		{
 			name:        "Always skipped",
 			playCount:   0,
 			skipCount:   10,
-			expected:    0.457, // Bayesian: (0+2)/(0+10+2+2) = 2/14 = 0.143; 0.2 + 0.143*1.8 = 0.457
+			expected:    0.429, // Bayesian: (0+2)/(0+10+2+2) = 2/14 = 0.143; 0.2 + 0.143*1.6 = 0.429
 			description: "Always skipped songs with Bayesian smoothing",
 		},
 		{
 			name:        "Half played",
 			playCount:   5,
 			skipCount:   5,
-			expected:    1.1, // Bayesian: (5+2)/(5+5+2+2) = 7/14 = 0.5; 0.2 + 0.5*1.8 = 1.1
-			description: "Half played songs should get 1.1 weight",
+			expected:    1.0, // Bayesian: (5+2)/(5+5+2+2) = 7/14 = 0.5; 0.2 + 0.5*1.6 = 1.0
+			description: "Half played songs should get neutral 1.0 weight",
 		},
 		{
 			name:        "Mostly played",
 			playCount:   8,
 			skipCount:   2,
-			expected:    1.486, // Bayesian: (8+2)/(8+2+2+2) = 10/14 = 0.714; 0.2 + 0.714*1.8 = 1.486
+			expected:    1.343, // Bayesian: (8+2)/(8+2+2+2) = 10/14 = 0.714; 0.2 + 0.714*1.6 = 1.343
 			description: "Mostly played songs with Bayesian smoothing",
 		},
 		{
 			name:        "Mostly skipped",
 			playCount:   2,
 			skipCount:   8,
-			expected:    0.714, // Bayesian: (2+2)/(2+8+2+2) = 4/14 = 0.286; 0.2 + 0.286*1.8 = 0.714
+			expected:    0.657, // Bayesian: (2+2)/(2+8+2+2) = 4/14 = 0.286; 0.2 + 0.286*1.6 = 0.657
 			description: "Mostly skipped songs with Bayesian smoothing",
 		},
 		{
 			name:        "Single play (demonstrates Bayesian regularization)",
 			playCount:   1,
 			skipCount:   0,
-			expected:    1.28, // Bayesian: (1+2)/(1+0+2+2) = 3/5 = 0.6; 0.2 + 0.6*1.8 = 1.28
+			expected:    1.16, // Bayesian: (1+2)/(1+0+2+2) = 3/5 = 0.6; 0.2 + 0.6*1.6 = 1.16
 			description: "Single play is regularized toward 50% instead of 100%",
 		},
 		{
 			name:        "Single skip (demonstrates Bayesian regularization)",
 			playCount:   0,
 			skipCount:   1,
-			expected:    0.92, // Bayesian: (0+2)/(0+1+2+2) = 2/5 = 0.4; 0.2 + 0.4*1.8 = 0.92
+			expected:    0.84, // Bayesian: (0+2)/(0+1+2+2) = 2/5 = 0.4; 0.2 + 0.4*1.6 = 0.84
 			description: "Single skip is regularized toward 50% instead of 0%",
 		},
 		{
 			name:        "Many plays converge to true ratio",
 			playCount:   100,
 			skipCount:   0,
-			expected:    1.965, // Bayesian: (100+2)/(100+0+2+2) = 102/104 = 0.981; 0.2 + 0.981*1.8 = 1.965
+			expected:    1.770, // Bayesian: (100+2)/(100+0+2+2) = 102/104 = 0.981; 0.2 + 0.981*1.6 = 1.770
 			description: "With many observations, Bayesian estimate converges to true ratio",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculatePlaySkipWeight(tt.playCount, tt.skipCount)
+			weight := service.calculatePlaySkipWeight(testUserID, tt.playCount, tt.skipCount)
 			// Use approximate comparison for floating point values
 			if weight < tt.expected-0.001 || weight > tt.expected+0.001 {
 				t.Errorf("%s: expected weight %.3f, got %.3f",
@@ -412,7 +416,7 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 1.164 * 0.586 * 1.0, // Old song with bad skip ratio (Bayesian regularization)
+			expectedWeight: 1.0 * 1.164 * 0.543 * 1.0, // Old song with bad skip ratio (Bayesian regularization)
 			tolerance:      0.1,
 			description:    "Frequently skipped song gets moderate penalty with Bayesian regularization",
 		},
@@ -467,7 +471,7 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 2.0 * 1.1 * 1.0, // Old song with balanced play/skip ratio
+			expectedWeight: 1.0 * 2.0 * 1.0 * 1.0, // Old song with balanced play/skip ratio (neutral 1.0x)
 			tolerance:      0.1,
 			description:    "Very old song with balanced history should get good weight",
 		},

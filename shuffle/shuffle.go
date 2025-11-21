@@ -48,20 +48,29 @@ type ScrobbleInfo struct {
 	Timestamp    time.Time
 }
 
+// EmpiricalPriors holds the calculated Bayesian priors for a user
+// These are derived from the user's overall listening patterns
+type EmpiricalPriors struct {
+	Alpha float64 // Prior for plays (based on average plays per song)
+	Beta  float64 // Prior for skips (based on average skips per song)
+}
+
 type Service struct {
-	db           *database.DB
-	logger       *logrus.Logger
-	lastPlayed   map[string]*models.Song  // Map userID to last played song
-	lastScrobble map[string]*ScrobbleInfo // Map userID to last scrobble info
-	mu           sync.RWMutex             // Protects all maps
+	db              *database.DB
+	logger          *logrus.Logger
+	lastPlayed      map[string]*models.Song     // Map userID to last played song
+	lastScrobble    map[string]*ScrobbleInfo    // Map userID to last scrobble info
+	empiricalPriors map[string]*EmpiricalPriors // Map userID to calculated priors
+	mu              sync.RWMutex                // Protects all maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
 	return &Service{
-		db:           db,
-		logger:       logger,
-		lastPlayed:   make(map[string]*models.Song),
-		lastScrobble: make(map[string]*ScrobbleInfo),
+		db:              db,
+		logger:          logger,
+		lastPlayed:      make(map[string]*models.Song),
+		lastScrobble:    make(map[string]*ScrobbleInfo),
+		empiricalPriors: make(map[string]*EmpiricalPriors),
 	}
 }
 
@@ -69,6 +78,79 @@ func (s *Service) SetLastPlayed(userID string, song *models.Song) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastPlayed[userID] = song
+}
+
+// InvalidateEmpiricalPriors clears the cached empirical priors for a user
+// This should be called when the user's play/skip statistics change significantly
+func (s *Service) InvalidateEmpiricalPriors(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.empiricalPriors, userID)
+}
+
+// getEmpiricalPriors calculates and caches the empirical Bayesian priors for a user
+// based on their overall listening patterns. This implements the empirical Bayes approach
+// where priors are derived from the data itself rather than being fixed constants.
+func (s *Service) getEmpiricalPriors(userID string) (alpha, beta float64) {
+	// Check cache first (with read lock)
+	s.mu.RLock()
+	if priors, exists := s.empiricalPriors[userID]; exists {
+		s.mu.RUnlock()
+		return priors.Alpha, priors.Beta
+	}
+	s.mu.RUnlock()
+
+	// Get user's total play/skip counts from database
+	totalPlays, totalSkips, err := s.db.GetUserTotalPlaySkips(userID)
+	if err != nil {
+		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get user total play/skip counts, using default priors")
+		return BayesianPriorAlpha, BayesianPriorBeta
+	}
+
+	// Get song count to calculate averages
+	songCount, err := s.db.GetSongCount(userID)
+	if err != nil || songCount == 0 {
+		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get song count, using default priors")
+		return BayesianPriorAlpha, BayesianPriorBeta
+	}
+
+	// Calculate average plays and skips per song as priors
+	// If user has no play/skip history yet, fall back to default priors
+	if totalPlays == 0 && totalSkips == 0 {
+		return BayesianPriorAlpha, BayesianPriorBeta
+	}
+
+	alpha = float64(totalPlays) / float64(songCount)
+	beta = float64(totalSkips) / float64(songCount)
+
+	// Use a minimum prior strength to avoid extreme values with very sparse data
+	// This ensures we have at least some regularization
+	minPriorStrength := 1.0
+	if alpha < minPriorStrength {
+		alpha = minPriorStrength
+	}
+	if beta < minPriorStrength {
+		beta = minPriorStrength
+	}
+
+	// Cache the calculated priors (with write lock)
+	s.mu.Lock()
+	s.empiricalPriors[userID] = &EmpiricalPriors{
+		Alpha: alpha,
+		Beta:  beta,
+	}
+	s.mu.Unlock()
+
+	s.logger.WithFields(logrus.Fields{
+		"userID":     userID,
+		"totalPlays": totalPlays,
+		"totalSkips": totalSkips,
+		"songCount":  songCount,
+		"alpha":      alpha,
+		"beta":       beta,
+	}).Debug("Calculated empirical Bayes priors for user")
+
+	return alpha, beta
 }
 
 // ProcessScrobble processes a scrobble event with simplified skip detection
@@ -367,7 +449,7 @@ func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
+	playSkipWeight := s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
 	transitionWeight := s.calculateTransitionWeight(userID, song.ID)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
@@ -392,7 +474,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight := s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
+	playSkipWeight := s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
 	// Use provided transition probability or default to 1.0 if not available
@@ -437,30 +519,35 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 	return 1.0 + math.Min(daysSinceLastPresented/DaysPerYear, 1.0)
 }
 
-// calculatePlaySkipWeight uses a Bayesian approach (Beta-Binomial model) to calculate
+// calculatePlaySkipWeight uses an empirical Bayesian approach (Beta-Binomial model) to calculate
 // the weight based on play/skip history. This approach is more robust than simple ratios
 // because it accounts for uncertainty when sample sizes are small.
 //
 // The Bayesian posterior mean is: (playCount + α) / (playCount + skipCount + α + β)
-// where α and β are prior parameters representing "pseudo-observations".
+// where α and β are empirical priors derived from the user's overall listening patterns.
 //
 // Benefits:
-// - Songs with few observations get conservative estimates (closer to 50% play rate)
+// - Priors adapt to each user's behavior (e.g., users who skip 80% have higher β)
+// - Songs with few observations get conservative estimates based on user tendencies
 // - Songs with many observations converge to their true play ratio
 // - Prevents extreme weights from small sample sizes (e.g., 1 play, 0 skips)
-func (s *Service) calculatePlaySkipWeight(playCount, skipCount int) float64 {
+func (s *Service) calculatePlaySkipWeight(userID string, playCount, skipCount int) float64 {
 	if playCount == 0 && skipCount == 0 {
 		return UnplayedSongWeight
 	}
 
+	// Get empirical priors based on user's overall listening patterns
+	alpha, beta := s.getEmpiricalPriors(userID)
+
 	// Calculate Bayesian posterior mean using Beta-Binomial model
 	// This gives us a regularized estimate of the play ratio
-	posteriorPlays := float64(playCount) + BayesianPriorAlpha
-	posteriorTotal := float64(playCount+skipCount) + BayesianPriorAlpha + BayesianPriorBeta
+	posteriorPlays := float64(playCount) + alpha
+	posteriorTotal := float64(playCount+skipCount) + alpha + beta
 	bayesianPlayRatio := posteriorPlays / posteriorTotal
 
 	// Map the Bayesian ratio to the weight range [PlayRatioMinWeight, PlayRatioMaxWeight]
-	return PlayRatioMinWeight + (bayesianPlayRatio * PlayRatioMaxWeight)
+	// Using proper linear interpolation: min + (ratio * (max - min))
+	return PlayRatioMinWeight + (bayesianPlayRatio * (PlayRatioMaxWeight - PlayRatioMinWeight))
 }
 
 func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
@@ -542,7 +629,7 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 // GetWeightComponents returns individual weight components for debugging
 func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight, artistWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight = s.calculatePlaySkipWeight(song.PlayCount, song.SkipCount)
+	playSkipWeight = s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
 	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
 	artistWeight = s.calculateArtistWeight(userID, song.Artist)
 	return
