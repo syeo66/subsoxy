@@ -1053,6 +1053,11 @@ func TestCalculateArtistWeight(t *testing.T) {
 		}
 	}
 
+	// With empirical Bayesian approach:
+	// Total plays across all artists = 15 (Great: 10, Poor: 0, Average: 5)
+	// Total skips across all artists = 15 (Great: 0, Poor: 10, Average: 5)
+	// Artist count = 3
+	// alpha = 15/3 = 5.0, beta = 15/3 = 5.0
 	tests := []struct {
 		name        string
 		artist      string
@@ -1060,16 +1065,16 @@ func TestCalculateArtistWeight(t *testing.T) {
 		description string
 	}{
 		{
-			name:        "Great artist (all plays)",
-			artist:      "Great Artist",
-			expected:    1.5, // ArtistRatioMinWeight (0.5) + ratio (1.0) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 1.0 * 1.0 = 1.5
-			description: "Artist with all plays should get 1.5x weight",
+			name:     "Great artist (all plays)",
+			artist:   "Great Artist",
+			expected: 1.25, // Bayesian: (10+5)/(10+0+5+5) = 15/20 = 0.75 → 0.5 + 0.75*1.0 = 1.25
+			description: "Artist with all plays gets regularized weight (Bayesian prevents extreme 1.5x)",
 		},
 		{
-			name:        "Poor artist (all skips)",
-			artist:      "Poor Artist",
-			expected:    0.5, // ArtistRatioMinWeight (0.5) + ratio (0.0) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 0.0 * 1.0 = 0.5
-			description: "Artist with all skips should get 0.5x weight",
+			name:     "Poor artist (all skips)",
+			artist:   "Poor Artist",
+			expected: 0.75, // Bayesian: (0+5)/(0+10+5+5) = 5/20 = 0.25 → 0.5 + 0.25*1.0 = 0.75
+			description: "Artist with all skips gets regularized weight (Bayesian prevents extreme 0.5x)",
 		},
 		{
 			name:        "New artist (no history)",
@@ -1078,10 +1083,10 @@ func TestCalculateArtistWeight(t *testing.T) {
 			description: "Artist with no history should get 1.0 (neutral) weight",
 		},
 		{
-			name:        "Average artist (50% play ratio)",
-			artist:      "Average Artist",
-			expected:    1.0, // ArtistRatioMinWeight (0.5) + ratio (0.5) * (ArtistRatioMaxWeight - ArtistRatioMinWeight) = 0.5 + 0.5 * 1.0 = 1.0
-			description: "Artist with 50% play ratio should get 1.0x weight",
+			name:     "Average artist (50% play ratio)",
+			artist:   "Average Artist",
+			expected: 1.0, // Bayesian: (5+5)/(5+5+5+5) = 10/20 = 0.5 → 0.5 + 0.5*1.0 = 1.0
+			description: "Artist with 50% play ratio should get 1.0x weight (same as simple ratio)",
 		},
 	}
 
@@ -1130,9 +1135,15 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 		}
 	}
 
+	// With empirical Bayesian approach:
+	// Total plays = 100, Total skips = 0, Artist count = 1
+	// alpha = 100/1 = 100.0, beta = max(0/1, 1.0) = 1.0 (minimum prior strength)
+	// Bayesian ratio: (100+100)/(100+0+100+1) = 200/201 ≈ 0.995
+	// Weight: 0.5 + 0.995*1.0 ≈ 1.495
 	weight := service.calculateArtistWeight(userID, "Popular Artist")
-	if weight != 1.5 {
-		t.Errorf("Expected weight 1.5 for artist with 100 plays, got %.3f", weight)
+	expectedWeight := 1.495
+	if math.Abs(weight-expectedWeight) > 0.01 {
+		t.Errorf("Expected weight close to %.3f for artist with 100 plays (Bayesian converges to 1.5), got %.3f", expectedWeight, weight)
 	}
 
 	// Verify weight is finite and positive

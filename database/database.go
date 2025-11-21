@@ -641,6 +641,50 @@ func (db *DB) GetUserTotalPlaySkips(userID string) (totalPlays, totalSkips int, 
 	return totalPlays, totalSkips, nil
 }
 
+// GetUserTotalArtistPlaySkips returns the total play and skip counts across all artists for a user
+// These values are used to calculate empirical Bayes priors for artist weight calculations
+func (db *DB) GetUserTotalArtistPlaySkips(userID string) (totalPlays, totalSkips int, err error) {
+	if userID == "" {
+		return 0, 0, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	err = db.conn.QueryRow(`
+		SELECT
+			COALESCE(SUM(play_count), 0) as total_plays,
+			COALESCE(SUM(skip_count), 0) as total_skips
+		FROM artist_stats
+		WHERE user_id = ?
+	`, userID).Scan(&totalPlays, &totalSkips)
+
+	if err != nil {
+		return 0, 0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get user total artist play/skip counts").
+			WithContext("userID", userID)
+	}
+
+	return totalPlays, totalSkips, nil
+}
+
+// GetArtistCount returns the number of unique artists for a user
+func (db *DB) GetArtistCount(userID string) (int, error) {
+	if userID == "" {
+		return 0, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	var count int
+	err := db.conn.QueryRow(`
+		SELECT COUNT(DISTINCT artist)
+		FROM artist_stats
+		WHERE user_id = ?
+	`, userID).Scan(&count)
+
+	if err != nil {
+		return 0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist count").
+			WithContext("userID", userID)
+	}
+
+	return count, nil
+}
+
 // GetExistingSongIDs returns a map of all existing song IDs for a user
 func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
 	if userID == "" {
