@@ -146,26 +146,31 @@ songs, err := shuffleService.GetWeightedShuffledSongs(userID, 50)
 bobSongs, err := shuffleService.GetWeightedShuffledSongs("bob", 50)
 ```
 
-### Setting User-Specific Last Played Song and Simplified Skip Detection (Thread-Safe)
+### Setting User-Specific Last Played Song and Time-Based Skip Detection (Thread-Safe) ✅ **ENHANCED**
 ```go
 // Set last played song for a specific user - thread-safe
 userID := "alice"
 song := &models.Song{ID: "song123"}
 shuffleService.SetLastPlayed(userID, song) // Protected by mutex
 
-// Process scrobble with simplified skip detection (scrobble-only logic)
+// Process scrobble with time-based skip detection (scrobble-only logic with duration checking)
 recordSkipFunc := func(userID string, song *models.Song) {
     // Record skip event in database
     fmt.Printf("Song %s was skipped by %s\n", song.ID, userID)
 }
 
-// Two-case skip detection:
-// 1. Non-submission scrobble followed by another scrobble = skip previous
+// Time-based skip detection:
+// 1. Non-submission scrobble followed by another scrobble = skip previous (IF time < 2x song duration)
 shuffleService.ProcessScrobble(userID, "song456", false, recordSkipFunc) // submission=false
-shuffleService.ProcessScrobble(userID, "song789", false, recordSkipFunc) // song456 marked as skip
+shuffleService.ProcessScrobble(userID, "song789", false, recordSkipFunc) // song456 marked as skip (if < 2x duration)
 
-// 2. Submission scrobble = definitive play
+// 2. Extended pause handling: If hours pass (> 2x song duration), previous song NOT marked as skip
+// This prevents false skips when users pause playback for extended periods
+
+// 3. Submission scrobble = definitive play
 shuffleService.ProcessScrobble(userID, "song789", true, recordSkipFunc) // song789 marked as play
+
+// 4. Fallback behavior: When song duration is unavailable (0), falls back to always marking as skipped
 
 // Multiple goroutines can safely access different users concurrently
 go shuffleService.SetLastPlayed("alice", songA)
@@ -311,12 +316,16 @@ The shuffle service now includes comprehensive thread safety:
 - **Read Protection**: `CheckForSkip()` and `calculateTransitionWeight()` use shared locks (`RLock()/RUnlock()`)
 - **Concurrent Users**: Multiple users can safely access the service simultaneously
 
-### Simplified Skip Detection Methods ✅ **SIMPLIFIED**
-- **ProcessScrobble**: Implements streamlined 2-case scrobble-only skip detection logic
+### Time-Based Skip Detection Methods ✅ **ENHANCED**
+- **ProcessScrobble**: Implements intelligent scrobble-only skip detection with time-based validation
+  - Fetches song details to get duration for accurate skip detection
+  - Only marks as skipped if time between scrobbles < 2x previous song duration
+  - Prevents false skips from extended pauses or playback interruptions
+  - Falls back to always marking as skipped when song duration is unavailable (0)
 - **SetLastPlayed**: Records when a song is successfully played (only definitive plays)
 - **No Stream Tracking**: Stream events no longer influence skip detection
-- **No Timeout Logic**: Removed complex pending song timeout system
-- **Cleaner Implementation**: Focuses solely on user scrobble behavior
+- **Extended Pause Handling**: Automatically detects and handles long pauses (> 2x song duration)
+- **Cleaner Implementation**: Focuses on user scrobble behavior with intelligent time validation
 - **Thread-Safe**: All methods use appropriate mutex protection for concurrent access
 
 ### Testing ✅ **ENHANCED**
@@ -327,6 +336,13 @@ The shuffle service now includes comprehensive thread safety:
 - **Transition Weight Tests**: `TestCalculateSongWeightWithTransition()` with pre-computed probabilities
 - **Component Tests**: Individual tests for time decay, play/skip ratio, and transition weights
 - **Integration Tests**: Full shuffle workflow testing with various library sizes
+- **Time-Based Skip Detection Tests**: ✅ **NEW** - `TestProcessScrobbleTimeBasedSkipDetection()` with 6 scenarios:
+  - Skip recorded when time < 2x song duration
+  - Skip NOT recorded when time > 2x song duration
+  - Fallback behavior when song has no duration (0)
+  - Fallback persists even after long time when duration is 0
+  - Longer songs have longer threshold (5 min song = 10 min threshold)
+  - Longer songs not skipped after exceeding their threshold
 
 #### Test Scenarios
 - **Never played songs**: Validates maximum weight boost (2.0 × 1.5 × 1.0 = 3.0)

@@ -227,6 +227,20 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Fetch current song details to get duration
+	currentSongs, err := s.db.GetSongsByIDs(userID, []string{songID})
+	var currentSong *models.Song
+	if err == nil && len(currentSongs) > 0 {
+		if song, exists := currentSongs[songID]; exists {
+			currentSong = &song
+		}
+	}
+
+	// If we can't get the song details, create a minimal song with just the ID
+	if currentSong == nil {
+		currentSong = &models.Song{ID: songID}
+	}
+
 	// Check if there was a previous scrobble
 	lastScrobble, hadPreviousScrobble := s.lastScrobble[userID]
 
@@ -243,18 +257,41 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 
 	// If there was a previous scrobble that wasn't a definitive play, mark it as skipped
 	// BUT only if it's a different song (same song being scrobbled again should just update status)
+	// AND only if the time between scrobbles is less than 2x the song duration (when duration is available)
 	if hadPreviousScrobble && !lastScrobble.IsSubmission && lastScrobble.Song.ID != songID {
-		recordSkipFunc(userID, lastScrobble.Song)
-		s.logger.WithFields(logrus.Fields{
-			"user_id": userID,
-			"song_id": lastScrobble.Song.ID,
-			"reason":  "followed_by_another_scrobble",
-		}).Debug("Marking previous scrobble as skipped")
+		timeSinceLastScrobble := time.Since(lastScrobble.Timestamp)
+		songDuration := time.Duration(lastScrobble.Song.Duration) * time.Second
+		maxSkipTime := songDuration * 2
+
+		// If song duration is not available (0), fall back to always marking as skipped
+		// Otherwise, only mark as skipped if the time since last scrobble is reasonable (less than 2x song duration)
+		// If more time has passed, the user likely paused or stopped playback
+		if songDuration == 0 || timeSinceLastScrobble <= maxSkipTime {
+			recordSkipFunc(userID, lastScrobble.Song)
+			s.logger.WithFields(logrus.Fields{
+				"user_id":                userID,
+				"song_id":                lastScrobble.Song.ID,
+				"reason":                 "followed_by_another_scrobble",
+				"time_since_scrobble":    timeSinceLastScrobble,
+				"song_duration":          songDuration,
+				"max_skip_time":          maxSkipTime,
+				"duration_unavailable":   songDuration == 0,
+			}).Debug("Marking previous scrobble as skipped")
+		} else {
+			s.logger.WithFields(logrus.Fields{
+				"user_id":                userID,
+				"song_id":                lastScrobble.Song.ID,
+				"reason":                 "too_much_time_passed",
+				"time_since_scrobble":    timeSinceLastScrobble,
+				"song_duration":          songDuration,
+				"max_skip_time":          maxSkipTime,
+			}).Debug("Not marking as skipped - too much time passed since last scrobble")
+		}
 	}
 
 	// Update the last scrobble info
 	s.lastScrobble[userID] = &ScrobbleInfo{
-		Song:         &models.Song{ID: songID},
+		Song:         currentSong,
 		IsSubmission: isSubmission,
 		Timestamp:    time.Now(),
 	}
