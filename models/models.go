@@ -7,18 +7,20 @@ import (
 )
 
 type Song struct {
-	ID          string    `json:"id" xml:"id,attr"`
-	Title       string    `json:"title" xml:"title,attr"`
-	Artist      string    `json:"artist" xml:"artist,attr"`
-	Album       string    `json:"album" xml:"album,attr"`
-	Duration    int       `json:"duration" xml:"duration,attr"`
-	LastPlayed  time.Time `json:"lastPlayed" xml:"lastPlayed,attr"`
-	LastSkipped time.Time `json:"lastSkipped" xml:"lastSkipped,attr"`
-	PlayCount   int       `json:"playCount" xml:"playCount,attr"`
-	SkipCount   int       `json:"skipCount" xml:"skipCount,attr"`
-	IsDir       bool      `json:"isDir" xml:"isDir,attr"`
-	Name        string    `json:"name" xml:"name,attr"`
-	CoverArt    string    `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
+	ID            string    `json:"id" xml:"id,attr"`
+	Title         string    `json:"title" xml:"title,attr"`
+	Artist        string    `json:"artist" xml:"artist,attr"`
+	Album         string    `json:"album" xml:"album,attr"`
+	Duration      int       `json:"duration" xml:"duration,attr"`
+	LastPlayed    time.Time `json:"lastPlayed" xml:"lastPlayed,attr"`
+	LastSkipped   time.Time `json:"lastSkipped" xml:"lastSkipped,attr"`
+	PlayCount     int       `json:"playCount" xml:"playCount,attr"`
+	SkipCount     int       `json:"skipCount" xml:"skipCount,attr"`
+	AdjustedPlays float64   `json:"adjustedPlays" xml:"adjustedPlays,attr"`
+	AdjustedSkips float64   `json:"adjustedSkips" xml:"adjustedSkips,attr"`
+	IsDir         bool      `json:"isDir" xml:"isDir,attr"`
+	Name          string    `json:"name" xml:"name,attr"`
+	CoverArt      string    `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
 }
 
 type PlayEvent struct {

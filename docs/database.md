@@ -71,8 +71,10 @@ The database connection pool includes proper goroutine lifecycle management:
 - `duration` (INTEGER): Song duration in seconds
 - `last_played` (DATETIME): Last time the song was played by this user
 - `last_skipped` (DATETIME): Last time the song was skipped by this user ✅ **NEW**
-- `play_count` (INTEGER): Number of times the song was played by this user
-- `skip_count` (INTEGER): Number of times the song was skipped by this user
+- `play_count` (INTEGER): Number of times the song was played by this user (raw count)
+- `skip_count` (INTEGER): Number of times the song was skipped by this user (raw count)
+- `adjusted_plays` (REAL): Time-decayed play count emphasizing recent behavior ✅ **NEW**
+- `adjusted_skips` (REAL): Time-decayed skip count emphasizing recent behavior ✅ **NEW**
 - `cover_art` (TEXT): Cover art identifier for use with `/rest/getCoverArt` endpoint ✅ **NEW**
 - **PRIMARY KEY**: `(id, user_id)` for per-user song isolation
 
@@ -195,6 +197,40 @@ GROUP BY pe.user_id, s.artist
 - Artist stats are automatically updated when play/skip events are recorded
 - Ratio is recalculated on every update: `play_count / (play_count + skip_count)`
 - Used by the shuffle algorithm to weight songs based on artist preferences
+
+#### Exponential Decay Migration ✅ **NEW**
+**Migration Process**:
+- **Detection**: Checks for existing `adjusted_plays` and `adjusted_skips` columns using `pragma_table_info`
+- **Safe Addition**: Uses `ALTER TABLE` to add columns if missing
+- **Initialization**: Sets initial adjusted values from raw counts (adjusted_plays = play_count, adjusted_skips = skip_count)
+- **Backward Compatible**: Existing data remains intact, graceful handling of NULL values
+
+**Migration Code**:
+```sql
+-- Check if adjusted_plays column exists
+SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='adjusted_plays'
+
+-- Add columns if missing
+ALTER TABLE songs ADD COLUMN adjusted_plays REAL DEFAULT 0.0
+ALTER TABLE songs ADD COLUMN adjusted_skips REAL DEFAULT 0.0
+
+-- Initialize from raw counts for existing songs
+UPDATE songs
+SET adjusted_plays = CAST(play_count AS REAL),
+    adjusted_skips = CAST(skip_count AS REAL)
+WHERE adjusted_plays = 0.0 AND adjusted_skips = 0.0
+```
+
+**Decay Formula**:
+- **On Play Event**: `adjusted_plays = 1.0 + (old_adjusted_plays × 0.95)`, `adjusted_skips = old_adjusted_skips × 0.95`
+- **On Skip Event**: `adjusted_skips = 1.0 + (old_adjusted_skips × 0.95)`, `adjusted_plays = old_adjusted_plays × 0.95`
+- **Convergence**: Geometric series converges to ~20.0 (limit: 1/(1-0.95))
+- **Benefits**: Recent events have more influence than older ones, prevents unbounded growth
+
+**Automatic Updates**:
+- Adjusted values are automatically updated when play/skip events are recorded in `RecordPlayEvent()`
+- Used by the shuffle algorithm for Bayesian weight calculations with recency emphasis
+- Artist statistics are calculated from song-level adjusted values for artist-level preferences
 
 ### Cover Art API Integration
 **Response Enhancement**:

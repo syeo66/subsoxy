@@ -46,30 +46,37 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 // included in shuffle results for 14 days after last play OR skip
 ```
 
-### 2. Per-User Play/Skip Ratio Weight with Empirical Bayesian Categorization ✅ **ENHANCED**
-Favors songs with better play-to-skip ratios **for each specific user** using an **empirical Bayesian Beta-Binomial model**. Priors are **dynamically calculated from each user's overall listening patterns** for more personalized and adaptive weighting.
+### 2. Per-User Play/Skip Ratio Weight with Empirical Bayesian Categorization and Exponential Decay ✅ **ENHANCED**
+Favors songs with better play-to-skip ratios **for each specific user** using an **empirical Bayesian Beta-Binomial model** with **exponential decay** to emphasize recent behavior. Priors are **dynamically calculated from each user's overall listening patterns** for more personalized and adaptive weighting.
 
-**Why Empirical Bayes?**
+**Why Empirical Bayes + Exponential Decay?**
 - **Adaptive Priors**: Priors adjust to each user's behavior (e.g., users who skip 80% have higher β)
+- **Recency Emphasis**: Recent plays/skips have more influence than older ones (decay factor: 0.95)
 - **Handles Uncertainty**: Accounts for uncertainty when sample sizes are small
 - **User-Specific**: Songs with few observations get conservative estimates based on that user's tendencies
 - **Converges to Truth**: Songs with many observations converge to their true play ratio
-- **Prevents Extremes**: Avoids extreme weights from insufficient data (e.g., 1 play, 0 skips)
+- **Prevents Extremes**: Avoids extreme weights from insufficient data and bounded growth from decay
+
+**Exponential Decay System:**
+- **On Play**: `adjusted_plays = 1.0 + (old × 0.95)`, `adjusted_skips = old × 0.95`
+- **On Skip**: `adjusted_skips = 1.0 + (old × 0.95)`, `adjusted_plays = old × 0.95`
+- **Convergence**: Series converges to ~20.0 (limit: 1/(1-0.95))
+- **Recent Impact**: Last event has full weight (1.0), older events decay by 5% each
 
 ```go
-// calculatePlaySkipWeight uses an empirical Bayesian approach (Beta-Binomial model)
-// where priors are derived from the user's overall listening patterns
-func (s *Service) calculatePlaySkipWeight(userID string, playCount, skipCount int) float64 {
-    if playCount == 0 && skipCount == 0 {
+// calculatePlaySkipWeight uses empirical Bayesian approach with exponential decay
+// adjustedPlays and adjustedSkips are time-decayed values that emphasize recent behavior
+func (s *Service) calculatePlaySkipWeight(userID string, adjustedPlays, adjustedSkips float64) float64 {
+    if adjustedPlays == 0 && adjustedSkips == 0 {
         return UnplayedSongWeight // Boost for new songs for this user
     }
 
-    // Get empirical priors based on user's overall listening patterns
+    // Get empirical priors based on user's overall adjusted listening patterns
     alpha, beta := s.getEmpiricalPriors(userID)
 
-    // Calculate Bayesian posterior mean using Beta-Binomial model
-    posteriorPlays := float64(playCount) + alpha
-    posteriorTotal := float64(playCount+skipCount) + alpha + beta
+    // Calculate Bayesian posterior mean using Beta-Binomial model with decayed values
+    posteriorPlays := adjustedPlays + alpha
+    posteriorTotal := adjustedPlays + adjustedSkips + alpha + beta
     bayesianPlayRatio := posteriorPlays / posteriorTotal
 
     // Map the Bayesian ratio to weight range using proper linear interpolation
@@ -77,15 +84,22 @@ func (s *Service) calculatePlaySkipWeight(userID string, playCount, skipCount in
 }
 ```
 
-**Empirical Bayes Example Comparisons (with default priors α=2.0, β=2.0):**
+**Decay Impact Examples:**
 
-| Scenario | Simple Ratio | Empirical Bayes | Benefit |
-|----------|-------------|-----------------|---------|
-| 1 play, 0 skips | 2.0x (100%) | 1.16x (60%) | Less extreme for small sample |
-| 1 play, 9 skips | 0.38x (10%) | 0.543x (21.4%) | More forgiving for small sample |
-| 10 plays, 0 skips | 2.0x (100%) | 1.571x (85.7%) | Slight regularization |
-| 100 plays, 0 skips | 2.0x (100%) | 1.770x (98.1%) | Converges to true ratio |
-| 5 plays, 5 skips | 1.0x (50%) | 1.0x (50%) | Neutral weight for balanced |
+| Event History | Raw Count | Adjusted Count | Convergence |
+|--------------|-----------|----------------|-------------|
+| 1 recent play | 1 | 1.0 | Full weight |
+| 5 consecutive plays | 5 | 4.108 | ~82% of raw |
+| 10 consecutive plays | 10 | 6.513 | ~65% of raw |
+| 100 consecutive plays | 100 | ~20.0 | Converged limit |
+
+**Empirical Bayes Example Comparisons (with default priors α=2.0, β=2.0 and adjusted values):**
+
+| Scenario | Raw Counts | Adjusted Values | Weight | Benefit |
+|----------|-----------|-----------------|--------|---------|
+| 1 recent play, 0 skips | 1, 0 | 1.0, 0 | 1.16x | Less extreme for small sample |
+| 10 recent plays, 0 skips | 10, 0 | 6.513, 0 | 1.464x | Bounded growth with decay |
+| 5 plays, 5 skips (recent) | 5, 5 | 4.108, 4.108 | 1.0x | Neutral weight for balanced |
 
 ### 3. User-Isolated Transition Probability Weight
 Uses **user-specific transition data** to prefer songs that historically follow well from the user's last played song. **Thread-safe access** with mutex protection.
@@ -109,21 +123,36 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 }
 ```
 
-### 4. Per-User Artist Valuation Weight ✅ **NEW**
-Applies a weight multiplier based on the user's historical preference for the song's artist. Artists that the user tends to play (vs skip) get higher weights.
+### 4. Per-User Artist Valuation Weight with Exponential Decay ✅ **NEW**
+Applies a weight multiplier based on the user's historical preference for the song's artist using **time-decayed adjusted values**. Artists that the user tends to play (vs skip) recently get higher weights.
+
+**Artist Statistics Calculation:**
+- **Dynamic Aggregation**: Artist stats are calculated by summing `adjusted_plays` and `adjusted_skips` from all songs by that artist
+- **Empirical Bayesian**: Uses same adaptive prior approach as song-level weights
+- **Recency Aware**: Recent artist preferences influence weights more than older ones
+- **No Separate Table**: Stats computed on-the-fly from song-level adjusted values
 
 ```go
 func (s *Service) calculateArtistWeight(userID, artist string) float64 {
-    stats, err := s.db.GetArtistStats(userID, artist)
-    if err != nil || (stats.PlayCount == 0 && stats.SkipCount == 0) {
+    // Get adjusted artist stats (summed from all artist's songs)
+    stats, err := s.db.GetArtistAdjustedStats(userID, artist)
+    if err != nil || (stats.AdjustedPlays == 0 && stats.AdjustedSkips == 0) {
         return 1.0 // Neutral weight for new/unknown artists
     }
 
-    // Map ratio [0.0, 1.0] to weight range [0.5, 1.5]
+    // Get empirical priors for artist-level weighting
+    alpha, beta := s.getEmpiricalArtistPriors(userID)
+
+    // Calculate Bayesian artist ratio using adjusted values
+    posteriorPlays := stats.AdjustedPlays + alpha
+    posteriorTotal := stats.AdjustedPlays + stats.AdjustedSkips + alpha + beta
+    bayesianArtistRatio := posteriorPlays / posteriorTotal
+
+    // Map ratio to weight range [0.5, 1.5]
     // ratio=0.0 (all skips) -> 0.5x weight
     // ratio=0.5 (balanced) -> 1.0x weight
     // ratio=1.0 (all plays) -> 1.5x weight
-    return ArtistRatioMinWeight + (stats.Ratio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
+    return ArtistRatioMinWeight + (bayesianArtistRatio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
 }
 ```
 
@@ -179,7 +208,7 @@ go shuffleService.ProcessScrobble("bob", "songB", true, recordSkipFunc) // Safe 
 
 ## Multi-Tenant Weight Calculation ✅ **UPDATED**
 
-The final weight is calculated **per user** as:
+The final weight is calculated **per user** using **time-decayed adjusted values** as:
 ```
 final_weight = base_weight × user_time_weight × user_play_skip_weight × user_transition_weight × artist_weight
 ```
@@ -187,9 +216,9 @@ final_weight = base_weight × user_time_weight × user_play_skip_weight × user_
 Where:
 - `base_weight` = 1.0 (can be adjusted for global tuning)
 - `user_time_weight` = 0.1 to 2.0 (lower for recently played by this user)
-- `user_play_skip_weight` = 0.2 to 2.0 (higher for frequently played by this user)
+- `user_play_skip_weight` = 0.2 to 1.8 (based on adjusted_plays/adjusted_skips with Empirical Bayes) ✅ **ENHANCED**
 - `user_transition_weight` = 0.5 to 1.5 (higher for good transitions for this user)
-- `artist_weight` = 0.5 to 1.5 (higher for artists this user tends to play) ✅ **NEW**
+- `artist_weight` = 0.5 to 1.5 (based on artist's adjusted_plays/adjusted_skips with Empirical Bayes) ✅ **ENHANCED**
 
 ## Multi-Tenant Selection Process ✅ **UPDATED**
 

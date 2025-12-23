@@ -17,18 +17,20 @@ Represents a song in the music library.
 
 ```go
 type Song struct {
-    ID          string    `json:"id"`
-    Title       string    `json:"title"`
-    Artist      string    `json:"artist"`
-    Album       string    `json:"album"`
-    Duration    int       `json:"duration"`
-    LastPlayed  time.Time `json:"lastPlayed"`
-    LastSkipped time.Time `json:"lastSkipped"`  // ✅ Tracks when song was last skipped
-    PlayCount   int       `json:"playCount"`
-    SkipCount   int       `json:"skipCount"`
-    IsDir       bool      `json:"isDir"`       // Indicates if this is a directory (album)
-    Name        string    `json:"name"`        // Alternative name field for directories
-    CoverArt    string    `json:"coverArt,omitempty"` // ✅ Cover art identifier for /rest/getCoverArt
+    ID            string    `json:"id"`
+    Title         string    `json:"title"`
+    Artist        string    `json:"artist"`
+    Album         string    `json:"album"`
+    Duration      int       `json:"duration"`
+    LastPlayed    time.Time `json:"lastPlayed"`
+    LastSkipped   time.Time `json:"lastSkipped"`  // ✅ Tracks when song was last skipped
+    PlayCount     int       `json:"playCount"`    // Raw play count
+    SkipCount     int       `json:"skipCount"`    // Raw skip count
+    AdjustedPlays float64   `json:"adjustedPlays"` // ✅ Time-decayed play count (exponential decay, factor: 0.95)
+    AdjustedSkips float64   `json:"adjustedSkips"` // ✅ Time-decayed skip count (exponential decay, factor: 0.95)
+    IsDir         bool      `json:"isDir"`       // Indicates if this is a directory (album)
+    Name          string    `json:"name"`        // Alternative name field for directories
+    CoverArt      string    `json:"coverArt,omitempty"` // ✅ Cover art identifier for /rest/getCoverArt
 }
 ```
 
@@ -151,9 +153,46 @@ event := models.PlayEvent{
 }
 ```
 
+## Exponential Decay System ✅ **NEW**
+
+The `Song` struct now includes `AdjustedPlays` and `AdjustedSkips` fields that implement **incremental exponential decay** for time-weighted play/skip tracking:
+
+### How It Works
+
+- **Decay Factor**: 0.95 (5% decay per event)
+- **On Play Event**: `AdjustedPlays = 1.0 + (old × 0.95)`, `AdjustedSkips = old × 0.95`
+- **On Skip Event**: `AdjustedSkips = 1.0 + (old × 0.95)`, `AdjustedPlays = old × 0.95`
+- **Convergence**: Geometric series converges to ~20.0 (limit: 1/(1-0.95))
+
+### Benefits
+
+1. **Recency Emphasis**: Recent plays/skips have more influence than older ones
+2. **Bounded Growth**: Prevents unbounded weight accumulation
+3. **User Preferences**: Adapts to changing user tastes over time
+4. **Bayesian Weights**: Used in empirical Bayesian calculations for intelligent shuffle
+
+### Usage Example
+
+```go
+// After recording a play event, adjusted values are automatically updated
+song := models.Song{
+    ID:            "123",
+    Title:         "Example Song",
+    PlayCount:     10,        // Raw count: all historical plays
+    SkipCount:     2,         // Raw count: all historical skips
+    AdjustedPlays: 6.513,     // Decayed: recent plays weighted more
+    AdjustedSkips: 1.324,     // Decayed: recent skips weighted more
+}
+
+// Shuffle algorithm uses adjusted values for weight calculations
+// 10 consecutive plays → ~6.513 adjusted (not 10.0)
+// Recent events contribute full weight (1.0), older events decay
+```
+
 ## Design Notes
 
 - All structures include JSON tags for API serialization
 - Time fields use Go's `time.Time` type for proper handling
 - Pointer fields (`*string`) are used for optional values
 - The `Hook` type provides a clean interface for request interception
+- **Adjusted Fields**: ✅ **NEW** - Float64 fields for exponential decay calculations

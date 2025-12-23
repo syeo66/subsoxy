@@ -104,10 +104,10 @@ func (s *Service) getEmpiricalPriors(userID string) (alpha, beta float64) {
 	}
 	s.mu.RUnlock()
 
-	// Get user's total play/skip counts from database
-	totalPlays, totalSkips, err := s.db.GetUserTotalPlaySkips(userID)
+	// Get user's total adjusted play/skip counts from database (using decayed values)
+	totalAdjustedPlays, totalAdjustedSkips, err := s.db.GetUserTotalAdjustedPlaySkips(userID)
 	if err != nil {
-		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get user total play/skip counts, using default priors")
+		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get user total adjusted play/skip counts, using default priors")
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
@@ -118,14 +118,14 @@ func (s *Service) getEmpiricalPriors(userID string) (alpha, beta float64) {
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
-	// Calculate average plays and skips per song as priors
+	// Calculate average adjusted plays and skips per song as priors
 	// If user has no play/skip history yet, fall back to default priors
-	if totalPlays == 0 && totalSkips == 0 {
+	if totalAdjustedPlays == 0.0 && totalAdjustedSkips == 0.0 {
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
-	alpha = float64(totalPlays) / float64(songCount)
-	beta = float64(totalSkips) / float64(songCount)
+	alpha = totalAdjustedPlays / float64(songCount)
+	beta = totalAdjustedSkips / float64(songCount)
 
 	// Use a minimum prior strength to avoid extreme values with very sparse data
 	// This ensures we have at least some regularization
@@ -146,13 +146,13 @@ func (s *Service) getEmpiricalPriors(userID string) (alpha, beta float64) {
 	s.mu.Unlock()
 
 	s.logger.WithFields(logrus.Fields{
-		"userID":     userID,
-		"totalPlays": totalPlays,
-		"totalSkips": totalSkips,
-		"songCount":  songCount,
-		"alpha":      alpha,
-		"beta":       beta,
-	}).Debug("Calculated empirical Bayes priors for user")
+		"userID":             userID,
+		"totalAdjustedPlays": totalAdjustedPlays,
+		"totalAdjustedSkips": totalAdjustedSkips,
+		"songCount":          songCount,
+		"alpha":              alpha,
+		"beta":               beta,
+	}).Debug("Calculated empirical Bayes priors for user (using adjusted values)")
 
 	return alpha, beta
 }
@@ -169,10 +169,11 @@ func (s *Service) getEmpiricalArtistPriors(userID string) (alpha, beta float64) 
 	}
 	s.mu.RUnlock()
 
-	// Get user's total play/skip counts from artist_stats table
-	totalPlays, totalSkips, err := s.db.GetUserTotalArtistPlaySkips(userID)
+	// Get user's total adjusted play/skip counts from songs (using decayed values)
+	// Note: Total adjusted plays/skips across all songs equals total across all artists
+	totalAdjustedPlays, totalAdjustedSkips, err := s.db.GetUserTotalAdjustedPlaySkips(userID)
 	if err != nil {
-		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get user total artist play/skip counts, using default priors")
+		s.logger.WithError(err).WithField("userID", userID).Debug("Failed to get user total adjusted play/skip counts, using default priors")
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
@@ -183,14 +184,14 @@ func (s *Service) getEmpiricalArtistPriors(userID string) (alpha, beta float64) 
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
-	// Calculate average plays and skips per artist as priors
+	// Calculate average adjusted plays and skips per artist as priors
 	// If user has no play/skip history yet, fall back to default priors
-	if totalPlays == 0 && totalSkips == 0 {
+	if totalAdjustedPlays == 0.0 && totalAdjustedSkips == 0.0 {
 		return BayesianPriorAlpha, BayesianPriorBeta
 	}
 
-	alpha = float64(totalPlays) / float64(artistCount)
-	beta = float64(totalSkips) / float64(artistCount)
+	alpha = totalAdjustedPlays / float64(artistCount)
+	beta = totalAdjustedSkips / float64(artistCount)
 
 	// Use a minimum prior strength to avoid extreme values with very sparse data
 	// This ensures we have at least some regularization
@@ -211,13 +212,13 @@ func (s *Service) getEmpiricalArtistPriors(userID string) (alpha, beta float64) 
 	s.mu.Unlock()
 
 	s.logger.WithFields(logrus.Fields{
-		"userID":      userID,
-		"totalPlays":  totalPlays,
-		"totalSkips":  totalSkips,
-		"artistCount": artistCount,
-		"alpha":       alpha,
-		"beta":        beta,
-	}).Debug("Calculated empirical Bayes priors for artist weights")
+		"userID":             userID,
+		"totalAdjustedPlays": totalAdjustedPlays,
+		"totalAdjustedSkips": totalAdjustedSkips,
+		"artistCount":        artistCount,
+		"alpha":              alpha,
+		"beta":               beta,
+	}).Debug("Calculated empirical Bayes priors for artist weights (using adjusted values)")
 
 	return alpha, beta
 }
@@ -570,7 +571,7 @@ func (s *Service) calculateSongWeight(userID string, song models.Song) float64 {
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight := s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
+	playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
 	transitionWeight := s.calculateTransitionWeight(userID, song.ID)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
@@ -595,7 +596,7 @@ func (s *Service) calculateSongWeightWithTransition(userID string, song models.S
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight := s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
+	playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
 	artistWeight := s.calculateArtistWeight(userID, song.Artist)
 
 	// Use provided transition probability or default to 1.0 if not available
@@ -641,10 +642,11 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 }
 
 // calculatePlaySkipWeight uses an empirical Bayesian approach (Beta-Binomial model) to calculate
-// the weight based on play/skip history. This approach is more robust than simple ratios
-// because it accounts for uncertainty when sample sizes are small.
+// the weight based on play/skip history with exponential decay. This approach is more robust than
+// simple ratios because it accounts for uncertainty when sample sizes are small and emphasizes
+// recent behavior over historical data.
 //
-// The Bayesian posterior mean is: (playCount + α) / (playCount + skipCount + α + β)
+// The Bayesian posterior mean is: (adjustedPlays + α) / (adjustedPlays + adjustedSkips + α + β)
 // where α and β are empirical priors derived from the user's overall listening patterns.
 //
 // Benefits:
@@ -652,18 +654,19 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 // - Songs with few observations get conservative estimates based on user tendencies
 // - Songs with many observations converge to their true play ratio
 // - Prevents extreme weights from small sample sizes (e.g., 1 play, 0 skips)
-func (s *Service) calculatePlaySkipWeight(userID string, playCount, skipCount int) float64 {
-	if playCount == 0 && skipCount == 0 {
+// - Recent plays/skips have more influence due to exponential decay (0.95 factor per event)
+func (s *Service) calculatePlaySkipWeight(userID string, adjustedPlays, adjustedSkips float64) float64 {
+	if adjustedPlays == 0.0 && adjustedSkips == 0.0 {
 		return UnplayedSongWeight
 	}
 
-	// Get empirical priors based on user's overall listening patterns
+	// Get empirical priors based on user's overall listening patterns (using adjusted totals)
 	alpha, beta := s.getEmpiricalPriors(userID)
 
-	// Calculate Bayesian posterior mean using Beta-Binomial model
-	// This gives us a regularized estimate of the play ratio
-	posteriorPlays := float64(playCount) + alpha
-	posteriorTotal := float64(playCount+skipCount) + alpha + beta
+	// Calculate Bayesian posterior mean using Beta-Binomial model with adjusted values
+	// This gives us a regularized estimate of the play ratio weighted toward recent behavior
+	posteriorPlays := adjustedPlays + alpha
+	posteriorTotal := adjustedPlays + adjustedSkips + alpha + beta
 	bayesianPlayRatio := posteriorPlays / posteriorTotal
 
 	// Map the Bayesian ratio to the weight range [PlayRatioMinWeight, PlayRatioMaxWeight]
@@ -689,10 +692,11 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 }
 
 // calculateArtistWeight uses an empirical Bayesian approach (Beta-Binomial model) to calculate
-// the artist weight based on play/skip history at the artist level. This is analogous to
-// calculatePlaySkipWeight but operates on artist-level statistics rather than song-level.
+// the artist weight based on play/skip history at the artist level with exponential decay.
+// This is analogous to calculatePlaySkipWeight but operates on artist-level statistics aggregated
+// from song-level adjusted values, emphasizing recent behavior over historical data.
 //
-// The Bayesian posterior mean is: (playCount + α) / (playCount + skipCount + α + β)
+// The Bayesian posterior mean is: (adjustedPlays + α) / (adjustedPlays + adjustedSkips + α + β)
 // where α and β are empirical priors derived from the user's overall artist listening patterns.
 //
 // Benefits:
@@ -700,28 +704,30 @@ func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
 // - Artists with few observations get conservative estimates based on user tendencies
 // - Artists with many observations converge to their true play ratio
 // - Prevents extreme weights from small sample sizes (e.g., 1 play, 0 skips for a new artist)
+// - Recent plays/skips have more influence due to exponential decay (0.95 factor per event)
 func (s *Service) calculateArtistWeight(userID, artist string) float64 {
-	stats, err := s.db.GetArtistStats(userID, artist)
+	// Get adjusted stats by summing from songs table (song-level decay applied)
+	adjustedPlays, adjustedSkips, err := s.db.GetArtistAdjustedStats(userID, artist)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logrus.Fields{
 			"user_id": userID,
 			"artist":  artist,
-		}).Debug("Failed to get artist stats, using default weight")
+		}).Debug("Failed to get artist adjusted stats, using default weight")
 		return 1.0
 	}
 
 	// If the artist has no play/skip history, use neutral weight
-	if stats.PlayCount == 0 && stats.SkipCount == 0 {
+	if adjustedPlays == 0.0 && adjustedSkips == 0.0 {
 		return 1.0
 	}
 
-	// Get empirical priors based on user's overall artist listening patterns
+	// Get empirical priors based on user's overall artist listening patterns (using adjusted totals)
 	alpha, beta := s.getEmpiricalArtistPriors(userID)
 
-	// Calculate Bayesian posterior mean using Beta-Binomial model
-	// This gives us a regularized estimate of the artist play ratio
-	posteriorPlays := float64(stats.PlayCount) + alpha
-	posteriorTotal := float64(stats.PlayCount+stats.SkipCount) + alpha + beta
+	// Calculate Bayesian posterior mean using Beta-Binomial model with adjusted values
+	// This gives us a regularized estimate of the artist play ratio weighted toward recent behavior
+	posteriorPlays := adjustedPlays + alpha
+	posteriorTotal := adjustedPlays + adjustedSkips + alpha + beta
 	bayesianArtistRatio := posteriorPlays / posteriorTotal
 
 	// Map the Bayesian ratio to the weight range [ArtistRatioMinWeight, ArtistRatioMaxWeight]
@@ -734,13 +740,13 @@ func (s *Service) calculateArtistWeight(userID, artist string) float64 {
 	s.logger.WithFields(logrus.Fields{
 		"user_id":             userID,
 		"artist":              artist,
-		"play_count":          stats.PlayCount,
-		"skip_count":          stats.SkipCount,
+		"adjusted_plays":      adjustedPlays,
+		"adjusted_skips":      adjustedSkips,
 		"alpha":               alpha,
 		"beta":                beta,
 		"bayesian_ratio":      bayesianArtistRatio,
 		"artist_weight":       artistWeight,
-	}).Debug("Calculated artist weight (Bayesian)")
+	}).Debug("Calculated artist weight (Bayesian with decay)")
 
 	return artistWeight
 }
@@ -773,7 +779,7 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 // GetWeightComponents returns individual weight components for debugging
 func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeight, playSkipWeight, transitionWeight, artistWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight = s.calculatePlaySkipWeight(userID, song.PlayCount, song.SkipCount)
+	playSkipWeight = s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
 	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
 	artistWeight = s.calculateArtistWeight(userID, song.Artist)
 	return

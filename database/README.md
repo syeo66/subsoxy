@@ -30,6 +30,8 @@ CREATE TABLE songs (
     last_skipped DATETIME,    -- ✅ FIXED: Tracks when songs were skipped
     play_count INTEGER DEFAULT 0,
     skip_count INTEGER DEFAULT 0,
+    adjusted_plays REAL DEFAULT 0.0,  -- ✅ NEW: Time-decayed play count
+    adjusted_skips REAL DEFAULT 0.0,  -- ✅ NEW: Time-decayed skip count
     cover_art TEXT,           -- ✅ NEW: Cover art support
     PRIMARY KEY (id, user_id)
 );
@@ -200,6 +202,36 @@ err = db.CalculateInitialArtistStats(userID)
 err = db.MigrateArtistStats()
 ```
 
+### Exponential Decay for Play/Skip Counts ✅ **NEW**
+```go
+// Adjusted values are automatically updated in RecordPlayEvent()
+// The decay formula is applied incrementally:
+// - On Play: adjusted_plays = 1.0 + (old × 0.95), adjusted_skips = old × 0.95
+// - On Skip: adjusted_skips = 1.0 + (old × 0.95), adjusted_plays = old × 0.95
+
+// Get artist statistics using adjusted values (dynamically calculated from songs)
+userID := "alice"
+stats, err := db.GetArtistAdjustedStats(userID, "The Beatles")
+if err != nil {
+    // handle error
+}
+fmt.Printf("Adjusted plays: %.2f, Adjusted skips: %.2f\n",
+    stats.AdjustedPlays, stats.AdjustedSkips)
+
+// Get total adjusted play/skip counts for a user (used for empirical priors)
+totalPlays, totalSkips, err := db.GetUserTotalAdjustedPlaySkips(userID)
+if err != nil {
+    // handle error
+}
+fmt.Printf("Total adjusted plays: %.2f, Total adjusted skips: %.2f\n",
+    totalPlays, totalSkips)
+
+// Adjusted values are used by the shuffle algorithm for:
+// - Bayesian weight calculations with recency emphasis
+// - Artist-level preferences aggregated from song-level adjusted values
+// - Empirical prior calculations from user's overall listening patterns
+```
+
 ### Connection Pool Management
 ```go
 // Get current connection pool statistics
@@ -309,11 +341,12 @@ Context: {"field": "songID"}
 - **Comprehensive Logging**: Detailed logging with accurate change counts (added, updated, unchanged, deleted)
 
 ### Event Recording ✅ **ENHANCED**
-- Automatically updates song statistics (play_count, skip_count, last_played, last_skipped)
+- Automatically updates song statistics (play_count, skip_count, last_played, last_skipped, adjusted_plays, adjusted_skips)
+- **Exponential Decay**: ✅ **NEW** - Applies incremental decay formula (factor: 0.95) to adjusted values on each event
 - Records transition data for recommendation engine
 - Maintains complete event history
 - **Accurate Skip Detection**: Only increments skip_count for actual user skips, not songs that ended without meeting play thresholds
-- **Artist Statistics Integration**: ✅ **NEW** - Automatically updates artist-level play/skip stats for weighted shuffle algorithm
+- **Artist Statistics Integration**: ✅ **NEW** - Artist-level stats calculated from song-level adjusted values
 - **Robust Error Handling**: ✅ **IMPROVED** - Still records play events even when song doesn't exist in database (gracefully skips stats updates)
 
 ### Enhanced Skip Detection Logic ✅ **ENHANCED**

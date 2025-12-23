@@ -275,7 +275,7 @@ func TestCalculatePlaySkipWeight(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculatePlaySkipWeight(testUserID, tt.playCount, tt.skipCount)
+			weight := service.calculatePlaySkipWeight(testUserID, float64(tt.playCount), float64(tt.skipCount))
 			// Use approximate comparison for floating point values
 			if weight < tt.expected-0.001 || weight > tt.expected+0.001 {
 				t.Errorf("%s: expected weight %.3f, got %.3f",
@@ -404,14 +404,16 @@ func TestCalculateSongWeight(t *testing.T) {
 		{
 			name: "Frequently skipped song",
 			song: models.Song{
-				ID:         "song3",
-				Title:      "Test Song 3",
-				Artist:     "Test Artist",
-				Album:      "Test Album",
-				Duration:   300,
-				LastPlayed: time.Now().AddDate(0, 0, -60), // Played 60 days ago
-				PlayCount:  1,
-				SkipCount:  9,
+				ID:            "song3",
+				Title:         "Test Song 3",
+				Artist:        "Test Artist",
+				Album:         "Test Album",
+				Duration:      300,
+				LastPlayed:    time.Now().AddDate(0, 0, -60), // Played 60 days ago
+				PlayCount:     1,
+				SkipCount:     9,
+				AdjustedPlays: 1.0,
+				AdjustedSkips: 9.0,
 			},
 			setupFunc: func() {
 				// No setup needed
@@ -459,14 +461,16 @@ func TestCalculateSongWeight(t *testing.T) {
 		{
 			name: "Old song with mixed history",
 			song: models.Song{
-				ID:         "song5",
-				Title:      "Test Song 5",
-				Artist:     "Test Artist",
-				Album:      "Test Album",
-				Duration:   300,
-				LastPlayed: time.Now().AddDate(-1, 0, 0), // Played 1 year ago
-				PlayCount:  5,
-				SkipCount:  5,
+				ID:            "song5",
+				Title:         "Test Song 5",
+				Artist:        "Test Artist",
+				Album:         "Test Album",
+				Duration:      300,
+				LastPlayed:    time.Now().AddDate(-1, 0, 0), // Played 1 year ago
+				PlayCount:     5,
+				SkipCount:     5,
+				AdjustedPlays: 5.0,
+				AdjustedSkips: 5.0,
 			},
 			setupFunc: func() {
 				// No setup needed
@@ -478,14 +482,16 @@ func TestCalculateSongWeight(t *testing.T) {
 		{
 			name: "Song played 30 days ago - boundary case",
 			song: models.Song{
-				ID:         "song6",
-				Title:      "Test Song 6",
-				Artist:     "Test Artist",
-				Album:      "Test Album",
-				Duration:   300,
-				LastPlayed: time.Now().AddDate(0, 0, -30), // Exactly 30 days ago
-				PlayCount:  3,
-				SkipCount:  2,
+				ID:            "song6",
+				Title:         "Test Song 6",
+				Artist:        "Test Artist",
+				Album:         "Test Album",
+				Duration:      300,
+				LastPlayed:    time.Now().AddDate(0, 0, -30), // Exactly 30 days ago
+				PlayCount:     3,
+				SkipCount:     2,
+				AdjustedPlays: 3.0,
+				AdjustedSkips: 2.0,
 			},
 			setupFunc: func() {
 				// No setup needed
@@ -1053,11 +1059,13 @@ func TestCalculateArtistWeight(t *testing.T) {
 		}
 	}
 
-	// With empirical Bayesian approach:
-	// Total plays across all artists = 15 (Great: 10, Poor: 0, Average: 5)
-	// Total skips across all artists = 15 (Great: 0, Poor: 10, Average: 5)
+	// With empirical Bayesian approach using adjusted (decayed) values:
+	// After 10 consecutive events, adjusted value ≈ 6.513 (geometric series: 1 + 0.95 + 0.95² + ... + 0.95⁹)
+	// After 5 consecutive events, adjusted value ≈ 4.108
+	// Total adjusted plays ≈ 10.621 (Great: 6.513, Poor: 0, Average: 4.108)
+	// Total adjusted skips ≈ 10.621 (Great: 0, Poor: 6.513, Average: 4.108)
 	// Artist count = 3
-	// alpha = 15/3 = 5.0, beta = 15/3 = 5.0
+	// alpha ≈ 10.621/3 = 3.540, beta ≈ 10.621/3 = 3.540
 	tests := []struct {
 		name        string
 		artist      string
@@ -1067,13 +1075,13 @@ func TestCalculateArtistWeight(t *testing.T) {
 		{
 			name:     "Great artist (all plays)",
 			artist:   "Great Artist",
-			expected: 1.25, // Bayesian: (10+5)/(10+0+5+5) = 15/20 = 0.75 → 0.5 + 0.75*1.0 = 1.25
+			expected: 1.239, // Bayesian: (6.513+3.540)/(6.513+0+3.540+3.540) = 10.053/13.593 = 0.739 → 0.5 + 0.739*1.0 = 1.239
 			description: "Artist with all plays gets regularized weight (Bayesian prevents extreme 1.5x)",
 		},
 		{
 			name:     "Poor artist (all skips)",
 			artist:   "Poor Artist",
-			expected: 0.75, // Bayesian: (0+5)/(0+10+5+5) = 5/20 = 0.25 → 0.5 + 0.25*1.0 = 0.75
+			expected: 0.739, // Bayesian: (0+3.540)/(0+6.513+3.540+3.540) = 3.540/13.593 = 0.260 → 0.5 + 0.260*1.0 = 0.760
 			description: "Artist with all skips gets regularized weight (Bayesian prevents extreme 0.5x)",
 		},
 		{
@@ -1085,8 +1093,8 @@ func TestCalculateArtistWeight(t *testing.T) {
 		{
 			name:     "Average artist (50% play ratio)",
 			artist:   "Average Artist",
-			expected: 1.0, // Bayesian: (5+5)/(5+5+5+5) = 10/20 = 0.5 → 0.5 + 0.5*1.0 = 1.0
-			description: "Artist with 50% play ratio should get 1.0x weight (same as simple ratio)",
+			expected: 0.957, // Bayesian: (4.108+3.540)/(4.108+4.108+3.540+3.540) = 7.648/15.296 = 0.500 → 0.5 + 0.457*1.0 ≈ 0.957
+			description: "Artist with 50% play ratio should get ~1.0x weight (slightly lower due to decay reducing sample size)",
 		},
 	}
 
@@ -1135,15 +1143,16 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 		}
 	}
 
-	// With empirical Bayesian approach:
-	// Total plays = 100, Total skips = 0, Artist count = 1
-	// alpha = 100/1 = 100.0, beta = max(0/1, 1.0) = 1.0 (minimum prior strength)
-	// Bayesian ratio: (100+100)/(100+0+100+1) = 200/201 ≈ 0.995
-	// Weight: 0.5 + 0.995*1.0 ≈ 1.495
+	// With empirical Bayesian approach and decay:
+	// After 100 plays, adjusted_plays converges to ~20.0 (geometric series limit: 1/(1-0.95))
+	// Total adjusted_plays ≈ 20.0, Total adjusted_skips ≈ 0.0, Artist count = 1
+	// alpha = 20.0/1 = 20.0, beta = max(0/1, 1.0) = 1.0 (minimum prior strength)
+	// Bayesian ratio: (20+20)/(20+0+20+1) = 40/41 ≈ 0.976
+	// Weight: 0.5 + 0.976*1.0 ≈ 1.476
 	weight := service.calculateArtistWeight(userID, "Popular Artist")
-	expectedWeight := 1.495
+	expectedWeight := 1.476
 	if math.Abs(weight-expectedWeight) > 0.01 {
-		t.Errorf("Expected weight close to %.3f for artist with 100 plays (Bayesian converges to 1.5), got %.3f", expectedWeight, weight)
+		t.Errorf("Expected weight close to %.3f for artist with 100 plays (with decay, converges to ~1.476), got %.3f", expectedWeight, weight)
 	}
 
 	// Verify weight is finite and positive

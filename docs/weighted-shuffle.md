@@ -13,6 +13,62 @@ The shuffle system strictly prevents songs from being replayed too frequently:
 - **Database-Level Filtering**: For large libraries (>5,000 songs), filtering happens at the database level for memory efficiency
 - **Configurable**: `TwoWeekReplayThreshold = 14` constant can be adjusted if needed
 
+## Exponential Decay System ✅ **NEW**
+
+The shuffle system now implements **incremental exponential decay** for play and skip counts, making recent listening behavior more influential than older history.
+
+### How Decay Works
+
+Instead of treating all plays and skips equally, the system applies a decay factor of **0.95** to existing values each time a new event occurs:
+
+- **On Play Event**:
+  - `adjusted_plays = 1.0 + (old_adjusted_plays × 0.95)`
+  - `adjusted_skips = old_adjusted_skips × 0.95`
+
+- **On Skip Event**:
+  - `adjusted_skips = 1.0 + (old_adjusted_skips × 0.95)`
+  - `adjusted_plays = old_adjusted_plays × 0.95`
+
+### Mathematical Properties
+
+The decay formula creates a **geometric series** that converges to a finite limit:
+
+- **Convergence Limit**: 1/(1-0.95) = **20.0**
+- **10 consecutive events**: ~6.513 adjusted weight
+- **20 consecutive events**: ~12.84 adjusted weight
+- **100+ consecutive events**: ~20.0 (essentially at convergence)
+
+This ensures that:
+- Recent events have maximum impact (weight = 1.0)
+- Each older event contributes 5% less than the previous one
+- Total weight never grows unbounded regardless of play count
+- Very old events have minimal influence on current recommendations
+
+### Benefits
+
+1. **Recency Emphasis**: Recent plays/skips matter more than ancient history
+2. **Adaptive Preferences**: User taste changes are reflected faster
+3. **Bounded Growth**: Prevents songs with thousands of plays from dominating
+4. **Smooth Transitions**: Gradual decay prevents sudden weight changes
+5. **User-Specific**: Each user's decay is calculated independently
+
+### Example Scenarios
+
+| Event History | Raw Count | Adjusted Count | Impact |
+|--------------|-----------|----------------|--------|
+| 1 recent play | 1 | 1.0 | Full weight |
+| 2 consecutive plays | 2 | 1.95 | Nearly double |
+| 5 consecutive plays | 5 | 4.108 | ~82% of raw count |
+| 10 consecutive plays | 10 | 6.513 | ~65% of raw count |
+| 100 consecutive plays | 100 | ~20.0 | Converged to limit |
+
+### Database Storage
+
+- **Fields**: `adjusted_plays` and `adjusted_skips` stored as REAL (float64)
+- **Migration**: Automatically initializes from raw counts for existing data
+- **Updates**: Applied incrementally on each play/skip event
+- **Performance**: No runtime calculation overhead - values pre-computed
+
 ## Performance Optimizations
 
 The shuffle system automatically adapts to library size for optimal performance:
@@ -114,13 +170,15 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 1. **2-Week Replay Filter**: ✅ **ENHANCED** - Songs played OR skipped within 14 days are excluded first
 2. **Never-Presented Bonus**: ✅ **ENHANCED** - Songs that have never been played OR skipped receive 4.0x weight (increased from 2.0x to prioritize discovery)
 3. **Time Decay Weight**: ✅ **ENHANCED** - Uses the most recent timestamp between last_played and last_skipped. Recently presented songs (< 30 days) receive lower weights (0.1x-0.9x), while songs presented long ago receive higher weights (up to 2.0x)
-4. **Play/Skip Ratio Weight with Bayesian Categorization**: ✅ **ENHANCED** - Uses Beta-Binomial model for robust weight calculation:
-   - **Formula**: `bayesianPlayRatio = (playCount + 2) / (playCount + skipCount + 4)`
-   - **Range**: 0.2x to 2.0x based on Bayesian-smoothed play ratio
-   - **Benefits**: Conservative estimates for songs with few observations, converges to true ratio with more data
-   - **Example**: Song with 1 play, 0 skips gets 1.28x (not 2.0x), preventing extreme weights from small samples
+4. **Play/Skip Ratio Weight with Empirical Bayesian Categorization and Exponential Decay**: ✅ **ENHANCED** - Uses Beta-Binomial model with time-decayed play/skip counts for robust, recency-aware weight calculation:
+   - **Exponential Decay**: Recent plays/skips have more influence than older ones using incremental decay (factor: 0.95)
+   - **Adaptive Priors**: Priors (α, β) dynamically calculated from each user's overall listening patterns
+   - **Formula**: `bayesianPlayRatio = (adjustedPlays + α) / (adjustedPlays + adjustedSkips + α + β)`
+   - **Range**: 0.2x to 1.8x based on Bayesian-smoothed play ratio with decayed counts
+   - **Benefits**: Conservative estimates for songs with few observations, converges to true ratio with more data, emphasizes recent behavior
+   - **Example**: Song with 10 recent plays gets ~6.513 adjusted weight (geometric series convergence), older plays contribute progressively less
 5. **Transition Probability Weight**: Uses probabilities from user's last played song
-6. **Artist Preference Weight**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio
+6. **Artist Preference Weight with Exponential Decay**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio using time-decayed adjusted values aggregated from all artist's songs
 7. **Final Weight**: All factors multiplied together per user
 
 ### Memory-Efficient Implementation
