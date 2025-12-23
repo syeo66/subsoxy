@@ -441,12 +441,14 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
 	}
 
-	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration, 
-		COALESCE(last_played, '1970-01-01') as last_played, 
+	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration,
+		COALESCE(last_played, '1970-01-01') as last_played,
 		COALESCE(last_skipped, '1970-01-01') as last_skipped,
-		COALESCE(play_count, 0) as play_count, 
+		COALESCE(play_count, 0) as play_count,
 		COALESCE(skip_count, 0) as skip_count,
-		COALESCE(cover_art, '') as cover_art 
+		COALESCE(adjusted_plays, 0.0) as adjusted_plays,
+		COALESCE(adjusted_skips, 0.0) as adjusted_skips,
+		COALESCE(cover_art, '') as cover_art
 		FROM songs WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query songs").
@@ -459,7 +461,7 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 		var song models.Song
 		var lastPlayedStr, lastSkippedStr string
 		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
-			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.CoverArt)
+			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.AdjustedPlays, &song.AdjustedSkips, &song.CoverArt)
 		if err != nil {
 			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song")
 			continue
