@@ -67,7 +67,7 @@ The system implements intelligent, accurate skip detection based on scrobble eve
 - **Duplicate Prevention**: Same song scrobbled multiple times doesn't double-count plays
 - **Real Skips**: Songs marked as skipped when another song is scrobbled without definitive play (within reasonable time)
 - **Same-Song Safe**: Scrobbling the same song again updates status, doesn't mark as skipped
-- **Fallback Behavior**: When song duration is unavailable, falls back to always marking as skipped
+- **Fallback Behavior**: When song duration is unavailable, uses 1-hour maximum timeout instead of always marking as skipped
 - **Accurate Analytics**: Skip counts reflect actual listening behavior without false positives from paused playback
 
 ### Multi-User Support ✅ **NEW**

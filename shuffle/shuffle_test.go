@@ -1482,7 +1482,7 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 	})
 
-	t.Run("Skip should be recorded when song has no duration even after long time", func(t *testing.T) {
+	t.Run("Skip should NOT be recorded when song has no duration and time exceeds max timeout", func(t *testing.T) {
 		// Reset the service to clear lastScrobble state
 		service = New(db, logger)
 
@@ -1494,18 +1494,45 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		// Scrobble song4 (0s duration) without submission
 		service.ProcessScrobble(userID, "song4", false, recordSkipFunc)
 
-		// Manually set the timestamp to simulate a very long time passing
+		// Manually set the timestamp to simulate time exceeding the max timeout (1 hour + 1 minute)
 		service.mu.Lock()
 		if lastScrobble, exists := service.lastScrobble[userID]; exists {
-			lastScrobble.Timestamp = time.Now().Add(-1 * time.Hour) // 1 hour ago
+			lastScrobble.Timestamp = time.Now().Add(-61 * time.Minute) // 61 minutes ago (> 1 hour)
 		}
 		service.mu.Unlock()
 
-		// Scrobble song3 - song4 should still be marked as skipped (fallback behavior when duration is 0)
+		// Scrobble song3 - song4 should NOT be marked as skipped (exceeded max timeout)
+		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+
+		if skipRecords["song4"] != 0 {
+			t.Errorf("Expected song4 NOT to be marked as skipped (exceeded max timeout), got %d", skipRecords["song4"])
+		}
+	})
+
+	t.Run("Skip should be recorded when song has no duration but time is within max timeout", func(t *testing.T) {
+		// Reset the service to clear lastScrobble state
+		service = New(db, logger)
+
+		skipRecords := make(map[string]int)
+		recordSkipFunc := func(userID string, song *models.Song) {
+			skipRecords[song.ID]++
+		}
+
+		// Scrobble song4 (0s duration) without submission
+		service.ProcessScrobble(userID, "song4", false, recordSkipFunc)
+
+		// Manually set the timestamp to simulate time within the max timeout (30 minutes)
+		service.mu.Lock()
+		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+			lastScrobble.Timestamp = time.Now().Add(-30 * time.Minute) // 30 minutes ago (< 1 hour)
+		}
+		service.mu.Unlock()
+
+		// Scrobble song3 - song4 should be marked as skipped (within max timeout)
 		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
 
 		if skipRecords["song4"] != 1 {
-			t.Errorf("Expected song4 to be marked as skipped even after long time (fallback), got %d", skipRecords["song4"])
+			t.Errorf("Expected song4 to be marked as skipped (within max timeout), got %d", skipRecords["song4"])
 		}
 	})
 

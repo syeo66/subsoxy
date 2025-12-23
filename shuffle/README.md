@@ -170,7 +170,7 @@ shuffleService.ProcessScrobble(userID, "song789", false, recordSkipFunc) // song
 // 3. Submission scrobble = definitive play
 shuffleService.ProcessScrobble(userID, "song789", true, recordSkipFunc) // song789 marked as play
 
-// 4. Fallback behavior: When song duration is unavailable (0), falls back to always marking as skipped
+// 4. Fallback behavior: When song duration is unavailable (0), uses 1-hour maximum timeout instead of always marking as skipped
 
 // Multiple goroutines can safely access different users concurrently
 go shuffleService.SetLastPlayed("alice", songA)
@@ -336,11 +336,12 @@ The shuffle service now includes comprehensive thread safety:
 - **Transition Weight Tests**: `TestCalculateSongWeightWithTransition()` with pre-computed probabilities
 - **Component Tests**: Individual tests for time decay, play/skip ratio, and transition weights
 - **Integration Tests**: Full shuffle workflow testing with various library sizes
-- **Time-Based Skip Detection Tests**: ✅ **NEW** - `TestProcessScrobbleTimeBasedSkipDetection()` with 6 scenarios:
+- **Time-Based Skip Detection Tests**: ✅ **UPDATED** - `TestProcessScrobbleTimeBasedSkipDetection()` with 7 scenarios:
   - Skip recorded when time < 2x song duration
   - Skip NOT recorded when time > 2x song duration
-  - Fallback behavior when song has no duration (0)
-  - Fallback persists even after long time when duration is 0
+  - Fallback behavior when song has no duration (0) - marks as skipped within timeout
+  - Skip NOT recorded when song has no duration and time exceeds max timeout (1 hour)
+  - Skip recorded when song has no duration but time is within max timeout
   - Longer songs have longer threshold (5 min song = 10 min threshold)
   - Longer songs not skipped after exceeding their threshold
 

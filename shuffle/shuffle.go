@@ -33,6 +33,7 @@ const (
 	PlayRatioMaxWeight     = 1.8
 	BaseTransitionWeight   = 0.5
 	TwoWeekReplayThreshold = 14  // Minimum days before a song can be replayed (unless no alternatives)
+	MaxSkipTimeoutHours    = 1.0 // Maximum hours to wait before marking as skipped when song duration is unavailable
 	ArtistRatioMinWeight   = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
 	ArtistRatioMaxWeight   = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
 	// Bayesian prior parameters for Beta-Binomial model
@@ -263,10 +264,23 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 		songDuration := time.Duration(lastScrobble.Song.Duration) * time.Second
 		maxSkipTime := songDuration * 2
 
-		// If song duration is not available (0), fall back to always marking as skipped
+		// Determine if we should mark as skipped based on timing
+		// If song duration is not available (0), use MaxSkipTimeoutHours as fallback
 		// Otherwise, only mark as skipped if the time since last scrobble is reasonable (less than 2x song duration)
 		// If more time has passed, the user likely paused or stopped playback
-		if songDuration == 0 || timeSinceLastScrobble <= maxSkipTime {
+		shouldMarkAsSkipped := false
+		effectiveMaxTime := maxSkipTime
+
+		if songDuration == 0 {
+			// When duration is unavailable, use the maximum timeout (e.g., 1 hour)
+			effectiveMaxTime = time.Duration(MaxSkipTimeoutHours * float64(time.Hour))
+			shouldMarkAsSkipped = timeSinceLastScrobble <= effectiveMaxTime
+		} else {
+			// When duration is available, use 2x duration as threshold
+			shouldMarkAsSkipped = timeSinceLastScrobble <= maxSkipTime
+		}
+
+		if shouldMarkAsSkipped {
 			recordSkipFunc(userID, lastScrobble.Song)
 			s.logger.WithFields(logrus.Fields{
 				"user_id":                userID,
@@ -275,6 +289,7 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 				"time_since_scrobble":    timeSinceLastScrobble,
 				"song_duration":          songDuration,
 				"max_skip_time":          maxSkipTime,
+				"effective_max_time":     effectiveMaxTime,
 				"duration_unavailable":   songDuration == 0,
 			}).Debug("Marking previous scrobble as skipped")
 		} else {
@@ -285,6 +300,7 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 				"time_since_scrobble":    timeSinceLastScrobble,
 				"song_duration":          songDuration,
 				"max_skip_time":          maxSkipTime,
+				"effective_max_time":     effectiveMaxTime,
 			}).Debug("Not marking as skipped - too much time passed since last scrobble")
 		}
 	}
