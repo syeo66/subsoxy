@@ -12,7 +12,7 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `-port string`: Proxy server port, must be 1-65535 (default: 8080)
 - `-upstream string`: Upstream Subsonic server URL, must be valid HTTP/HTTPS URL (default: http://localhost:4533)
 - `-log-level string`: Log level - debug, info, warn, error (default: info)
-- `-debug-mode`: Enable debug endpoint with HTML UI for visualizing song weights (default: false)
+- `-debug-mode`: Enable interactive debug endpoint with HTML UI for visualizing song weights and clickable transition analysis (default: false)
 
 ### Database Configuration
 - `-db-path string`: SQLite database file path, directories will be created if needed (default: subsoxy.db)
@@ -53,7 +53,7 @@ Configuration can be set via command-line flags or environment variables. Comman
 - `PORT`: Proxy server port (1-65535)
 - `UPSTREAM_URL`: Upstream Subsonic server URL (HTTP/HTTPS)
 - `LOG_LEVEL`: Log level (debug, info, warn, error)
-- `DEBUG`: Enable debug endpoint with HTML UI (true/false, default: false)
+- `DEBUG`: Enable interactive debug endpoint with HTML UI for visualizing song weights and clickable transition analysis (true/false, default: false)
 
 ### Database Configuration
 - `DB_PATH`: SQLite database file path

@@ -155,11 +155,23 @@ time curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=1000&
 # Access debug UI in browser to visualize song weights
 open "http://localhost:8080/debug?u=testuser&p=testpass"
 
+# Access with specific reference track for transition weight analysis
+open "http://localhost:8080/debug?u=testuser&p=testpass&id=songID"
+
 # Debug UI shows:
 # - All songs with calculated weights
-# - Individual weight components (time decay, play/skip ratio, transition probability)
+# - Individual weight components (time decay, play/skip ratio, transition probability, artist weight)
 # - Color-coded weight visualization (high/medium/low)
-# - Sortable table with play counts, skip counts, last played/skipped timestamps
+# - Interactive song IDs that can be clicked to set as reference track
+# - Highlighted reference track with blue background
+# - Dynamic transition weight calculation based on selected reference track
+# - Play counts, skip counts, last played/skipped timestamps
+
+# Interactive Features:
+# - Click any song ID to set it as the reference track
+# - Transition weights update to show probability of following the selected track
+# - Reference track is visually highlighted in the table
+# - Authentication parameters are preserved when clicking song IDs
 ```
 
 ### CORS Testing
@@ -185,7 +197,7 @@ The server includes built-in hooks for:
 - `/rest/stream` - Records song start events for play tracking
 - `/rest/scrobble` - Records song play/skip events and updates transition data
 - `/rest/getRandomSongs` - Returns weighted shuffle of songs based on play history and preferences
-- `/debug` - HTML UI for visualizing song weights (only enabled with `-debug-mode` flag or `DEBUG=1`)
+- `/debug` - Interactive HTML UI for visualizing song weights with clickable IDs for transition analysis (only enabled with `-debug-mode` flag or `DEBUG=1`)
 
 ### Adding Custom Hooks
 

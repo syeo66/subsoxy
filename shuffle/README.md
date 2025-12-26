@@ -206,6 +206,24 @@ go shuffleService.SetLastPlayed("alice", songA)
 go shuffleService.ProcessScrobble("bob", "songB", true, recordSkipFunc) // Safe concurrent access
 ```
 
+### Getting User-Specific Weight Components for Debugging ✅ **ENHANCED**
+```go
+// Get individual weight components for a song (uses current last played for transition)
+userID := "alice"
+song := models.Song{ID: "song123", Title: "Example Song"}
+timeWeight, playSkipWeight, transitionWeight, artistWeight := shuffleService.GetWeightComponents(userID, song)
+
+// Get weight components with transition calculated from a specific reference song
+// Useful for analyzing how likely a song is to follow a specific reference track
+referenceSongID := "song456"
+timeWeight, playSkipWeight, transitionWeight, artistWeight := shuffleService.GetWeightComponentsWithTransition(userID, song, referenceSongID)
+
+// These methods are used by the debug endpoint to show:
+// - How each weight component contributes to the final weight
+// - Transition probabilities from a selected reference track
+// - Interactive analysis of song-to-song transition patterns
+```
+
 ## Multi-Tenant Weight Calculation ✅ **UPDATED**
 
 The final weight is calculated **per user** using **time-decayed adjusted values** as:

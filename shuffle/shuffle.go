@@ -784,3 +784,20 @@ func (s *Service) GetWeightComponents(userID string, song models.Song) (timeWeig
 	artistWeight = s.calculateArtistWeight(userID, song.Artist)
 	return
 }
+
+// GetWeightComponentsWithTransition returns individual weight components with transition calculated from a specific song
+func (s *Service) GetWeightComponentsWithTransition(userID string, song models.Song, fromSongID string) (timeWeight, playSkipWeight, transitionWeight, artistWeight float64) {
+	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
+	playSkipWeight = s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
+
+	// Calculate transition probability from the specified song
+	probability, err := s.db.GetTransitionProbability(userID, fromSongID, song.ID)
+	if err != nil {
+		transitionWeight = 1.0
+	} else {
+		transitionWeight = BaseTransitionWeight + probability
+	}
+
+	artistWeight = s.calculateArtistWeight(userID, song.Artist)
+	return
+}

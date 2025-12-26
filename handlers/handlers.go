@@ -273,6 +273,10 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		return true
 	}
 
+	// Get optional reference song ID for transition weight calculation
+	referenceSongID := r.URL.Query().Get("id")
+	password := r.URL.Query().Get("p")
+
 	songs, err := h.shuffle.GetAllSongsWithWeights(userID)
 	if err != nil {
 		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get songs for debug")
@@ -281,6 +285,17 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	// Build reference song info for display
+	referenceSongInfo := "None (using current last played track)"
+	if referenceSongID != "" {
+		for _, sw := range songs {
+			if sw.Song.ID == referenceSongID {
+				referenceSongInfo = sw.Song.Title + " - " + sw.Song.Artist
+				break
+			}
+		}
+	}
 
 	html := `<!DOCTYPE html>
 <html>
@@ -301,19 +316,30 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		.high-weight { background-color: #c8e6c9; }
 		.medium-weight { background-color: #fff9c4; }
 		.low-weight { background-color: #ffccbc; }
+		.reference-track { background-color: #bbdefb; font-weight: bold; border-left: 4px solid #2196F3; }
 		.info { margin: 20px 0; padding: 15px; background-color: #e3f2fd; border-left: 4px solid #2196F3; }
+		.song-id-link { color: #1976D2; text-decoration: none; cursor: pointer; }
+		.song-id-link:hover { text-decoration: underline; }
 	</style>
 </head>
 <body>
 	<h1>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</h1>
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
+		<strong>Reference Track:</strong> ` + referenceSongInfo + `<br>
 		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight<br>
 		<strong>Play/Skip Method:</strong> Bayesian Beta-Binomial model with α=2.0, β=2.0 for robust weighting<br>
+		<strong>Transition Weight:</strong> ` + func() string {
+		if referenceSongID != "" {
+			return "Based on transition probability from selected reference track"
+		}
+		return "Based on current last played track (click song ID to set reference)"
+	}() + `<br>
 		<strong>Color Legend:</strong>
 		<span style="background-color: #c8e6c9; padding: 2px 6px;">High (≥2.0)</span>
 		<span style="background-color: #fff9c4; padding: 2px 6px;">Medium (1.0-2.0)</span>
 		<span style="background-color: #ffccbc; padding: 2px 6px;">Low (&lt;1.0)</span>
+		<span style="background-color: #bbdefb; padding: 2px 6px; font-weight: bold;">Reference Track</span>
 	</div>
 	<table>
 		<thead>
@@ -351,21 +377,40 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 			lastSkipped = `<span class="date">` + song.LastSkipped.Format("2006-01-02 15:04:05") + `</span>`
 		}
 
-		// Calculate individual weight components
-		timeWeight, playSkipWeight, transitionWeight, artistWeight := h.shuffle.GetWeightComponents(userID, song)
+		// Calculate individual weight components based on whether we have a reference song
+		var timeWeight, playSkipWeight, transitionWeight, artistWeight float64
+		if referenceSongID != "" {
+			timeWeight, playSkipWeight, transitionWeight, artistWeight = h.shuffle.GetWeightComponentsWithTransition(userID, song, referenceSongID)
+		} else {
+			timeWeight, playSkipWeight, transitionWeight, artistWeight = h.shuffle.GetWeightComponents(userID, song)
+		}
+
+		// Recalculate final weight with the new transition weight
+		finalWeight := 1.0 * timeWeight * playSkipWeight * transitionWeight * artistWeight
 
 		// Determine row class based on final weight
 		rowClass := ""
-		if songWeight.Weight >= 2.0 {
+		isReferenceTrack := referenceSongID != "" && song.ID == referenceSongID
+
+		if isReferenceTrack {
+			rowClass = " class=\"reference-track\""
+		} else if finalWeight >= 2.0 {
 			rowClass = " class=\"high-weight\""
-		} else if songWeight.Weight >= 1.0 {
+		} else if finalWeight >= 1.0 {
 			rowClass = " class=\"medium-weight\""
 		} else {
 			rowClass = " class=\"low-weight\""
 		}
 
+		// Build clickable song ID link
+		songIDLink := `<a class="song-id-link" href="?u=` + userID
+		if password != "" {
+			songIDLink += `&p=` + password
+		}
+		songIDLink += `&id=` + song.ID + `">` + song.ID + `</a>`
+
 		html += `<tr` + rowClass + `>
-				<td>` + song.ID + `</td>
+				<td>` + songIDLink + `</td>
 				<td>` + song.Title + `</td>
 				<td>` + song.Artist + `</td>
 				<td>` + song.Album + `</td>
@@ -378,7 +423,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td class="num">` + strconv.FormatFloat(playSkipWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(transitionWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(artistWeight, 'f', 4, 64) + `</td>
-				<td class="num">` + strconv.FormatFloat(songWeight.Weight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(finalWeight, 'f', 4, 64) + `</td>
 			</tr>
 `
 	}
@@ -391,8 +436,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	w.Write([]byte(html))
 
 	h.logger.WithFields(logrus.Fields{
-		"userID":    SanitizeForLogging(userID),
-		"songCount": len(songs),
+		"userID":          SanitizeForLogging(userID),
+		"songCount":       len(songs),
+		"referenceSongID": SanitizeForLogging(referenceSongID),
 	}).Info("Served debug request")
 
 	return true
