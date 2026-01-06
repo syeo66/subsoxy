@@ -165,7 +165,8 @@ open "http://localhost:8080/debug?u=testuser&p=testpass&id=songID"
 # - Interactive song IDs that can be clicked to set as reference track
 # - Highlighted reference track with blue background
 # - Dynamic transition weight calculation based on selected reference track
-# - Play counts, skip counts, last played/skipped timestamps
+# - Raw counts (play/skip) and time-decayed adjusted values for each song
+# - Last played/skipped timestamps
 
 # Interactive Features:
 # - Click any song ID to set it as the reference track

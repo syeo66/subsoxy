@@ -52,3 +52,7 @@ Thumbs.db
 *.temp
 
 CLAUDE.md
+
+# Continuous Claude cache (local only)
+.claude/cache/
+thoughts/

@@ -328,7 +328,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
 		<strong>Reference Track:</strong> ` + referenceSongInfo + `<br>
 		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight<br>
-		<strong>Play/Skip Method:</strong> Bayesian Beta-Binomial model with α=2.0, β=2.0 for robust weighting<br>
+		<strong>Play/Skip Method:</strong> Empirical Bayesian Beta-Binomial (α, β calculated from user's listening patterns; fallback: α=2.0, β=2.0)<br>
 		<strong>Transition Weight:</strong> ` + func() string {
 		if referenceSongID != "" {
 			return "Based on transition probability from selected reference track"
@@ -350,7 +350,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<th>Album</th>
 				<th class="num">Duration (s)</th>
 				<th class="num">Play Count</th>
+				<th class="num">Adjusted Plays</th>
 				<th class="num">Skip Count</th>
+				<th class="num">Adjusted Skips</th>
 				<th>Last Played</th>
 				<th>Last Skipped</th>
 				<th class="num">Time Weight</th>
@@ -416,7 +418,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td>` + song.Album + `</td>
 				<td class="num">` + strconv.Itoa(song.Duration) + `</td>
 				<td class="num">` + strconv.Itoa(song.PlayCount) + `</td>
+				<td class="num">` + strconv.FormatFloat(song.AdjustedPlays, 'f', 3, 64) + `</td>
 				<td class="num">` + strconv.Itoa(song.SkipCount) + `</td>
+				<td class="num">` + strconv.FormatFloat(song.AdjustedSkips, 'f', 3, 64) + `</td>
 				<td>` + lastPlayed + `</td>
 				<td>` + lastSkipped + `</td>
 				<td class="num">` + strconv.FormatFloat(timeWeight, 'f', 4, 64) + `</td>
