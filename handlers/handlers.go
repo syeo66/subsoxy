@@ -286,6 +286,19 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
+	// Determine the song to use for similarity lookup:
+	// explicit reference ID > last played track
+	similarityBaseSongID := referenceSongID
+	if similarityBaseSongID == "" {
+		if lp := h.shuffle.GetLastPlayedSong(userID); lp != nil {
+			similarityBaseSongID = lp.ID
+		}
+	}
+	var similarSongs map[string]bool
+	if similarityBaseSongID != "" {
+		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID)
+	}
+
 	// Build reference song info for display
 	referenceSongInfo := "None (using current last played track)"
 	if referenceSongID != "" {
@@ -327,13 +340,19 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
 		<strong>Reference Track:</strong> ` + referenceSongInfo + `<br>
-		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight<br>
+		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight × Similarity Weight<br>
 		<strong>Play/Skip Method:</strong> Empirical Bayesian Beta-Binomial (α, β calculated from user's listening patterns; fallback: α=2.0, β=2.0)<br>
 		<strong>Transition Weight:</strong> ` + func() string {
 		if referenceSongID != "" {
 			return "Based on transition probability from selected reference track"
 		}
 		return "Based on current last played track (click song ID to set reference)"
+	}() + `<br>
+		<strong>Similarity Weight:</strong> ` + func() string {
+		if len(similarSongs) > 0 {
+			return strconv.Itoa(len(similarSongs)) + " acoustically similar songs found (AudioMuse-AI)"
+		}
+		return "Not available (AudioMuse-AI plugin not detected on upstream)"
 	}() + `<br>
 		<strong>Color Legend:</strong>
 		<span style="background-color: #c8e6c9; padding: 2px 6px;">High (≥2.0)</span>
@@ -359,6 +378,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<th class="num">Play/Skip Weight</th>
 				<th class="num">Transition Weight</th>
 				<th class="num">Artist Weight</th>
+				<th class="num">Similarity Weight</th>
 				<th class="num">Final Weight</th>
 			</tr>
 		</thead>
@@ -380,15 +400,15 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		}
 
 		// Calculate individual weight components based on whether we have a reference song
-		var timeWeight, playSkipWeight, transitionWeight, artistWeight float64
+		var timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64
 		if referenceSongID != "" {
-			timeWeight, playSkipWeight, transitionWeight, artistWeight = h.shuffle.GetWeightComponentsWithTransition(userID, song, referenceSongID)
+			timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight = h.shuffle.GetWeightComponentsWithTransition(userID, song, referenceSongID, similarSongs)
 		} else {
-			timeWeight, playSkipWeight, transitionWeight, artistWeight = h.shuffle.GetWeightComponents(userID, song)
+			timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight = h.shuffle.GetWeightComponents(userID, song, similarSongs)
 		}
 
-		// Recalculate final weight with the new transition weight
-		finalWeight := 1.0 * timeWeight * playSkipWeight * transitionWeight * artistWeight
+		// Recalculate final weight with all components
+		finalWeight := 1.0 * timeWeight * playSkipWeight * transitionWeight * artistWeight * similarityWeight
 
 		// Determine row class based on final weight
 		rowClass := ""
@@ -427,6 +447,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td class="num">` + strconv.FormatFloat(playSkipWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(transitionWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(artistWeight, 'f', 4, 64) + `</td>
+				<td class="num">` + strconv.FormatFloat(similarityWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(finalWeight, 'f', 4, 64) + `</td>
 			</tr>
 `

@@ -146,6 +146,8 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		credentialWorkers: credentialWorkers,
 	}
 
+	server.shuffle.SetSimilarSongsFetcher(server.fetchSimilarSongs)
+
 	go server.syncSongs()
 
 	return server, nil
@@ -932,6 +934,60 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 	return ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
 
+
+// fetchSimilarSongs queries the upstream's getSimilarSongs2 endpoint (provided by the
+// AudioMuse-AI-NV-plugin when installed on Navidrome). Returns nil without error when
+// the plugin is not available so the caller can gracefully skip the similarity weight.
+func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) ([]string, error) {
+	creds := ps.credentials.GetAllValid()
+	password, ok := creds[userID]
+	if !ok {
+		return nil, nil
+	}
+
+	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getSimilarSongs2")
+	if err != nil {
+		return nil, err
+	}
+
+	params := ps.buildAuthParams(userID, password)
+	params.Add("id", songID)
+	params.Add("count", "50")
+	baseURL.RawQuery = params.Encode()
+
+	resp, err := http.Get(baseURL.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil
+	}
+
+	var response models.SimilarSongsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+
+	if response.SubsonicResponse.Status != "ok" {
+		return nil, nil
+	}
+
+	songs := response.SubsonicResponse.SimilarSongs2.Song
+	ids := make([]string, 0, len(songs))
+	for _, song := range songs {
+		ids = append(ids, song.ID)
+	}
+
+	ps.logger.WithFields(logrus.Fields{
+		"userID": sanitizeUsername(userID),
+		"songID": sanitizeForLogging(songID),
+		"count":  len(ids),
+	}).Debug("Fetched similar songs from AudioMuse-AI plugin")
+
+	return ids, nil
+}
 
 func (ps *ProxyServer) GetHandlers() *handlers.Handler {
 	return ps.handlers

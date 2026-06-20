@@ -512,7 +512,7 @@ func TestCalculateSongWeight(t *testing.T) {
 				tt.setupFunc()
 			}
 
-			weight := service.calculateSongWeight("testuser", tt.song)
+			weight := service.calculateSongWeight("testuser", tt.song, nil)
 
 			if weight < tt.expectedWeight-tt.tolerance || weight > tt.expectedWeight+tt.tolerance {
 				t.Errorf("%s: expected weight %.3f ± %.3f, got %.3f",
@@ -591,7 +591,7 @@ func TestCalculateSongWeightBoundaryConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateSongWeight("testuser", tt.song)
+			weight := service.calculateSongWeight("testuser", tt.song, nil)
 
 			// Verify weight is finite and positive
 			if weight <= 0 || !isFinite(weight) {
@@ -662,7 +662,7 @@ func TestCalculateSongWeightWithTransition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateSongWeightWithTransition("testuser", song, tt.transitionProbability)
+			weight := service.calculateSongWeightWithTransition("testuser", song, tt.transitionProbability, nil)
 
 			tolerance := 0.001
 			if weight < tt.expectedWeight-tolerance || weight > tt.expectedWeight+tolerance {

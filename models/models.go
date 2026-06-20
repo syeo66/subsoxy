@@ -88,6 +88,16 @@ type SubsonicResponse struct {
 
 type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
 
+// SimilarSongsResponse is the Subsonic API response for getSimilarSongs2
+type SimilarSongsResponse struct {
+	SubsonicResponse struct {
+		Status        string `json:"status"`
+		SimilarSongs2 struct {
+			Song []Song `json:"song"`
+		} `json:"similarSongs2"`
+	} `json:"subsonic-response"`
+}
+
 // XML response structures for Subsonic API
 type XMLSubsonicResponse struct {
 	XMLName xml.Name  `xml:"subsonic-response"`
