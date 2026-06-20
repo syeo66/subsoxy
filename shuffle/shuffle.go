@@ -47,8 +47,10 @@ const (
 )
 
 // SimilarSongsFetcher fetches acoustically similar songs for a user and song.
+// password is used directly when non-empty; otherwise the implementation falls
+// back to its credential store (normal shuffle path passes "").
 // Returns a map of song ID → similarity score (0.0–1.0), or nil when unavailable.
-type SimilarSongsFetcher func(userID, songID string) (map[string]float64, error)
+type SimilarSongsFetcher func(userID, songID, password string) (map[string]float64, error)
 
 type similarSongsEntry struct {
 	scores    map[string]float64
@@ -103,7 +105,8 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 
 // getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
 // acoustically similar to songID, using a short-lived in-memory cache.
-func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float64 {
+// password is forwarded to the fetcher; pass "" for the normal shuffle path.
+func (s *Service) getSimilarSongsForUser(userID, songID, password string) map[string]float64 {
 	cacheKey := userID + ":" + songID
 
 	s.mu.RLock()
@@ -119,7 +122,7 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float
 		return entry.scores
 	}
 
-	scores, err := fetcher(userID, songID)
+	scores, err := fetcher(userID, songID, password)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logrus.Fields{
 			"userID": userID,
@@ -467,7 +470,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	for len(result) < count && len(used) < len(eligibleSongs) {
 		var similarSongs map[string]float64
 		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID, "")
 		}
 
 		// Build candidate pool: base weight × current similarity factor
@@ -626,7 +629,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	for len(result) < count && len(used) < len(reservoir) {
 		var similarSongs map[string]float64
 		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID, "")
 		}
 
 		pool := make([]candidate, 0, len(reservoir)-len(used))
@@ -925,6 +928,7 @@ func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 }
 
 // GetSimilarSongsForDebug fetches similar songs for the debug view (song ID → score).
-func (s *Service) GetSimilarSongsForDebug(userID, songID string) map[string]float64 {
-	return s.getSimilarSongsForUser(userID, songID)
+// password is passed through to the fetcher so the debug URL can supply credentials directly.
+func (s *Service) GetSimilarSongsForDebug(userID, songID, password string) map[string]float64 {
+	return s.getSimilarSongsForUser(userID, songID, password)
 }

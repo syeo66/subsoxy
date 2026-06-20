@@ -296,7 +296,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 	var similarSongs map[string]float64
 	if similarityBaseSongID != "" {
-		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID)
+		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID, password)
 	}
 
 	// Build reference song info for display

@@ -939,11 +939,14 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 // AudioMuse-AI-NV-plugin (Navidrome v0.62+ OpenSubsonic sonicSimilarity extension).
 // Returns nil without error when the plugin is not available so the caller gracefully
 // skips the similarity weight.
-func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
-	creds := ps.credentials.GetAllValid()
-	password, ok := creds[userID]
-	if !ok {
-		return nil, nil
+func (ps *ProxyServer) fetchSimilarSongs(userID, songID, password string) (map[string]float64, error) {
+	if password == "" {
+		creds := ps.credentials.GetAllValid()
+		var ok bool
+		password, ok = creds[userID]
+		if !ok {
+			return nil, nil
+		}
 	}
 
 	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getSonicSimilarTracks")
