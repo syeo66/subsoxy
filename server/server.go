@@ -935,17 +935,18 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 }
 
 
-// fetchSimilarSongs queries the upstream's getSimilarSongs2 endpoint (provided by the
-// AudioMuse-AI-NV-plugin when installed on Navidrome). Returns nil without error when
-// the plugin is not available so the caller can gracefully skip the similarity weight.
-func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) ([]string, error) {
+// fetchSimilarSongs queries the upstream's getSonicSimilarTracks endpoint provided by the
+// AudioMuse-AI-NV-plugin (Navidrome v0.62+ OpenSubsonic sonicSimilarity extension).
+// Returns nil without error when the plugin is not available so the caller gracefully
+// skips the similarity weight.
+func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
 	creds := ps.credentials.GetAllValid()
 	password, ok := creds[userID]
 	if !ok {
 		return nil, nil
 	}
 
-	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getSimilarSongs2")
+	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getSonicSimilarTracks")
 	if err != nil {
 		return nil, err
 	}
@@ -965,7 +966,7 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) ([]string, error
 		return nil, nil
 	}
 
-	var response models.SimilarSongsResponse
+	var response models.SonicSimilarityResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
@@ -974,19 +975,21 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) ([]string, error
 		return nil, nil
 	}
 
-	songs := response.SubsonicResponse.SimilarSongs2.Song
-	ids := make([]string, 0, len(songs))
-	for _, song := range songs {
-		ids = append(ids, song.ID)
+	matches := response.SubsonicResponse.SonicMatch
+	scores := make(map[string]float64, len(matches))
+	for _, m := range matches {
+		if m.Entry.ID != "" {
+			scores[m.Entry.ID] = m.Similarity
+		}
 	}
 
 	ps.logger.WithFields(logrus.Fields{
 		"userID": sanitizeUsername(userID),
 		"songID": sanitizeForLogging(songID),
-		"count":  len(ids),
-	}).Debug("Fetched similar songs from AudioMuse-AI plugin")
+		"count":  len(scores),
+	}).Debug("Fetched similar songs from AudioMuse-AI plugin (getSonicSimilarTracks)")
 
-	return ids, nil
+	return scores, nil
 }
 
 func (ps *ProxyServer) GetHandlers() *handlers.Handler {

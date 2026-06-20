@@ -40,17 +40,18 @@ const (
 	// These represent "pseudo-observations" that regularize estimates when sample size is small
 	BayesianPriorAlpha = 2.0 // Prior "plays" - assumes slight tendency toward playing
 	BayesianPriorBeta  = 2.0 // Prior "skips" - assumes slight tendency toward skipping
-	// AudioMuse-AI similarity weight boost for acoustically similar songs
-	SimilarSongWeight    = 1.4
+	// AudioMuse-AI similarity weight: max multiplicative boost at similarity score 1.0.
+	// Formula: 1.0 + SimilarSongMaxBoost * similarity  →  range [1.0, 1.5]
+	SimilarSongMaxBoost  = 0.5
 	SimilarSongsCacheTTL = 5 * time.Minute
 )
 
-// SimilarSongsFetcher fetches acoustically similar song IDs for a given user and song.
-// Returns an empty slice (not an error) when the feature is unavailable on the upstream.
-type SimilarSongsFetcher func(userID, songID string) ([]string, error)
+// SimilarSongsFetcher fetches acoustically similar songs for a user and song.
+// Returns a map of song ID → similarity score (0.0–1.0), or nil when unavailable.
+type SimilarSongsFetcher func(userID, songID string) (map[string]float64, error)
 
 type similarSongsEntry struct {
-	songIDs   map[string]bool
+	scores    map[string]float64
 	fetchedAt time.Time
 }
 
@@ -100,9 +101,9 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 	s.similarSongsFetcher = fn
 }
 
-// getSimilarSongsForUser returns the set of song IDs acoustically similar to songID,
-// using a short-lived in-memory cache to avoid redundant upstream calls.
-func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]bool {
+// getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
+// acoustically similar to songID, using a short-lived in-memory cache.
+func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float64 {
 	cacheKey := userID + ":" + songID
 
 	s.mu.RLock()
@@ -115,10 +116,10 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]bool 
 	}
 
 	if cached && time.Since(entry.fetchedAt) < SimilarSongsCacheTTL {
-		return entry.songIDs
+		return entry.scores
 	}
 
-	ids, err := fetcher(userID, songID)
+	scores, err := fetcher(userID, songID)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logrus.Fields{
 			"userID": userID,
@@ -127,24 +128,21 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]bool 
 		return nil
 	}
 
-	songSet := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		songSet[id] = true
-	}
-
 	s.mu.Lock()
 	s.similarSongsCache[cacheKey] = &similarSongsEntry{
-		songIDs:   songSet,
+		scores:    scores,
 		fetchedAt: time.Now(),
 	}
 	s.mu.Unlock()
 
-	return songSet
+	return scores
 }
 
-func (s *Service) calculateSimilarityWeight(songID string, similarSongs map[string]bool) float64 {
-	if len(similarSongs) > 0 && similarSongs[songID] {
-		return SimilarSongWeight
+// calculateSimilarityWeight returns a weight multiplier in [1.0, 1+SimilarSongMaxBoost]
+// based on the song's acoustic similarity score to the last-played track.
+func (s *Service) calculateSimilarityWeight(songID string, scores map[string]float64) float64 {
+	if score, ok := scores[songID]; ok && score > 0 {
+		return 1.0 + SimilarSongMaxBoost*score
 	}
 	return 1.0
 }
@@ -440,50 +438,61 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		"requestedCount": count,
 	}).Debug("Filtered songs by 2-week replay threshold")
 
-	// Fetch acoustically similar songs for the last-played track (AudioMuse-AI, optional)
+	// Precompute stable base weights (time × play/skip × transition × artist).
+	// Similarity is intentionally excluded here — it updates after each pick.
+	baseWeights := make(map[string]float64, len(eligibleSongs))
+	for _, song := range eligibleSongs {
+		baseWeights[song.ID] = s.calculateSongWeight(userID, song, nil)
+	}
+
+	// Start similarity chain from the last-played track.
 	s.mu.RLock()
 	lastPlayed, hasLastPlayed := s.lastPlayed[userID]
 	s.mu.RUnlock()
-	var similarSongs map[string]bool
+	referenceID := ""
 	if hasLastPlayed && lastPlayed != nil {
-		similarSongs = s.getSimilarSongsForUser(userID, lastPlayed.ID)
+		referenceID = lastPlayed.ID
 	}
 
-	// Only use eligible songs - no fallback to recent songs
-	weightedSongs := make([]models.WeightedSong, 0, len(eligibleSongs))
-	for _, song := range eligibleSongs {
-		weight := s.calculateSongWeight(userID, song, similarSongs)
-		weightedSongs = append(weightedSongs, models.WeightedSong{
-			Song:   song,
-			Weight: weight,
-		})
-	}
-
-	sort.Slice(weightedSongs, func(i, j int) bool {
-		return weightedSongs[i].Weight > weightedSongs[j].Weight
-	})
-
-	totalWeight := 0.0
-	for _, ws := range weightedSongs {
-		totalWeight += ws.Weight
-	}
-
+	// Pick songs one at a time, refreshing the similarity reference after each pick
+	// so consecutive songs flow acoustically toward the just-picked one.
 	result := make([]models.Song, 0, count)
 	used := make(map[string]bool)
 
-	for len(result) < count && len(result) < len(weightedSongs) {
+	type candidate struct {
+		song   models.Song
+		weight float64
+	}
+
+	for len(result) < count && len(used) < len(eligibleSongs) {
+		var similarSongs map[string]float64
+		if referenceID != "" {
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
+		}
+
+		// Build candidate pool: base weight × current similarity factor
+		pool := make([]candidate, 0, len(eligibleSongs)-len(used))
+		totalWeight := 0.0
+		for _, song := range eligibleSongs {
+			if !used[song.ID] {
+				w := baseWeights[song.ID] * s.calculateSimilarityWeight(song.ID, similarSongs)
+				pool = append(pool, candidate{song, w})
+				totalWeight += w
+			}
+		}
+
+		if totalWeight <= 0 || len(pool) == 0 {
+			break
+		}
+
 		target := rand.Float64() * totalWeight
 		current := 0.0
-
-		for _, ws := range weightedSongs {
-			if used[ws.Song.ID] {
-				continue
-			}
-			current += ws.Weight
+		for _, c := range pool {
+			current += c.weight
 			if current >= target {
-				result = append(result, ws.Song)
-				used[ws.Song.ID] = true
-				totalWeight -= ws.Weight
+				result = append(result, c.song)
+				used[c.song.ID] = true
+				referenceID = c.song.ID // chain: bias next pick toward this song
 				break
 			}
 		}
@@ -566,13 +575,8 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 		}
 	}
 
-	// Now apply weights to the sampled songs
-	weightedSongs := make([]models.WeightedSong, 0, len(reservoir))
-
-	// Get transition probabilities in batch to avoid N+1 queries
-	// Also fetch acoustically similar songs for the last-played track (AudioMuse-AI, optional)
+	// Batch-fetch transition probabilities to avoid N+1 queries.
 	var transitionProbabilities map[string]float64
-	var similarSongs map[string]bool
 	s.mu.RLock()
 	lastPlayed, exists := s.lastPlayed[userID]
 	s.mu.RUnlock()
@@ -582,53 +586,71 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 		for i, song := range reservoir {
 			songIDs[i] = song.ID
 		}
-
 		var err error
 		transitionProbabilities, err = s.db.GetTransitionProbabilities(userID, lastPlayed.ID, songIDs)
 		if err != nil {
 			s.logger.WithError(err).WithField("userID", userID).Error("Failed to get transition probabilities, using defaults")
 			transitionProbabilities = make(map[string]float64)
 		}
-
-		similarSongs = s.getSimilarSongsForUser(userID, lastPlayed.ID)
 	} else {
 		transitionProbabilities = make(map[string]float64)
 	}
 
+	// Precompute stable base weights using the batch transition data.
+	// Similarity is excluded — it updates after each pick during selection.
+	baseWeights := make(map[string]float64, len(reservoir))
 	for _, song := range reservoir {
-		weight := s.calculateSongWeightWithTransition(userID, song, transitionProbabilities[song.ID], similarSongs)
-		weightedSongs = append(weightedSongs, models.WeightedSong{
-			Song:   song,
-			Weight: weight,
-		})
+		timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
+		playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
+		artistWeight := s.calculateArtistWeight(userID, song.Artist)
+		transitionWeight := 1.0
+		if tp := transitionProbabilities[song.ID]; tp > 0 {
+			transitionWeight = BaseTransitionWeight + tp
+		}
+		baseWeights[song.ID] = timeWeight * playSkipWeight * transitionWeight * artistWeight
 	}
 
-	// Sort by weight for biased selection
-	sort.Slice(weightedSongs, func(i, j int) bool {
-		return weightedSongs[i].Weight > weightedSongs[j].Weight
-	})
-
-	// Select final songs using weighted distribution
-	totalWeight := 0.0
-	for _, ws := range weightedSongs {
-		totalWeight += ws.Weight
+	// Determine initial similarity reference.
+	referenceID := ""
+	if exists && lastPlayed != nil {
+		referenceID = lastPlayed.ID
 	}
 
+	// Pick songs one at a time, refreshing the similarity reference after each pick.
+	type candidate struct {
+		song   models.Song
+		weight float64
+	}
 	used := make(map[string]bool)
 
-	for len(result) < count && len(result) < len(weightedSongs) {
+	for len(result) < count && len(used) < len(reservoir) {
+		var similarSongs map[string]float64
+		if referenceID != "" {
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
+		}
+
+		pool := make([]candidate, 0, len(reservoir)-len(used))
+		totalWeight := 0.0
+		for _, song := range reservoir {
+			if !used[song.ID] {
+				w := baseWeights[song.ID] * s.calculateSimilarityWeight(song.ID, similarSongs)
+				pool = append(pool, candidate{song, w})
+				totalWeight += w
+			}
+		}
+
+		if totalWeight <= 0 || len(pool) == 0 {
+			break
+		}
+
 		target := rand.Float64() * totalWeight
 		current := 0.0
-
-		for _, ws := range weightedSongs {
-			if used[ws.Song.ID] {
-				continue
-			}
-			current += ws.Weight
+		for _, c := range pool {
+			current += c.weight
 			if current >= target {
-				result = append(result, ws.Song)
-				used[ws.Song.ID] = true
-				totalWeight -= ws.Weight
+				result = append(result, c.song)
+				used[c.song.ID] = true
+				referenceID = c.song.ID // chain: bias next pick toward this song
 				break
 			}
 		}
@@ -652,7 +674,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	return result, nil
 }
 
-func (s *Service) calculateSongWeight(userID string, song models.Song, similarSongs map[string]bool) float64 {
+func (s *Service) calculateSongWeight(userID string, song models.Song, similarSongs map[string]float64) float64 {
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
@@ -679,7 +701,7 @@ func (s *Service) calculateSongWeight(userID string, song models.Song, similarSo
 
 // calculateSongWeightWithTransition calculates song weight with pre-computed transition probability
 // to avoid N+1 database queries when processing batches
-func (s *Service) calculateSongWeightWithTransition(userID string, song models.Song, transitionProbability float64, similarSongs map[string]bool) float64 {
+func (s *Service) calculateSongWeightWithTransition(userID string, song models.Song, transitionProbability float64, similarSongs map[string]float64) float64 {
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
@@ -867,7 +889,7 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 
 // GetWeightComponents returns individual weight components for debugging.
 // similarSongs may be nil when no last-played context is available.
-func (s *Service) GetWeightComponents(userID string, song models.Song, similarSongs map[string]bool) (timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64) {
+func (s *Service) GetWeightComponents(userID string, song models.Song, similarSongs map[string]float64) (timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight = s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
 	transitionWeight = s.calculateTransitionWeight(userID, song.ID)
@@ -878,7 +900,7 @@ func (s *Service) GetWeightComponents(userID string, song models.Song, similarSo
 
 // GetWeightComponentsWithTransition returns individual weight components with transition calculated from a specific song.
 // similarSongs may be nil when no last-played context is available.
-func (s *Service) GetWeightComponentsWithTransition(userID string, song models.Song, fromSongID string, similarSongs map[string]bool) (timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64) {
+func (s *Service) GetWeightComponentsWithTransition(userID string, song models.Song, fromSongID string, similarSongs map[string]float64) (timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight = s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
 
@@ -902,7 +924,7 @@ func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 	return s.lastPlayed[userID]
 }
 
-// GetSimilarSongsForDebug fetches similar songs for the debug view.
-func (s *Service) GetSimilarSongsForDebug(userID, songID string) map[string]bool {
+// GetSimilarSongsForDebug fetches similar songs for the debug view (song ID → score).
+func (s *Service) GetSimilarSongsForDebug(userID, songID string) map[string]float64 {
 	return s.getSimilarSongsForUser(userID, songID)
 }

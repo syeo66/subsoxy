@@ -88,13 +88,17 @@ type SubsonicResponse struct {
 
 type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
 
-// SimilarSongsResponse is the Subsonic API response for getSimilarSongs2
-type SimilarSongsResponse struct {
+// SonicSimilarityResponse is the OpenSubsonic response for getSonicSimilarTracks / findSonicPath.
+// Each sonicMatch entry contains a Child (entry) and a normalized similarity score (0.0–1.0).
+type SonicSimilarityResponse struct {
 	SubsonicResponse struct {
-		Status        string `json:"status"`
-		SimilarSongs2 struct {
-			Song []Song `json:"song"`
-		} `json:"similarSongs2"`
+		Status     string `json:"status"`
+		SonicMatch []struct {
+			Entry struct {
+				ID string `json:"id"`
+			} `json:"entry"`
+			Similarity float64 `json:"similarity"`
+		} `json:"sonicMatch"`
 	} `json:"subsonic-response"`
 }
 
