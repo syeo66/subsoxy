@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/syeo66/subsoxy/database"
 	"github.com/syeo66/subsoxy/models"
@@ -44,6 +45,9 @@ const (
 	// Formula: 1.0 + SimilarSongMaxBoost * similarity  →  range [1.0, 1.5]
 	SimilarSongMaxBoost  = 0.5
 	SimilarSongsCacheTTL = 5 * time.Minute
+	// Update the acoustic similarity reference every N picks instead of every pick.
+	// Reduces API calls by N× while preserving the chaining effect across the queue.
+	SimilarityChainStep = 5
 )
 
 // SimilarSongsFetcher fetches acoustically similar songs for a user and song.
@@ -80,7 +84,8 @@ type Service struct {
 	empiricalArtistPriors map[string]*EmpiricalPriors // Map userID to calculated priors (artist-level)
 	similarSongsFetcher   SimilarSongsFetcher
 	similarSongsCache     map[string]*similarSongsEntry
-	mu                    sync.RWMutex // Protects all maps
+	inflight              singleflight.Group // Deduplicates concurrent similarity fetches for the same key
+	mu                    sync.RWMutex       // Protects all maps
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
@@ -106,6 +111,7 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 // getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
 // acoustically similar to songID, using a short-lived in-memory cache.
 // password is forwarded to the fetcher; pass "" for the normal shuffle path.
+// Concurrent calls for the same key share a single in-flight HTTP request via singleflight.
 func (s *Service) getSimilarSongsForUser(userID, songID, password string) map[string]float64 {
 	cacheKey := userID + ":" + songID
 
@@ -122,23 +128,30 @@ func (s *Service) getSimilarSongsForUser(userID, songID, password string) map[st
 		return entry.scores
 	}
 
-	scores, err := fetcher(userID, songID, password)
-	if err != nil {
-		s.logger.WithError(err).WithFields(logrus.Fields{
-			"userID": userID,
-			"songID": songID,
-		}).Debug("Failed to fetch similar songs, continuing without similarity weights")
+	v, _, _ := s.inflight.Do(cacheKey, func() (interface{}, error) {
+		scores, err := fetcher(userID, songID, password)
+		if err != nil {
+			s.logger.WithError(err).WithFields(logrus.Fields{
+				"userID": userID,
+				"songID": songID,
+			}).Debug("Failed to fetch similar songs, continuing without similarity weights")
+			return nil, nil //nolint:nilerr
+		}
+		if scores != nil {
+			s.mu.Lock()
+			s.similarSongsCache[cacheKey] = &similarSongsEntry{
+				scores:    scores,
+				fetchedAt: time.Now(),
+			}
+			s.mu.Unlock()
+		}
+		return scores, nil
+	})
+
+	if v == nil {
 		return nil
 	}
-
-	s.mu.Lock()
-	s.similarSongsCache[cacheKey] = &similarSongsEntry{
-		scores:    scores,
-		fetchedAt: time.Now(),
-	}
-	s.mu.Unlock()
-
-	return scores
+	return v.(map[string]float64)
 }
 
 // calculateSimilarityWeight returns a weight multiplier in [1.0, 1+SimilarSongMaxBoost]
@@ -457,10 +470,18 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		referenceID = lastPlayed.ID
 	}
 
-	// Pick songs one at a time, refreshing the similarity reference after each pick
-	// so consecutive songs flow acoustically toward the just-picked one.
+	// Pre-warm similarity cache in background so the HTTP call overlaps
+	// with the base-weight computation loop below.
+	if referenceID != "" {
+		go s.getSimilarSongsForUser(userID, referenceID, "")
+	}
+
+	// Pick songs one at a time, refreshing the similarity reference every
+	// SimilarityChainStep picks instead of every pick. This reduces API calls
+	// by that factor while preserving acoustic flow across the queue.
 	result := make([]models.Song, 0, count)
 	used := make(map[string]bool)
+	pickCount := 0
 
 	type candidate struct {
 		song   models.Song
@@ -495,7 +516,11 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 			if current >= target {
 				result = append(result, c.song)
 				used[c.song.ID] = true
-				referenceID = c.song.ID // chain: bias next pick toward this song
+				pickCount++
+				if pickCount%SimilarityChainStep == 0 {
+					referenceID = c.song.ID
+					go s.getSimilarSongsForUser(userID, referenceID, "")
+				}
 				break
 			}
 		}
@@ -619,12 +644,21 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 		referenceID = lastPlayed.ID
 	}
 
-	// Pick songs one at a time, refreshing the similarity reference after each pick.
+	// Pre-warm similarity cache in background. The reservoir sampling and
+	// transition probability fetch above provide enough overlap time for the
+	// HTTP call to complete before the first pick iteration needs the result.
+	if referenceID != "" {
+		go s.getSimilarSongsForUser(userID, referenceID, "")
+	}
+
+	// Pick songs one at a time, refreshing the similarity reference every
+	// SimilarityChainStep picks instead of every pick.
 	type candidate struct {
 		song   models.Song
 		weight float64
 	}
 	used := make(map[string]bool)
+	pickCount := 0
 
 	for len(result) < count && len(used) < len(reservoir) {
 		var similarSongs map[string]float64
@@ -653,7 +687,11 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 			if current >= target {
 				result = append(result, c.song)
 				used[c.song.ID] = true
-				referenceID = c.song.ID // chain: bias next pick toward this song
+				pickCount++
+				if pickCount%SimilarityChainStep == 0 {
+					referenceID = c.song.ID
+					go s.getSimilarSongsForUser(userID, referenceID, "")
+				}
 				break
 			}
 		}
