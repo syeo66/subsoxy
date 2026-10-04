@@ -86,7 +86,7 @@ func TestCreateTables(t *testing.T) {
 	defer db.Close()
 
 	// Check that tables were created
-	tables := []string{"songs", "play_events", "song_transitions"}
+	tables := []string{"songs", "play_events", "artist_stats"}
 	for _, table := range tables {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count)
@@ -99,7 +99,7 @@ func TestCreateTables(t *testing.T) {
 	}
 
 	// Check that indexes were created
-	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp", "idx_song_transitions_from"}
+	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp", "idx_artist_stats_user_id"}
 	for _, index := range indexes {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count)
@@ -109,6 +109,79 @@ func TestCreateTables(t *testing.T) {
 		if count != 1 {
 			t.Errorf("Index %s should exist", index)
 		}
+	}
+
+	// song_transitions is no longer part of the schema
+	var count int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%song_transitions%'").Scan(&count); err != nil {
+		t.Fatalf("Failed to check for song_transitions: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected no song_transitions table or indexes, found %d objects", count)
+	}
+}
+
+func TestDropSongTransitionsTableMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_drop_transitions.db"
+	defer os.Remove(dbPath)
+
+	// Simulate a database created by a version that still tracked transitions
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	legacyQueries := []string{
+		`CREATE TABLE song_transitions (
+			user_id TEXT NOT NULL,
+			from_song_id TEXT NOT NULL,
+			to_song_id TEXT NOT NULL,
+			play_count INTEGER DEFAULT 0,
+			skip_count INTEGER DEFAULT 0,
+			probability REAL DEFAULT 0.0,
+			PRIMARY KEY (user_id, from_song_id, to_song_id)
+		)`,
+		`CREATE INDEX idx_song_transitions_user_id ON song_transitions(user_id)`,
+		`CREATE INDEX idx_song_transitions_from ON song_transitions(from_song_id)`,
+		`INSERT INTO song_transitions (user_id, from_song_id, to_song_id, play_count) VALUES ('testuser', '1', '2', 3)`,
+		`CREATE TABLE song_transitions_backup AS SELECT * FROM song_transitions`,
+	}
+	for _, query := range legacyQueries {
+		if _, err := db.conn.Exec(query); err != nil {
+			t.Fatalf("Failed to set up legacy schema: %v", err)
+		}
+	}
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	db.Close()
+
+	// Reopening runs the migrations, twice to verify they are idempotent
+	for i := 0; i < 2; i++ {
+		db, err = New(dbPath, logger)
+		if err != nil {
+			t.Fatalf("Failed to reopen database (run %d): %v", i+1, err)
+		}
+
+		var count int
+		if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%song_transitions%'").Scan(&count); err != nil {
+			t.Fatalf("Failed to check for song_transitions: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("Run %d: expected song_transitions table, backup and indexes to be dropped, found %d objects", i+1, count)
+		}
+
+		// Other data must survive the migration
+		songs, err := db.GetAllSongs("testuser")
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+		if len(songs) != 1 {
+			t.Errorf("Run %d: expected 1 song after migration, got %d", i+1, len(songs))
+		}
+		db.Close()
 	}
 }
 
@@ -444,223 +517,6 @@ func TestRecordPlayEventWithPreviousSong(t *testing.T) {
 	}
 }
 
-func TestRecordTransition(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Record a transition (play)
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	// Verify transition was recorded
-	var playCount int
-	err = db.conn.QueryRow("SELECT play_count FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&playCount)
-	if err != nil {
-		t.Errorf("Failed to get transition play count: %v", err)
-	}
-	if playCount != 1 {
-		t.Errorf("Expected transition play count 1, got %d", playCount)
-	}
-}
-
-func TestRecordTransitionSkip(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Record a transition (skip)
-	err = db.RecordTransition("testuser", "1", "2", "skip")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	// Verify skip count was recorded
-	var skipCount int
-	err = db.conn.QueryRow("SELECT skip_count FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&skipCount)
-	if err != nil {
-		t.Errorf("Failed to get transition skip count: %v", err)
-	}
-	if skipCount != 1 {
-		t.Errorf("Expected transition skip count 1, got %d", skipCount)
-	}
-}
-
-func TestUpdateTransitionProbabilities(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Record multiple transitions
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	err = db.RecordTransition("testuser", "1", "2", "skip")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	// Verify probability calculation (2 plays, 1 skip = 2/3 = 0.6667)
-	var probability float64
-	err = db.conn.QueryRow("SELECT probability FROM song_transitions WHERE from_song_id = ? AND to_song_id = ?", "1", "2").Scan(&probability)
-	if err != nil {
-		t.Errorf("Failed to get transition probability: %v", err)
-	}
-
-	expected := float64(2) / float64(3)
-	if probability < expected-0.01 || probability > expected+0.01 {
-		t.Errorf("Expected transition probability %.4f, got %.4f", expected, probability)
-	}
-}
-
-func TestGetTransitionProbability(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Test getting probability for non-existent transition (should return 0.5 and no error)
-	prob, err := db.GetTransitionProbability("testuser", "1", "2")
-	if err != nil {
-		t.Errorf("Unexpected error for non-existent transition: %v", err)
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5, got %f", prob)
-	}
-
-	// Record a transition and test again
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	prob, err = db.GetTransitionProbability("testuser", "1", "2")
-	if err != nil {
-		t.Errorf("Failed to get transition probability: %v", err)
-	}
-	if prob != 1.0 {
-		t.Errorf("Expected probability 1.0, got %f", prob)
-	}
-}
-
-func TestGetTransitionProbabilityNonExistent(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Test getting probability for non-existent songs (should return 0.5 and no error)
-	prob, err := db.GetTransitionProbability("testuser", "nonexistent1", "nonexistent2")
-	if err != nil {
-		t.Errorf("Unexpected error for non-existent transition: %v", err)
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5, got %f", prob)
-	}
-
-	// Test getting probability with empty strings (should return error)
-	prob, err = db.GetTransitionProbability("testuser", "", "")
-	if err == nil {
-		t.Error("Expected error for empty song IDs")
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
-	}
-}
-
-// Connection Pool Tests
-
 func TestDefaultPoolConfig(t *testing.T) {
 	config := DefaultPoolConfig()
 
@@ -877,20 +733,17 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 						t.Errorf("Goroutine %d: GetAllSongs failed: %v", goroutineID, err)
 					}
 				case 2:
-					// Record transition
-					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
-					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
-					err := db.RecordTransition("testuser", fromSong, toSong, "play")
+					// Record skip event
+					songID := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
+					err := db.RecordPlayEvent("testuser", songID, "skip", nil)
 					if err != nil {
-						t.Errorf("Goroutine %d: RecordTransition failed: %v", goroutineID, err)
+						t.Errorf("Goroutine %d: RecordPlayEvent (skip) failed: %v", goroutineID, err)
 					}
 				case 3:
-					// Get transition probability
-					fromSong := fmt.Sprintf("%d", (goroutineID%3)+1)
-					toSong := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
-					_, err := db.GetTransitionProbability("testuser", fromSong, toSong)
+					// Get song count
+					_, err := db.GetSongCount("testuser")
 					if err != nil {
-						t.Errorf("Goroutine %d: GetTransitionProbability failed: %v", goroutineID, err)
+						t.Errorf("Goroutine %d: GetSongCount failed: %v", goroutineID, err)
 					}
 				}
 			}
@@ -1037,102 +890,6 @@ func TestGetSongsBatch(t *testing.T) {
 	_, err = db.GetSongsBatch(userID, 2, -1)
 	if err == nil {
 		t.Error("Expected error for negative offset")
-	}
-}
-
-func TestGetTransitionProbabilities(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	userID := "testuser"
-	fromSongID := "song1"
-	toSongIDs := []string{"song2", "song3", "song4"}
-
-	// Add some songs first
-	songs := []models.Song{
-		{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
-		{ID: "song2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
-		{ID: "song3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
-		{ID: "song4", Title: "Song 4", Artist: "Artist 4", Album: "Album 4", Duration: 240},
-	}
-
-	err = db.StoreSongs(userID, songs)
-	if err != nil {
-		t.Fatalf("Failed to store songs: %v", err)
-	}
-
-	// Record some transitions
-	err = db.RecordTransition(userID, fromSongID, "song2", "play")
-	if err != nil {
-		t.Fatalf("Failed to record transition: %v", err)
-	}
-
-	err = db.RecordTransition(userID, fromSongID, "song3", "skip")
-	if err != nil {
-		t.Fatalf("Failed to record transition: %v", err)
-	}
-
-	// Update probabilities - this is done automatically by RecordTransition
-	// so we just need to trigger it by recording multiple transitions
-	err = db.RecordTransition(userID, fromSongID, "song2", "play")
-	if err != nil {
-		t.Fatalf("Failed to record second transition: %v", err)
-	}
-
-	// Test getting batch probabilities
-	probabilities, err := db.GetTransitionProbabilities(userID, fromSongID, toSongIDs)
-	if err != nil {
-		t.Fatalf("Failed to get transition probabilities: %v", err)
-	}
-
-	if len(probabilities) != 3 {
-		t.Errorf("Expected 3 probabilities, got %d", len(probabilities))
-	}
-
-	// Check that we got probabilities for all requested songs
-	for _, toSongID := range toSongIDs {
-		if _, exists := probabilities[toSongID]; !exists {
-			t.Errorf("Missing probability for song %s", toSongID)
-		}
-	}
-
-	// song2 should have been played, so probability > 0.5
-	if probabilities["song2"] <= 0.5 {
-		t.Errorf("Expected probability > 0.5 for song2, got %f", probabilities["song2"])
-	}
-
-	// song3 should have been skipped, so probability < 0.5
-	if probabilities["song3"] >= 0.5 {
-		t.Errorf("Expected probability < 0.5 for song3, got %f", probabilities["song3"])
-	}
-
-	// song4 should have default probability of 0.5
-	if probabilities["song4"] != 0.5 {
-		t.Errorf("Expected probability 0.5 for song4, got %f", probabilities["song4"])
-	}
-
-	// Test with empty user ID
-	_, err = db.GetTransitionProbabilities("", fromSongID, toSongIDs)
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-
-	// Test with empty from song ID
-	_, err = db.GetTransitionProbabilities(userID, "", toSongIDs)
-	if err == nil {
-		t.Error("Expected error for empty from song ID")
-	}
-
-	// Test with empty to song IDs
-	probabilities, err = db.GetTransitionProbabilities(userID, fromSongID, []string{})
-	if err != nil {
-		t.Fatalf("Failed to get transition probabilities for empty list: %v", err)
-	}
-	if len(probabilities) != 0 {
-		t.Errorf("Expected empty probabilities map, got %d entries", len(probabilities))
 	}
 }
 
@@ -1591,156 +1348,6 @@ func TestRecordPlayEventErrorHandling(t *testing.T) {
 	err = db.RecordPlayEvent(longString, longString, "play", &longString)
 	if err != nil {
 		t.Errorf("Unexpected error for long string values: %v", err)
-	}
-}
-
-func TestRecordTransitionErrorHandling(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Test with empty user ID
-	err = db.RecordTransition("", "song1", "song2", "play")
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-	if !strings.Contains(err.Error(), "validation") {
-		t.Errorf("Expected validation error, got: %v", err)
-	}
-
-	// Test with empty from song ID
-	err = db.RecordTransition("testuser", "", "song2", "play")
-	if err == nil {
-		t.Error("Expected error for empty from song ID")
-	}
-	if !strings.Contains(err.Error(), "validation") {
-		t.Errorf("Expected validation error, got: %v", err)
-	}
-
-	// Test with empty to song ID
-	err = db.RecordTransition("testuser", "song1", "", "play")
-	if err == nil {
-		t.Error("Expected error for empty to song ID")
-	}
-	if !strings.Contains(err.Error(), "validation") {
-		t.Errorf("Expected validation error, got: %v", err)
-	}
-
-	// Test with empty event type
-	err = db.RecordTransition("testuser", "song1", "song2", "")
-	if err == nil {
-		t.Error("Expected error for empty event type")
-	}
-	if !strings.Contains(err.Error(), "validation") {
-		t.Errorf("Expected validation error, got: %v", err)
-	}
-
-	// Test with invalid event type (should still work)
-	err = db.RecordTransition("testuser", "song1", "song2", "invalid_type")
-	if err != nil {
-		t.Errorf("Unexpected error for invalid event type: %v", err)
-	}
-
-	// Test with same from and to song (edge case, should work)
-	err = db.RecordTransition("testuser", "song1", "song1", "play")
-	if err != nil {
-		t.Errorf("Unexpected error for same from/to song: %v", err)
-	}
-}
-
-func TestGetTransitionProbabilityErrorHandling(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Test with empty user ID
-	prob, err := db.GetTransitionProbability("", "song1", "song2")
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
-	}
-
-	// Test with empty from song ID
-	prob, err = db.GetTransitionProbability("testuser", "", "song2")
-	if err == nil {
-		t.Error("Expected error for empty from song ID")
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
-	}
-
-	// Test with empty to song ID
-	prob, err = db.GetTransitionProbability("testuser", "song1", "")
-	if err == nil {
-		t.Error("Expected error for empty to song ID")
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5 on error, got %f", prob)
-	}
-
-	// Test with very long song IDs (should work)
-	longID := strings.Repeat("a", 1000)
-	prob, err = db.GetTransitionProbability("testuser", longID, longID)
-	if err != nil {
-		t.Errorf("Unexpected error for long song IDs: %v", err)
-	}
-	if prob != 0.5 {
-		t.Errorf("Expected default probability 0.5 for non-existent transition, got %f", prob)
-	}
-}
-
-func TestGetTransitionProbabilitiesErrorHandling(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Test with empty user ID
-	_, err = db.GetTransitionProbabilities("", "song1", []string{"song2", "song3"})
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-
-	// Test with empty from song ID
-	_, err = db.GetTransitionProbabilities("testuser", "", []string{"song2", "song3"})
-	if err == nil {
-		t.Error("Expected error for empty from song ID")
-	}
-
-	// Test with empty to song IDs (should work and return empty map)
-	probs, err := db.GetTransitionProbabilities("testuser", "song1", []string{})
-	if err != nil {
-		t.Errorf("Unexpected error for empty to song IDs: %v", err)
-	}
-	if len(probs) != 0 {
-		t.Errorf("Expected empty probabilities map, got %d entries", len(probs))
-	}
-
-	// Test with very large number of song IDs
-	largeSongList := make([]string, 1000)
-	for i := 0; i < 1000; i++ {
-		largeSongList[i] = fmt.Sprintf("song%d", i)
-	}
-	probs, err = db.GetTransitionProbabilities("testuser", "song0", largeSongList)
-	if err != nil {
-		t.Errorf("Unexpected error for large song list: %v", err)
-	}
-	if len(probs) != 1000 {
-		t.Errorf("Expected 1000 probabilities, got %d", len(probs))
-	}
-	// All should have default probability since no transitions exist
-	for songID, prob := range probs {
-		if prob != 0.5 {
-			t.Errorf("Expected default probability 0.5 for song %s, got %f", songID, prob)
-			break // Only report first failure to avoid spam
-		}
 	}
 }
 

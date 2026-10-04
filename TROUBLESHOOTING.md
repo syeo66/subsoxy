@@ -441,7 +441,6 @@ sqlite3 subsoxy.db "PRAGMA analysis;"
 ```
 
 **Database Query Optimizations:**
-- **Batch Queries**: Single `GetTransitionProbabilities()` query replaces hundreds of individual queries
 - **Pagination**: `GetSongsBatch()` processes songs in efficient batches
 - **Prepared Statements**: Optimized query performance with connection pooling
 - **Indexing**: User-specific indexes for optimal query performance
@@ -449,7 +448,7 @@ sqlite3 subsoxy.db "PRAGMA analysis;"
 **Performance Monitoring:**
 ```bash
 # Monitor database query performance
-./subsoxy -log-level debug | grep -E "(QUERY|batch|transition)"
+./subsoxy -log-level debug | grep -E "(QUERY|batch)"
 
 # Check connection pool statistics
 ./subsoxy -log-level debug | grep -E "(pool|connection)"

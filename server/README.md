@@ -400,13 +400,6 @@ func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previou
         return
     }
 
-    // Update user-specific transition data
-    if previousSong != nil {
-        if err := ps.db.RecordTransition(userID, *previousSong, songID, eventType); err != nil {
-            ps.logger.WithError(err).WithField("user_id", userID).Error("Failed to record transition")
-        }
-    }
-
     // Log the event with user context
     ps.logger.WithFields(logrus.Fields{
         "user_id":      userID,

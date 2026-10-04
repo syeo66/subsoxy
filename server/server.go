@@ -60,8 +60,8 @@ type ProxyServer struct {
 	syncMutex         sync.RWMutex
 	shutdownChan      chan struct{}
 	rateLimiter       *rate.Limiter
-	credentialWorkers chan struct{}   // Semaphore for limiting concurrent credential validations
-	credentialWg      sync.WaitGroup   // WaitGroup for tracking in-flight credential validations
+	credentialWorkers chan struct{}  // Semaphore for limiting concurrent credential validations
+	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -297,7 +297,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				defer func() {
 					<-ps.credentialWorkers // Release worker slot
-					ps.credentialWg.Done()  // Mark goroutine as complete
+					ps.credentialWg.Done() // Mark goroutine as complete
 				}()
 
 				isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
@@ -650,12 +650,12 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	}
 
 	ps.logger.WithFields(logrus.Fields{
-		"user":       sanitizeUsername(username),
-		"total":      len(allSongs),
-		"deleted":    len(songsToDelete),
-		"added":      len(newSongs),
-		"updated":    actuallyUpdatedCount,
-		"unchanged":  len(existingSongsToCheck) - actuallyUpdatedCount,
+		"user":      sanitizeUsername(username),
+		"total":     len(allSongs),
+		"deleted":   len(songsToDelete),
+		"added":     len(newSongs),
+		"updated":   actuallyUpdatedCount,
+		"unchanged": len(existingSongsToCheck) - actuallyUpdatedCount,
 	}).Info("Successfully completed differential sync for user")
 
 	// Calculate artist statistics after sync completes
@@ -880,12 +880,6 @@ func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previou
 		return
 	}
 
-	if previousSong != nil {
-		if err := ps.db.RecordTransition(userID, *previousSong, songID, eventType); err != nil {
-			ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record transition")
-		}
-	}
-
 	// Sanitize inputs for logging
 	sanitizedUserID := sanitizeUsername(userID)
 	sanitizedSongID := sanitizeForLogging(songID)
@@ -908,7 +902,6 @@ func (ps *ProxyServer) SetLastPlayed(userID, songID string) {
 	ps.shuffle.SetLastPlayed(userID, song)
 }
 
-
 // songHasChanged compares two songs to detect if metadata has actually changed
 func songHasChanged(existing, new models.Song) bool {
 	return existing.Title != new.Title ||
@@ -917,7 +910,6 @@ func songHasChanged(existing, new models.Song) bool {
 		existing.Duration != new.Duration ||
 		existing.CoverArt != new.CoverArt
 }
-
 
 // ProcessScrobble processes a scrobble event and handles pending songs
 // Returns true if a play event should be recorded, false if it's a duplicate submission
@@ -933,7 +925,6 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 	}
 	return ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
-
 
 // fetchSimilarSongs queries the upstream's getSonicSimilarTracks endpoint provided by the
 // AudioMuse-AI-NV-plugin (Navidrome v0.62+ OpenSubsonic sonicSimilarity extension).

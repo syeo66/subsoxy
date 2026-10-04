@@ -25,8 +25,7 @@ const (
 
 // Database operation constants
 const (
-	DefaultTransitionProbability = 0.5
-	DefaultDateString            = "1970-01-01"
+	DefaultDateString = "1970-01-01"
 )
 
 // parseTimestamp tries multiple datetime formats to parse SQLite timestamps
@@ -180,17 +179,6 @@ func (db *DB) createTables() error {
 			FOREIGN KEY (song_id, user_id) REFERENCES songs(id, user_id),
 			FOREIGN KEY (previous_song, user_id) REFERENCES songs(id, user_id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS song_transitions (
-			user_id TEXT NOT NULL,
-			from_song_id TEXT NOT NULL,
-			to_song_id TEXT NOT NULL,
-			play_count INTEGER DEFAULT 0,
-			skip_count INTEGER DEFAULT 0,
-			probability REAL DEFAULT 0.0,
-			PRIMARY KEY (user_id, from_song_id, to_song_id),
-			FOREIGN KEY (from_song_id, user_id) REFERENCES songs(id, user_id),
-			FOREIGN KEY (to_song_id, user_id) REFERENCES songs(id, user_id)
-		)`,
 		`CREATE TABLE IF NOT EXISTS artist_stats (
 			user_id TEXT NOT NULL,
 			artist TEXT NOT NULL,
@@ -203,8 +191,6 @@ func (db *DB) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_play_events_user_id ON play_events(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_song_id ON play_events(song_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_timestamp ON play_events(timestamp)`,
-		`CREATE INDEX IF NOT EXISTS idx_song_transitions_user_id ON song_transitions(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_song_transitions_from ON song_transitions(from_song_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_artist_stats_user_id ON artist_stats(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_artist_stats_artist ON artist_stats(artist)`,
 	}
@@ -234,6 +220,11 @@ func (db *DB) createTables() error {
 	// Add adjusted_plays and adjusted_skips columns if they don't exist
 	if err := db.addAdjustedPlaySkipColumns(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add adjusted play/skip columns")
+	}
+
+	// Drop the obsolete song_transitions table if it still exists
+	if err := db.dropSongTransitionsTable(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop song_transitions table")
 	}
 
 	// Migrate artist statistics for existing users
@@ -277,7 +268,6 @@ func (db *DB) migrateExistingData() error {
 	backupQueries := []string{
 		`CREATE TABLE IF NOT EXISTS songs_backup AS SELECT * FROM songs`,
 		`CREATE TABLE IF NOT EXISTS play_events_backup AS SELECT * FROM play_events`,
-		`CREATE TABLE IF NOT EXISTS song_transitions_backup AS SELECT * FROM song_transitions`,
 	}
 
 	for _, query := range backupQueries {
@@ -291,7 +281,6 @@ func (db *DB) migrateExistingData() error {
 	dropQueries := []string{
 		`DROP TABLE IF EXISTS songs`,
 		`DROP TABLE IF EXISTS play_events`,
-		`DROP TABLE IF EXISTS song_transitions`,
 	}
 
 	for _, query := range dropQueries {
@@ -393,6 +382,40 @@ func (db *DB) addAdjustedPlaySkipColumns() error {
 	}
 
 	db.logger.Info("Added adjusted_plays and adjusted_skips columns to songs table and initialized from raw counts")
+	return nil
+}
+
+// dropSongTransitionsTable removes the song_transitions table (and its indexes), plus any backup
+// copy made by migrateExistingData, left over from databases created before transition tracking
+// was removed, then reclaims the freed disk space.
+func (db *DB) dropSongTransitionsTable() error {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('song_transitions', 'song_transitions_backup')`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for song_transitions table")
+	}
+
+	// If neither table exists, no migration needed
+	if count == 0 {
+		return nil
+	}
+
+	// Dropping the table also drops its indexes
+	if _, err := db.conn.Exec(`DROP TABLE IF EXISTS song_transitions`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop song_transitions table")
+	}
+	if _, err := db.conn.Exec(`DROP TABLE IF EXISTS song_transitions_backup`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop song_transitions_backup table")
+	}
+
+	db.logger.Info("Dropped obsolete song_transitions table")
+
+	// The table can be large; VACUUM returns the freed pages to the filesystem.
+	// Failure only means the file stays larger than necessary, so it is non-fatal.
+	if _, err := db.conn.Exec(`VACUUM`); err != nil {
+		db.logger.WithError(err).Warn("Failed to vacuum database after dropping song_transitions (non-fatal)")
+	}
+
 	return nil
 }
 
@@ -849,7 +872,7 @@ func (db *DB) DeleteSongs(userID string, songIDs []string) error {
 		}
 	}
 
-	// Note: We intentionally preserve play_events and song_transitions as historical data
+	// Note: We intentionally preserve play_events as historical data
 	// This maintains user listening history even if songs are removed from the library
 
 	if err := tx.Commit(); err != nil {
@@ -968,144 +991,6 @@ func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *st
 	}
 
 	return nil
-}
-
-func (db *DB) RecordTransition(userID, fromSongID, toSongID, eventType string) error {
-	if userID == "" {
-		return errors.ErrValidationFailed.WithContext("field", "userID")
-	}
-	if fromSongID == "" || toSongID == "" {
-		return errors.ErrValidationFailed.WithContext("missing_fields", []string{"fromSongID", "toSongID"})
-	}
-	if eventType == "" {
-		return errors.ErrValidationFailed.WithContext("field", "eventType")
-	}
-
-	if eventType == "play" {
-		_, err := db.conn.Exec(`INSERT OR REPLACE INTO song_transitions (user_id, from_song_id, to_song_id, play_count, skip_count)
-			VALUES (?, ?, ?, COALESCE((SELECT play_count FROM song_transitions WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?), 0) + 1,
-			COALESCE((SELECT skip_count FROM song_transitions WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?), 0))`,
-			userID, fromSongID, toSongID, userID, fromSongID, toSongID, userID, fromSongID, toSongID)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to record play transition").
-				WithContext("user_id", userID).
-				WithContext("from_song_id", fromSongID).
-				WithContext("to_song_id", toSongID)
-		}
-	} else if eventType == "skip" {
-		_, err := db.conn.Exec(`INSERT OR REPLACE INTO song_transitions (user_id, from_song_id, to_song_id, play_count, skip_count)
-			VALUES (?, ?, ?, COALESCE((SELECT play_count FROM song_transitions WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?), 0),
-			COALESCE((SELECT skip_count FROM song_transitions WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?), 0) + 1)`,
-			userID, fromSongID, toSongID, userID, fromSongID, toSongID, userID, fromSongID, toSongID)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to record skip transition").
-				WithContext("user_id", userID).
-				WithContext("from_song_id", fromSongID).
-				WithContext("to_song_id", toSongID)
-		}
-	}
-
-	return db.updateTransitionProbabilities(userID, fromSongID, toSongID)
-}
-
-func (db *DB) updateTransitionProbabilities(userID, fromSongID, toSongID string) error {
-	_, err := db.conn.Exec(`UPDATE song_transitions 
-		SET probability = CAST(play_count AS REAL) / CAST((play_count + skip_count) AS REAL)
-		WHERE user_id = ? AND from_song_id = ? AND to_song_id = ? AND (play_count + skip_count) > 0`,
-		userID, fromSongID, toSongID)
-	if err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update transition probabilities").
-			WithContext("user_id", userID).
-			WithContext("from_song_id", fromSongID).
-			WithContext("to_song_id", toSongID)
-	}
-	return nil
-}
-
-func (db *DB) GetTransitionProbability(userID, fromSongID, toSongID string) (float64, error) {
-	if userID == "" {
-		return DefaultTransitionProbability, errors.ErrValidationFailed.WithContext("field", "userID")
-	}
-	if fromSongID == "" || toSongID == "" {
-		return DefaultTransitionProbability, errors.ErrValidationFailed.WithContext("missing_fields", []string{"fromSongID", "toSongID"})
-	}
-
-	var probability float64
-	err := db.conn.QueryRow(`SELECT COALESCE(probability, 0.5) FROM song_transitions 
-		WHERE user_id = ? AND from_song_id = ? AND to_song_id = ?`, userID, fromSongID, toSongID).Scan(&probability)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return DefaultTransitionProbability, nil // Default probability when no transition data exists
-		}
-		return DefaultTransitionProbability, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probability").
-			WithContext("user_id", userID).
-			WithContext("from_song_id", fromSongID).
-			WithContext("to_song_id", toSongID)
-	}
-
-	return probability, nil
-}
-
-// GetTransitionProbabilities returns transition probabilities for multiple songs in a batch
-// to avoid N+1 queries when calculating weights for many songs
-func (db *DB) GetTransitionProbabilities(userID, fromSongID string, toSongIDs []string) (map[string]float64, error) {
-	if userID == "" {
-		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
-	}
-	if fromSongID == "" {
-		return nil, errors.ErrValidationFailed.WithContext("field", "fromSongID")
-	}
-	if len(toSongIDs) == 0 {
-		return make(map[string]float64), nil
-	}
-
-	// Build placeholders for IN clause
-	placeholders := make([]string, len(toSongIDs))
-	args := make([]interface{}, 0, len(toSongIDs)+2)
-	args = append(args, userID, fromSongID)
-
-	for i, toSongID := range toSongIDs {
-		placeholders[i] = "?"
-		args = append(args, toSongID)
-	}
-
-	query := `SELECT to_song_id, COALESCE(probability, 0.5) as probability 
-		FROM song_transitions 
-		WHERE user_id = ? AND from_song_id = ? AND to_song_id IN (` +
-		strings.Join(placeholders, ",") + `)`
-
-	rows, err := db.conn.Query(query, args...)
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get transition probabilities").
-			WithContext("userID", userID).
-			WithContext("fromSongID", fromSongID).
-			WithContext("toSongCount", len(toSongIDs))
-	}
-	defer rows.Close()
-
-	probabilities := make(map[string]float64)
-	for rows.Next() {
-		var toSongID string
-		var probability float64
-		if err := rows.Scan(&toSongID, &probability); err != nil {
-			db.logger.WithError(err).WithFields(logrus.Fields{
-				"userID":     userID,
-				"fromSongID": fromSongID,
-			}).Error("Failed to scan transition probability")
-			continue
-		}
-		probabilities[toSongID] = probability
-	}
-
-	// Fill in default probabilities for songs not found
-	for _, toSongID := range toSongIDs {
-		if _, exists := probabilities[toSongID]; !exists {
-			probabilities[toSongID] = DefaultTransitionProbability
-		}
-	}
-
-	return probabilities, nil
 }
 
 // healthCheckLoop runs periodic health checks on the database connection

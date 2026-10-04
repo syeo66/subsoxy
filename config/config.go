@@ -46,11 +46,11 @@ const (
 
 // Validation limits
 const (
-	MinPortNumber     = 1
-	MaxPortNumber     = 65535
-	MinRateLimitRPS   = 1
-	MinRateLimitBurst = 1
-	MinDBMaxOpenConns = 1
+	MinPortNumber        = 1
+	MaxPortNumber        = 65535
+	MinRateLimitRPS      = 1
+	MinRateLimitBurst    = 1
+	MinDBMaxOpenConns    = 1
 	MinDBMaxIdleConns    = 0
 	MinDBConnLifetime    = 0
 	MinDBConnIdleTime    = 0

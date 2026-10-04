@@ -1,6 +1,6 @@
 # Database Module
 
-The database module handles all SQLite3 database operations for song tracking and transition analysis with **complete multi-tenancy support**, comprehensive error handling, validation, and advanced connection pooling.
+The database module handles all SQLite3 database operations for song tracking with **complete multi-tenancy support**, comprehensive error handling, validation, and advanced connection pooling.
 
 ## Overview
 
@@ -9,7 +9,6 @@ This module provides:
 - Advanced connection pooling with health monitoring and statistics
 - **User-isolated song storage** and retrieval with comprehensive input validation
 - **Per-user play event recording** with structured error handling
-- **User-specific transition probability tracking** with graceful degradation
 - Thread-safe database operations with transaction management and user context
 - **User ID validation** and sanitization for security
 - Comprehensive error context for debugging with user information
@@ -51,21 +50,6 @@ CREATE TABLE play_events (
 );
 ```
 
-### song_transitions (Multi-Tenant)
-```sql
-CREATE TABLE song_transitions (
-    user_id TEXT NOT NULL,
-    from_song_id TEXT NOT NULL,
-    to_song_id TEXT NOT NULL,
-    play_count INTEGER DEFAULT 0,
-    skip_count INTEGER DEFAULT 0,
-    probability REAL DEFAULT 0.0,
-    PRIMARY KEY (user_id, from_song_id, to_song_id),
-    FOREIGN KEY (from_song_id, user_id) REFERENCES songs(id, user_id),
-    FOREIGN KEY (to_song_id, user_id) REFERENCES songs(id, user_id)
-);
-```
-
 ### artist_stats (Multi-Tenant) ✅ **NEW**
 ```sql
 CREATE TABLE artist_stats (
@@ -78,11 +62,13 @@ CREATE TABLE artist_stats (
 );
 ```
 
+### Removed: song_transitions
+Earlier versions tracked which song was played or skipped after which in a `song_transitions` table. It grew quadratically with library size while rarely influencing the shuffle, so it was removed. On startup, `dropSongTransitionsTable()` drops the table (plus its indexes and any `song_transitions_backup` copy) if present and runs `VACUUM` to reclaim the disk space. The migration is idempotent.
+
 ### Performance Indexes
 ```sql
 CREATE INDEX idx_songs_user_id ON songs(user_id);
 CREATE INDEX idx_play_events_user_id ON play_events(user_id);
-CREATE INDEX idx_song_transitions_user_id ON song_transitions(user_id);
 CREATE INDEX idx_artist_stats_user_id ON artist_stats(user_id);
 CREATE INDEX idx_artist_stats_artist ON artist_stats(artist);
 ```
@@ -154,14 +140,8 @@ bobSongs, err := db.GetAllSongs("bob")  // Completely separate from alice's song
 userID := "alice"
 err := db.RecordPlayEvent(userID, "song123", "play", nil)
 
-// Record a transition for a specific user
-err := db.RecordTransition(userID, "song1", "song2", "play")
-
-// Get transition probability for a specific user
-prob, err := db.GetTransitionProbability(userID, "song1", "song2")
-
-// Each user's events and transitions are completely isolated
-bobProb, err := db.GetTransitionProbability("bob", "song1", "song2")  // Independent from alice's data
+// Each user's events are completely isolated
+err = db.RecordPlayEvent("bob", "song123", "skip", nil)  // Independent from alice's data
 ```
 
 ### Multi-Tenant Filtered Song Retrieval ✅ **FIXED**
@@ -311,7 +291,7 @@ Context: {"field": "songID"}
 
 ### Performance Optimization
 - **Database Connection Pooling**: Advanced connection pool management for high-concurrency scenarios
-- **Indexes**: Optimized indexes on frequently queried columns (song_id, timestamp, transitions)
+- **Indexes**: Optimized indexes on frequently queried columns (song_id, timestamp, user_id)
 - **Bulk Inserts**: Transaction-based bulk operations for song synchronization
 - **Prepared Statements**: Cached prepared statements for repeated operations
 - **Connection Lifecycle**: Automatic connection rotation and cleanup for optimal resource usage
@@ -334,16 +314,15 @@ Context: {"field": "songID"}
 - **GetSongsByIDs()**: Fetches existing songs by IDs for metadata comparison and change detection
 - **Change Detection**: Only counts songs as "updated" when metadata actually changes (title, artist, album, duration, cover art)
 - **Accurate Sync Reporting**: Distinguishes between new, updated, unchanged, and deleted songs
-- **DeleteSongs()**: Removes songs by ID while preserving historical play events and transition data
+- **DeleteSongs()**: Removes songs by ID while preserving historical play events
 - **Data Preservation**: Maintains user listening history even when songs are removed from the library
-- **Historical Integrity**: Intentionally preserves play_events and song_transitions as historical records
+- **Historical Integrity**: Intentionally preserves play_events as historical records
 - **Transaction Safety**: All operations use transactions to ensure atomicity and consistency
 - **Comprehensive Logging**: Detailed logging with accurate change counts (added, updated, unchanged, deleted)
 
 ### Event Recording ✅ **ENHANCED**
 - Automatically updates song statistics (play_count, skip_count, last_played, last_skipped, adjusted_plays, adjusted_skips)
 - **Exponential Decay**: ✅ **NEW** - Applies incremental decay formula (factor: 0.95) to adjusted values on each event
-- Records transition data for recommendation engine
 - Maintains complete event history
 - **Accurate Skip Detection**: Only increments skip_count for actual user skips, not songs that ended without meeting play thresholds
 - **Artist Statistics Integration**: ✅ **NEW** - Artist-level stats calculated from song-level adjusted values
@@ -360,12 +339,6 @@ The system now implements robust, preload-resistant skip detection:
 - **Preload Support**: Multiple concurrent stream requests don't trigger false skip detection
 
 This ensures accurate skip detection even with aggressive client preloading strategies.
-
-### Transition Probabilities
-- Automatically calculated as `play_count / (play_count + skip_count)`
-- Updated whenever transition events are recorded
-- Now more accurate due to enhanced preload-resistant skip detection
-- Used by the shuffle algorithm for intelligent recommendations
 
 ### Goroutine Management ✅ **FIXED**
 

@@ -8,7 +8,6 @@ This module provides:
 - **Per-User Multi-factor weighting algorithm** with individual preference learning
 - **User-specific time decay calculations** to avoid recently played songs per user
 - **Individual play/skip ratio analysis** based on each user's listening behavior
-- **User-isolated transition probability integration** for personalized song sequences
 - **Per-user configurable shuffle sizes** with user context validation
 - **Complete user data isolation** ensuring personalized recommendations
 
@@ -101,29 +100,7 @@ func (s *Service) calculatePlaySkipWeight(userID string, adjustedPlays, adjusted
 | 10 recent plays, 0 skips | 10, 0 | 6.513, 0 | 1.464x | Bounded growth with decay |
 | 5 plays, 5 skips (recent) | 5, 5 | 4.108, 4.108 | 1.0x | Neutral weight for balanced |
 
-### 3. User-Isolated Transition Probability Weight
-Uses **user-specific transition data** to prefer songs that historically follow well from the user's last played song. **Thread-safe access** with mutex protection.
-
-```go
-func (s *Service) calculateTransitionWeight(userID, songID string) float64 {
-    s.mu.RLock()
-    lastPlayed, exists := s.lastPlayed[userID]
-    s.mu.RUnlock()
-
-    if !exists || lastPlayed == nil {
-        return 1.0 // Neutral weight if no previous song for this user
-    }
-
-    probability, err := s.db.GetTransitionProbability(userID, lastPlayed.ID, songID)
-    if err != nil {
-        return 1.0
-    }
-
-    return BaseTransitionWeight + probability // Based on user's transition history
-}
-```
-
-### 4. Per-User Artist Valuation Weight with Exponential Decay ✅ **NEW**
+### 3. Per-User Artist Valuation Weight with Exponential Decay ✅ **NEW**
 Applies a weight multiplier based on the user's historical preference for the song's artist using **time-decayed adjusted values**. Artists that the user tends to play (vs skip) recently get higher weights.
 
 **Artist Statistics Calculation:**
@@ -208,34 +185,27 @@ go shuffleService.ProcessScrobble("bob", "songB", true, recordSkipFunc) // Safe 
 
 ### Getting User-Specific Weight Components for Debugging ✅ **ENHANCED**
 ```go
-// Get individual weight components for a song (uses current last played for transition)
+// Get individual weight components for a song
+// similarSongs (song ID → score) comes from the similarity lookup and may be nil
 userID := "alice"
 song := models.Song{ID: "song123", Title: "Example Song"}
-timeWeight, playSkipWeight, transitionWeight, artistWeight := shuffleService.GetWeightComponents(userID, song)
+timeWeight, playSkipWeight, artistWeight, similarityWeight := shuffleService.GetWeightComponents(userID, song, similarSongs)
 
-// Get weight components with transition calculated from a specific reference song
-// Useful for analyzing how likely a song is to follow a specific reference track
-referenceSongID := "song456"
-timeWeight, playSkipWeight, transitionWeight, artistWeight := shuffleService.GetWeightComponentsWithTransition(userID, song, referenceSongID)
-
-// These methods are used by the debug endpoint to show:
-// - How each weight component contributes to the final weight
-// - Transition probabilities from a selected reference track
-// - Interactive analysis of song-to-song transition patterns
+// This method is used by the debug endpoint to show how each weight
+// component contributes to the final weight
 ```
 
 ## Multi-Tenant Weight Calculation ✅ **UPDATED**
 
 The final weight is calculated **per user** using **time-decayed adjusted values** as:
 ```
-final_weight = base_weight × user_time_weight × user_play_skip_weight × user_transition_weight × artist_weight
+final_weight = base_weight × user_time_weight × user_play_skip_weight × artist_weight × similarity_weight
 ```
 
 Where:
 - `base_weight` = 1.0 (can be adjusted for global tuning)
 - `user_time_weight` = 0.1 to 2.0 (lower for recently played by this user)
 - `user_play_skip_weight` = 0.2 to 1.8 (based on adjusted_plays/adjusted_skips with Empirical Bayes) ✅ **ENHANCED**
-- `user_transition_weight` = 0.5 to 1.5 (higher for good transitions for this user)
 - `artist_weight` = 0.5 to 1.5 (based on artist's adjusted_plays/adjusted_skips with Empirical Bayes) ✅ **ENHANCED**
 
 ## Multi-Tenant Selection Process ✅ **UPDATED**
@@ -253,7 +223,6 @@ Where:
 ### Personalized Intelligent Recommendations
 - **Individual Variety**: Recent songs are de-prioritized per user
 - **Personal Preference Learning**: Frequently played songs by each user are favored for that user
-- **User-Specific Smooth Transitions**: Considers each user's song sequence context
 - **Personalized Discovery**: New songs get a boost to encourage exploration for each user
 - **Complete User Isolation**: One user's preferences don't affect another's recommendations
 
@@ -293,8 +262,6 @@ const (
     UnplayedSongWeight     = 1.5
     PlayRatioMinWeight     = 0.2
     PlayRatioMaxWeight     = 1.8
-    BaseTransitionWeight   = 0.5
-    MaxTransitionWeight    = 1.5  // Maximum transition weight
     ArtistRatioMinWeight   = 0.5  // Minimum weight for unpopular artists ✅ **NEW**
     ArtistRatioMaxWeight   = 1.5  // Maximum weight for popular artists ✅ **NEW**
     // Bayesian prior parameters for Beta-Binomial model ✅ **NEW**
@@ -360,7 +327,7 @@ The shuffle service now includes comprehensive thread safety:
 ### Mutex Protection
 - **RWMutex**: Uses `sync.RWMutex` for optimal read/write performance
 - **Write Protection**: `SetLastPlayed()` and `SetLastStarted()` use exclusive locks (`Lock()/Unlock()`)  
-- **Read Protection**: `CheckForSkip()` and `calculateTransitionWeight()` use shared locks (`RLock()/RUnlock()`)
+- **Read Protection**: `CheckForSkip()` and `GetLastPlayedSong()` use shared locks (`RLock()/RUnlock()`)
 - **Concurrent Users**: Multiple users can safely access the service simultaneously
 
 ### Time-Based Skip Detection Methods ✅ **ENHANCED**
@@ -380,8 +347,7 @@ The shuffle service now includes comprehensive thread safety:
 #### Comprehensive Test Coverage
 - **Core Algorithm Tests**: `TestCalculateSongWeight()` with 6 scenarios covering all weight calculation paths
 - **Boundary Condition Tests**: `TestCalculateSongWeightBoundaryConditions()` with extreme values and edge cases
-- **Transition Weight Tests**: `TestCalculateSongWeightWithTransition()` with pre-computed probabilities
-- **Component Tests**: Individual tests for time decay, play/skip ratio, and transition weights
+- **Component Tests**: Individual tests for time decay, play/skip ratio, and artist weights
 - **Integration Tests**: Full shuffle workflow testing with various library sizes
 - **Time-Based Skip Detection Tests**: ✅ **UPDATED** - `TestProcessScrobbleTimeBasedSkipDetection()` with 7 scenarios:
   - Skip recorded when time < 2x song duration
@@ -396,7 +362,6 @@ The shuffle service now includes comprehensive thread safety:
 - **Never played songs**: Validates maximum weight boost (2.0 × 1.5 × 1.0 = 3.0)
 - **Recently played songs**: Tests time decay with high play ratios
 - **Frequently skipped songs**: Validates low weights despite song age
-- **Transition history**: Tests weight boost from previous song relationships
 - **Mixed play/skip history**: Validates balanced weight calculations
 - **Boundary cases**: 30-day threshold testing for time decay transitions
 - **Extreme values**: Million-count plays/skips, ancient dates, very recent plays

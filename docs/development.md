@@ -81,7 +81,6 @@ go test ./credentials -run="Network"  # Network failure scenarios
 # Run enhanced shuffle algorithm tests
 go test ./shuffle -v -run="TestCalculateSongWeight"  # Core weight calculation tests
 go test ./shuffle -v -run="TestCalculateSongWeightBoundaryConditions"  # Edge case tests
-go test ./shuffle -v -run="TestCalculateSongWeightWithTransition"  # Transition weight tests
 
 # Run benchmarks
 go test ./shuffle/... -bench=BenchmarkShuffle -benchtime=3s
@@ -112,7 +111,7 @@ rm subsoxy
 - **Mathematical Validation**: Precise weight calculations with tolerance checking
 - **Edge Case Coverage**: Zero values, extreme counts, ancient timestamps, recent plays
 - **Finite Validation**: Ensures all weights are positive, finite, and within bounds
-- **Component Testing**: Individual validation of time decay, play/skip ratios, transitions
+- **Component Testing**: Individual validation of time decay, play/skip ratios, artist weights
 - **Scenario Coverage**: Never played, recently played, skipped, mixed history songs
 - **Boundary Testing**: 30-day thresholds, million-count extremes, 10-year-old dates
 
@@ -155,22 +154,22 @@ time curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=1000&
 # Access debug UI in browser to visualize song weights
 open "http://localhost:8080/debug?u=testuser&p=testpass"
 
-# Access with specific reference track for transition weight analysis
+# Access with specific reference track for similarity weight analysis
 open "http://localhost:8080/debug?u=testuser&p=testpass&id=songID"
 
 # Debug UI shows:
 # - All songs with calculated weights
-# - Individual weight components (time decay, play/skip ratio, transition probability, artist weight)
+# - Individual weight components (time decay, play/skip ratio, artist weight, similarity weight)
 # - Color-coded weight visualization (high/medium/low)
 # - Interactive song IDs that can be clicked to set as reference track
 # - Highlighted reference track with blue background
-# - Dynamic transition weight calculation based on selected reference track
+# - Similarity weights calculated relative to the selected reference track
 # - Raw counts (play/skip) and time-decayed adjusted values for each song
 # - Last played/skipped timestamps
 
 # Interactive Features:
 # - Click any song ID to set it as the reference track
-# - Transition weights update to show probability of following the selected track
+# - Similarity weights update to show which songs sound like the selected track
 # - Reference track is visually highlighted in the table
 # - Authentication parameters are preserved when clicking song IDs
 ```
@@ -196,9 +195,9 @@ The server includes built-in hooks for:
 - `/rest/ping` - Logs ping requests
 - `/rest/getLicense` - Logs license requests
 - `/rest/stream` - Records song start events for play tracking
-- `/rest/scrobble` - Records song play/skip events and updates transition data
+- `/rest/scrobble` - Records song play/skip events and updates play statistics
 - `/rest/getRandomSongs` - Returns weighted shuffle of songs based on play history and preferences
-- `/debug` - Interactive HTML UI for visualizing song weights with clickable IDs for transition analysis (only enabled with `-debug-mode` flag or `DEBUG=1`)
+- `/debug` - Interactive HTML UI for visualizing song weights with clickable IDs for similarity analysis (only enabled with `-debug-mode` flag or `DEBUG=1`)
 
 ### Adding Custom Hooks
 

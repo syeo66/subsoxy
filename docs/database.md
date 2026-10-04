@@ -1,6 +1,6 @@
 # Database Features
 
-The server automatically creates and manages a SQLite3 database with advanced connection pooling to track song play statistics and build transition probability analysis for song sequences.
+The server automatically creates and manages a SQLite3 database with advanced connection pooling to track per-user song play statistics.
 
 ## Database Connection Pooling ✅
 
@@ -84,16 +84,10 @@ The database connection pool includes proper goroutine lifecycle management:
 - `song_id` (TEXT): Reference to the song within user context
 - `event_type` (TEXT): Type of event (start, play, skip)
 - `timestamp` (DATETIME): When the event occurred
-- `previous_song` (TEXT): ID of the previously played song by this user (for transition tracking)
+- `previous_song` (TEXT): ID of the previously played song by this user
 
-### song_transitions (Multi-Tenant)
-- `user_id` (TEXT): User identifier for data isolation
-- `from_song_id` (TEXT): ID of the song that was playing before (within user context)
-- `to_song_id` (TEXT): ID of the song that started playing (within user context)
-- `play_count` (INTEGER): Number of times this transition resulted in a play for this user
-- `skip_count` (INTEGER): Number of times this transition resulted in a skip for this user
-- `probability` (REAL): Calculated probability of playing (vs skipping) this transition for this user
-- **PRIMARY KEY**: `(user_id, from_song_id, to_song_id)` for per-user transition isolation
+### song_transitions (removed)
+Earlier versions tracked song-to-song transitions in this table. It grew quadratically with library size while rarely affecting the shuffle, so it was removed. On startup the table, its indexes and any `song_transitions_backup` copy are dropped if present, followed by a `VACUUM` to reclaim the disk space.
 
 ### artist_stats (Multi-Tenant) ✅ **NEW**
 - `user_id` (TEXT): User identifier for data isolation
@@ -108,7 +102,6 @@ The database connection pool includes proper goroutine lifecycle management:
 - **Performance Optimized**: User-specific indexes on all tables
   - `idx_songs_user_id` on songs(user_id)
   - `idx_play_events_user_id` on play_events(user_id)
-  - `idx_song_transitions_user_id` on song_transitions(user_id)
   - `idx_artist_stats_user_id` on artist_stats(user_id) ✅ **NEW**
   - `idx_artist_stats_artist` on artist_stats(artist) ✅ **NEW**
 - **Query Optimization**: All database operations filter by user_id for optimal performance
@@ -265,7 +258,6 @@ WHERE adjusted_plays = 0.0 AND adjusted_skips = 0.0
 - **Directory Traversal Sync ✅ NEW**: Uses proper Subsonic API methodology (`getMusicFolders` → `getIndexes` → `getMusicDirectory`) for reliable and complete library discovery
 - **Differential Sync with Accurate Change Detection ✅ ENHANCED**: Only counts songs as "updated" when metadata actually changes, provides precise sync statistics with added/updated/unchanged/deleted counts
 - **Per-User Play Tracking**: Records when songs are started, played completely, or skipped with complete user isolation
-- **User-Specific Transition Probability Analysis**: Builds transition probabilities between songs for each user independently
 - **Isolated Historical Data**: Maintains complete event history for analysis per user
 
 ## Multi-Tenant Data Collection
@@ -274,7 +266,6 @@ The system automatically tracks per user:
 - User credentials from client requests and validates them against the upstream server with user context
 - When a song starts playing (`/rest/stream` endpoint) - recorded with user ID
 - When a song is marked as played or skipped (`/rest/scrobble` endpoint) - tracked per user
-- Transitions between songs for building personalized recommendation data per user
 
 ## User Isolation Benefits
 

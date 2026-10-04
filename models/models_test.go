@@ -116,32 +116,6 @@ func TestPlayEventWithNilPreviousSong(t *testing.T) {
 	}
 }
 
-func TestSongTransitionStructure(t *testing.T) {
-	transition := SongTransition{
-		FromSongID:  "123",
-		ToSongID:    "456",
-		PlayCount:   10,
-		SkipCount:   2,
-		Probability: 0.85,
-	}
-
-	if transition.FromSongID != "123" {
-		t.Errorf("SongTransition.FromSongID = %s, want %s", transition.FromSongID, "123")
-	}
-	if transition.ToSongID != "456" {
-		t.Errorf("SongTransition.ToSongID = %s, want %s", transition.ToSongID, "456")
-	}
-	if transition.PlayCount != 10 {
-		t.Errorf("SongTransition.PlayCount = %d, want %d", transition.PlayCount, 10)
-	}
-	if transition.SkipCount != 2 {
-		t.Errorf("SongTransition.SkipCount = %d, want %d", transition.SkipCount, 2)
-	}
-	if transition.Probability != 0.85 {
-		t.Errorf("SongTransition.Probability = %f, want %f", transition.Probability, 0.85)
-	}
-}
-
 func TestWeightedSongStructure(t *testing.T) {
 	song := Song{
 		ID:     "123",

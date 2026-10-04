@@ -109,12 +109,12 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 ```
 
 ### Debug Handler ✅ **ENHANCED**
-Interactive HTML UI handler for visualizing song weights and analyzing transition probabilities (only enabled with `-debug-mode` flag or `DEBUG=1`).
+Interactive HTML UI handler for visualizing song weights and their components (only enabled with `-debug-mode` flag or `DEBUG=1`).
 
 ```go
 func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint string) bool {
     userID := r.URL.Query().Get("u")
-    referenceSongID := r.URL.Query().Get("id") // Optional: song to use for transition analysis
+    referenceSongID := r.URL.Query().Get("id") // Optional: reference song for similarity analysis
     password := r.URL.Query().Get("p")
 
     // Get all songs with their calculated weights
@@ -125,10 +125,10 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
     }
 
     // Generate HTML UI with clickable song IDs
-    // - Shows all weight components (time, play/skip, transition, artist)
+    // - Shows all weight components (time, play/skip, artist, similarity)
     // - Song IDs are clickable to set as reference track
     // - Reference track is highlighted with blue background
-    // - Transition weights calculated from selected reference track
+    // - Similarity weights calculated from selected reference track
     // - Color-coded weight visualization (high/medium/low)
 
     w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -138,10 +138,10 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 ```
 
 **Features:**
-- **Clickable Song IDs**: Click any song ID to set it as the reference track for transition weight analysis
-- **Interactive Transition Analysis**: View how likely each song is to follow a selected reference track
+- **Clickable Song IDs**: Click any song ID to set it as the reference track for similarity weight analysis
+- **Interactive Similarity Analysis**: View which songs are acoustically similar to a selected reference track
 - **Visual Highlighting**: Reference track is highlighted with blue background
-- **Dynamic Weight Calculation**: Transition weights update based on selected reference track
+- **Dynamic Weight Calculation**: Similarity weights update based on selected reference track
 - **Persistent Authentication**: Password parameter preserved when clicking song IDs
 - **Color-Coded Weights**: High (green), medium (yellow), low (red) weight visualization
 - **Detailed Components**: Shows individual weight components for debugging
@@ -149,7 +149,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 **URL Parameters:**
 - `u` (required): User ID for authentication
 - `p` (optional): Password for authentication
-- `id` (optional): Song ID to use as reference track for transition weight calculation
+- `id` (optional): Song ID to use as reference track for similarity weight calculation (defaults to the last played track)
 ```
 
 ## API

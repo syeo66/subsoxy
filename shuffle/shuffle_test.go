@@ -285,61 +285,6 @@ func TestCalculatePlaySkipWeight(t *testing.T) {
 	}
 }
 
-func TestCalculateTransitionWeight(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := database.New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	service := New(db, logger)
-
-	// Test with no last played song
-	weight := service.calculateTransitionWeight("testuser", "123")
-	if weight != 1.0 {
-		t.Errorf("Expected weight 1.0 when no last played song, got %.2f", weight)
-	}
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Set last played song
-	service.SetLastPlayed("testuser", &songs[0])
-
-	// Test with no transition data (should return 1.0)
-	weight = service.calculateTransitionWeight("testuser", "2")
-	if weight != 1.0 {
-		t.Errorf("Expected weight 1.0 when no transition data, got %.2f", weight)
-	}
-
-	// Record a transition
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	// Test with transition data
-	weight = service.calculateTransitionWeight("testuser", "2")
-	expected := 0.5 + 1.0 // 0.5 base + 1.0 probability
-	if weight != expected {
-		t.Errorf("Expected weight %.2f with transition data, got %.2f", expected, weight)
-	}
-}
-
 func TestCalculateSongWeight(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -378,7 +323,7 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 4.0 * 1.5 * 1.0, // baseWeight * timeWeight * playSkipWeight * transitionWeight
+			expectedWeight: 1.0 * 4.0 * 1.5 * 1.0, // baseWeight * timeWeight * playSkipWeight * artistWeight
 			tolerance:      0.001,
 			description:    "Never played song with no history should get maximum weight boost",
 		},
@@ -421,42 +366,6 @@ func TestCalculateSongWeight(t *testing.T) {
 			expectedWeight: 1.0 * 1.164 * 0.543 * 1.0, // Old song with bad skip ratio (Bayesian regularization)
 			tolerance:      0.1,
 			description:    "Frequently skipped song gets moderate penalty with Bayesian regularization",
-		},
-		{
-			name: "Song with transition history",
-			song: models.Song{
-				ID:         "song4",
-				Title:      "Test Song 4",
-				Artist:     "Test Artist",
-				Album:      "Test Album",
-				Duration:   300,
-				LastPlayed: time.Time{}, // Never played
-				PlayCount:  0,
-				SkipCount:  0,
-			},
-			setupFunc: func() {
-				// Store songs in database
-				testSongs := []models.Song{
-					{ID: "prev_song", Title: "Previous Song", Artist: "Artist", Album: "Album", Duration: 300},
-					{ID: "song4", Title: "Test Song 4", Artist: "Test Artist", Album: "Test Album", Duration: 300},
-				}
-				err := db.StoreSongs("testuser", testSongs)
-				if err != nil {
-					t.Errorf("Failed to store songs: %v", err)
-				}
-
-				// Set last played song
-				service.SetLastPlayed("testuser", &testSongs[0])
-
-				// Record a transition with high probability
-				err = db.RecordTransition("testuser", "prev_song", "song4", "play")
-				if err != nil {
-					t.Errorf("Failed to record transition: %v", err)
-				}
-			},
-			expectedWeight: 1.0 * 4.0 * 1.5 * 1.5, // Never played song with good transition history
-			tolerance:      0.001,
-			description:    "Song with strong transition history should get boosted weight",
 		},
 		{
 			name: "Old song with mixed history",
@@ -606,73 +515,6 @@ func TestCalculateSongWeightBoundaryConditions(t *testing.T) {
 	}
 }
 
-func TestCalculateSongWeightWithTransition(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test_transition.db"
-	defer os.Remove(dbPath)
-
-	db, err := database.New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	service := New(db, logger)
-
-	song := models.Song{
-		ID:         "test_song",
-		LastPlayed: time.Time{},
-		PlayCount:  0,
-		SkipCount:  0,
-	}
-
-	tests := []struct {
-		name                  string
-		transitionProbability float64
-		expectedWeight        float64
-		description           string
-	}{
-		{
-			name:                  "No transition data",
-			transitionProbability: 0.0,
-			expectedWeight:        1.0 * 4.0 * 1.5 * 1.0, // Default transition weight is 1.0
-			description:           "Song with no transition data should use default weight",
-		},
-		{
-			name:                  "Low transition probability",
-			transitionProbability: 0.2,
-			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 0.2), // BaseTransitionWeight + probability
-			description:           "Song with low transition probability should get modest boost",
-		},
-		{
-			name:                  "High transition probability",
-			transitionProbability: 0.8,
-			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 0.8), // BaseTransitionWeight + probability
-			description:           "Song with high transition probability should get significant boost",
-		},
-		{
-			name:                  "Perfect transition probability",
-			transitionProbability: 1.0,
-			expectedWeight:        1.0 * 4.0 * 1.5 * (0.5 + 1.0), // BaseTransitionWeight + probability
-			description:           "Song always follows previous song should get maximum transition boost",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateSongWeightWithTransition("testuser", song, tt.transitionProbability, nil)
-
-			tolerance := 0.001
-			if weight < tt.expectedWeight-tolerance || weight > tt.expectedWeight+tolerance {
-				t.Errorf("%s: expected weight %.3f, got %.3f",
-					tt.description, tt.expectedWeight, weight)
-			}
-		})
-	}
-}
-
 // Helper function to check if a float64 is finite
 func isFinite(f float64) bool {
 	return !math.IsInf(f, 0) && !math.IsNaN(f)
@@ -799,57 +641,6 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 	}
 }
 
-func TestGetWeightedShuffledSongsWithTransitions(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := database.New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	service := New(db, logger)
-
-	// Store test songs
-	testSongs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 200},
-	}
-
-	err = db.StoreSongs("testuser", testSongs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Set last played song
-	service.SetLastPlayed("testuser", &testSongs[0])
-
-	// Record transitions
-	err = db.RecordTransition("testuser", "1", "2", "play")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	err = db.RecordTransition("testuser", "1", "3", "skip")
-	if err != nil {
-		t.Errorf("Failed to record transition: %v", err)
-	}
-
-	// Test that songs are returned with transition weighting
-	songs, err := service.GetWeightedShuffledSongs("testuser", 2)
-	if err != nil {
-		t.Errorf("Failed to get shuffled songs: %v", err)
-	}
-	if len(songs) != 2 {
-		t.Errorf("Expected 2 songs, got %d", len(songs))
-	}
-}
-
 func TestGetWeightedShuffledSongsConsistency(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -961,7 +752,7 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
 
-	// Test concurrent access to SetLastPlayed and calculateTransitionWeight
+	// Test concurrent access to SetLastPlayed and GetLastPlayedSong
 	const numGoroutines = 100
 	const numIterations = 10
 
@@ -978,10 +769,9 @@ func TestConcurrentAccess(t *testing.T) {
 				songIndex := (goroutineID + j) % len(songs)
 				service.SetLastPlayed(userID, &songs[songIndex])
 
-				// Concurrent calculateTransitionWeight calls (reads lastPlayed)
-				weight := service.calculateTransitionWeight(userID, songs[songIndex].ID)
-				if weight < 0 {
-					t.Errorf("Invalid weight: %f", weight)
+				// Concurrent GetLastPlayedSong calls (reads lastPlayed)
+				if lp := service.GetLastPlayedSong(userID); lp == nil {
+					t.Error("Expected a last played song")
 				}
 			}
 		}(i)
@@ -1073,15 +863,15 @@ func TestCalculateArtistWeight(t *testing.T) {
 		description string
 	}{
 		{
-			name:     "Great artist (all plays)",
-			artist:   "Great Artist",
-			expected: 1.239, // Bayesian: (6.513+3.540)/(6.513+0+3.540+3.540) = 10.053/13.593 = 0.739 → 0.5 + 0.739*1.0 = 1.239
+			name:        "Great artist (all plays)",
+			artist:      "Great Artist",
+			expected:    1.239, // Bayesian: (6.513+3.540)/(6.513+0+3.540+3.540) = 10.053/13.593 = 0.739 → 0.5 + 0.739*1.0 = 1.239
 			description: "Artist with all plays gets regularized weight (Bayesian prevents extreme 1.5x)",
 		},
 		{
-			name:     "Poor artist (all skips)",
-			artist:   "Poor Artist",
-			expected: 0.739, // Bayesian: (0+3.540)/(0+6.513+3.540+3.540) = 3.540/13.593 = 0.260 → 0.5 + 0.260*1.0 = 0.760
+			name:        "Poor artist (all skips)",
+			artist:      "Poor Artist",
+			expected:    0.739, // Bayesian: (0+3.540)/(0+6.513+3.540+3.540) = 3.540/13.593 = 0.260 → 0.5 + 0.260*1.0 = 0.760
 			description: "Artist with all skips gets regularized weight (Bayesian prevents extreme 0.5x)",
 		},
 		{
@@ -1091,9 +881,9 @@ func TestCalculateArtistWeight(t *testing.T) {
 			description: "Artist with no history should get 1.0 (neutral) weight",
 		},
 		{
-			name:     "Average artist (50% play ratio)",
-			artist:   "Average Artist",
-			expected: 0.957, // Bayesian: (4.108+3.540)/(4.108+4.108+3.540+3.540) = 7.648/15.296 = 0.500 → 0.5 + 0.457*1.0 ≈ 0.957
+			name:        "Average artist (50% play ratio)",
+			artist:      "Average Artist",
+			expected:    0.957, // Bayesian: (4.108+3.540)/(4.108+4.108+3.540+3.540) = 7.648/15.296 = 0.500 → 0.5 + 0.457*1.0 ≈ 0.957
 			description: "Artist with 50% play ratio should get ~1.0x weight (slightly lower due to decay reducing sample size)",
 		},
 	}
@@ -1411,8 +1201,8 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 
 	// Store test songs with specific durations
 	songs := []models.Song{
-		{ID: "song1", Title: "Short Song", Artist: "Artist 1", Album: "Album 1", Duration: 60},  // 1 minute
-		{ID: "song2", Title: "Long Song", Artist: "Artist 2", Album: "Album 2", Duration: 300},  // 5 minutes
+		{ID: "song1", Title: "Short Song", Artist: "Artist 1", Album: "Album 1", Duration: 60},   // 1 minute
+		{ID: "song2", Title: "Long Song", Artist: "Artist 2", Album: "Album 2", Duration: 300},   // 5 minutes
 		{ID: "song3", Title: "Medium Song", Artist: "Artist 3", Album: "Album 3", Duration: 180}, // 3 minutes
 		{ID: "song4", Title: "No Duration", Artist: "Artist 4", Album: "Album 4", Duration: 0},   // No duration
 	}

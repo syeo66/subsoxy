@@ -55,7 +55,7 @@ Your `/rest/getRandomSongs` requests now return personalized recommendations ins
 - **Bayesian Weighting**: ✅ **NEW** - Uses statistical Bayesian approach for fair song scoring that handles uncertainty in small samples
 - **Artist Preferences**: ✅ **NEW** - Learns which artists you prefer and boosts/reduces songs accordingly
 - **2-Week Replay Prevention**: Songs are strictly excluded for 14 days after being played OR skipped with consistent timing and robust filtering
-- **Smart Transitions**: Considers song flow and your listening patterns
+- **Smart Flow**: Favors songs acoustically similar to what you just played (when AudioMuse-AI is available on the upstream server)
 - **Individual Learning**: Each user gets their own personalized experience
 - **Cover Art Included**: Full cover art support in both JSON and XML responses
 

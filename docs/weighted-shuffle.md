@@ -91,7 +91,6 @@ The shuffle system automatically adapts to library size for optimal performance:
 ### Performance Benefits
 - **Memory Efficiency**: ~90% reduction in memory usage for large libraries
 - **Scalability**: Handles libraries with 100,000+ songs without memory exhaustion
-- **Batch Database Queries**: Single query for all transition probabilities (eliminates N+1 query problem)
 - **Automatic Algorithm Selection**: Seamlessly switches algorithms based on library size
 - **Thread Safety**: Maintained with optimized concurrent access patterns
 
@@ -102,8 +101,7 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 1. **Never-Presented Boost**: Songs that have never been played OR skipped receive a 4.0x weight multiplier to encourage discovery
 2. **User-Specific Time Decay**: ✅ **ENHANCED** - Uses the most recent timestamp between last_played and last_skipped to accurately track when a song was presented to the listener. Recently presented songs (within 30 days) receive lower weights to encourage variety
 3. **Per-User Play/Skip Ratio with Bayesian Categorization**: ✅ **ENHANCED** - Uses Bayesian Beta-Binomial model for robust weight calculation that handles uncertainty in small sample sizes. Songs with better play-to-skip ratios for this specific user are more likely to be selected, with conservative estimates for songs with few plays/skips
-4. **User-Specific Transition Probabilities**: Uses transition data from this user's listening history to prefer songs that historically follow well from their last played song
-5. **Artist Preference Weighting**: ✅ **NEW** - Artists with better play/skip ratios for this user receive higher weight multipliers (0.5x to 1.5x)
+4. **Artist Preference Weighting**: ✅ **NEW** - Artists with better play/skip ratios for this user receive higher weight multipliers (0.5x to 1.5x)
 
 ## Database Performance Optimizations ✅ **UPDATED**
 
@@ -111,7 +109,6 @@ The shuffle algorithm calculates a weight for each song **per user** based on:
 - **`GetSongsBatch()`**: Pagination support with LIMIT/OFFSET for memory-efficient processing
 - **`GetSongsBatchFiltered()`**: ✅ **NEW** - Time-based filtering at database level for 2-week replay prevention
 - **`GetSongCountFiltered()`**: ✅ **NEW** - Efficient counting of songs outside replay window
-- **`GetTransitionProbabilities()`**: Batch probability queries eliminate N+1 query problems
 - **Prepared Statements**: Optimized query performance with connection pooling
 
 ## Multi-Tenant Usage
@@ -152,7 +149,6 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
 - **2-Week Replay Prevention**: ✅ **ENHANCED** - Each user's songs are strictly prevented from replaying for 14 days after being played OR skipped individually
 - **User-Specific Repetition Reduction**: Recently played songs by each user are excluded from their shuffle for 14 days
 - **Individual Preference Learning**: Songs each user tends to play (vs skip) are weighted higher for that user only
-- **Per-User Context Awareness**: Considers what song was played previously by each user for smoother transitions
 - **Individual Discovery**: New and unplayed songs get a boost per user to encourage personalized exploration
 - **Artist-Level Learning**: ✅ **NEW** - Learns each user's artist preferences and boosts/reduces songs accordingly
 - **Complete Isolation**: User recommendations don't affect each other's shuffle algorithms
@@ -177,9 +173,8 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&t=token&s=salt&c=subsoxy
    - **Range**: 0.2x to 1.8x based on Bayesian-smoothed play ratio with decayed counts
    - **Benefits**: Conservative estimates for songs with few observations, converges to true ratio with more data, emphasizes recent behavior
    - **Example**: Song with 10 recent plays gets ~6.513 adjusted weight (geometric series convergence), older plays contribute progressively less
-5. **Transition Probability Weight**: Uses probabilities from user's last played song
-6. **Artist Preference Weight with Exponential Decay**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio using time-decayed adjusted values aggregated from all artist's songs
-7. **Final Weight**: All factors multiplied together per user
+5. **Artist Preference Weight with Exponential Decay**: ✅ **NEW** - Multiplies by 0.5x to 1.5x based on user's artist play/skip ratio using time-decayed adjusted values aggregated from all artist's songs
+6. **Final Weight**: All factors multiplied together per user
 
 ### Memory-Efficient Implementation
 

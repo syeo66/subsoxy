@@ -31,14 +31,6 @@ type PlayEvent struct {
 	PreviousSong *string   `json:"previousSong,omitempty"`
 }
 
-type SongTransition struct {
-	FromSongID  string  `json:"fromSongId"`
-	ToSongID    string  `json:"toSongId"`
-	PlayCount   int     `json:"playCount"`
-	SkipCount   int     `json:"skipCount"`
-	Probability float64 `json:"probability"`
-}
-
 type ArtistStats struct {
 	UserID    string  `json:"userId"`
 	Artist    string  `json:"artist"`

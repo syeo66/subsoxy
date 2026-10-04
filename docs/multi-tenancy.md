@@ -8,7 +8,6 @@ The proxy implements **complete multi-tenancy** with full user data isolation at
 - **User-Specific Libraries**: Isolated song collections per user
 - **Isolated Play History**: Play/skip events tracked per user with no data bleeding
 - **Per-User Statistics**: Play counts, skip counts, last played timestamps, last skipped timestamps
-- **Isolated Transition Data**: Song transition probabilities calculated independently
 - **Per-User Shuffle**: Weighted recommendations based on individual preferences
 
 ### Database Schema
@@ -35,19 +34,10 @@ The proxy implements **complete multi-tenancy** with full user data isolation at
 - `timestamp` (DATETIME): When the event occurred
 - `previous_song` (TEXT): ID of the previously played song by this user
 
-**song_transitions**: Primary key `(user_id, from_song_id, to_song_id)` - isolated transitions
-- `user_id` (TEXT): User identifier for data isolation
-- `from_song_id` (TEXT): ID of the song that was playing before
-- `to_song_id` (TEXT): ID of the song that started playing
-- `play_count` (INTEGER): Number of times this transition resulted in a play
-- `skip_count` (INTEGER): Number of times this transition resulted in a skip
-- `probability` (REAL): Calculated probability of playing vs skipping
-
 #### Performance Indexes
 Optimized `user_id` indexes on all tables:
 - `idx_songs_user_id` on songs(user_id)
 - `idx_play_events_user_id` on play_events(user_id)
-- `idx_song_transitions_user_id` on song_transitions(user_id)
 
 ## Features
 
@@ -62,7 +52,7 @@ Optimized `user_id` indexes on all tables:
 - **Precise Change Detection**: Only counts songs as "updated" when metadata actually changes (title, artist, album, duration, cover art)
 - **Accurate Sync Reporting**: Distinguishes between new, updated, unchanged, and deleted songs with precise counts
 - **Data Preservation**: Preserves user listening history (play counts, skip counts, last played timestamps, last skipped timestamps) for existing songs during sync
-- **Historical Data Integrity**: Maintains play events and transition data as historical records even when songs are removed
+- **Historical Data Integrity**: Maintains play events as historical records even when songs are removed
 - **Efficient Algorithm**: Uses map-based comparison combined with metadata comparison to identify actual changes
 - **Performance Optimization**: Fetches existing songs in batches for efficient metadata comparison
 - **Prevents Database Bloat**: Eliminates "zombie songs" that persist locally after removal from upstream library

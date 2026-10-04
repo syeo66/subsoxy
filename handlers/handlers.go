@@ -273,7 +273,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		return true
 	}
 
-	// Get optional reference song ID for transition weight calculation
+	// Get optional reference song ID for similarity weight calculation
 	referenceSongID := r.URL.Query().Get("id")
 	password := r.URL.Query().Get("p")
 
@@ -340,14 +340,8 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
 		<strong>Reference Track:</strong> ` + referenceSongInfo + `<br>
-		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Transition Weight × Artist Weight × Similarity Weight<br>
+		<strong>Weight Calculation:</strong> Base Weight × Time Weight × Play/Skip Weight (Bayesian) × Artist Weight × Similarity Weight<br>
 		<strong>Play/Skip Method:</strong> Empirical Bayesian Beta-Binomial (α, β calculated from user's listening patterns; fallback: α=2.0, β=2.0)<br>
-		<strong>Transition Weight:</strong> ` + func() string {
-		if referenceSongID != "" {
-			return "Based on transition probability from selected reference track"
-		}
-		return "Based on current last played track (click song ID to set reference)"
-	}() + `<br>
 		<strong>Similarity Weight:</strong> ` + func() string {
 		if len(similarSongs) > 0 {
 			return strconv.Itoa(len(similarSongs)) + " acoustically similar songs found (AudioMuse-AI)"
@@ -376,7 +370,6 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<th>Last Skipped</th>
 				<th class="num">Time Weight</th>
 				<th class="num">Play/Skip Weight</th>
-				<th class="num">Transition Weight</th>
 				<th class="num">Artist Weight</th>
 				<th class="num">Similarity Weight</th>
 				<th class="num">Final Weight</th>
@@ -399,16 +392,11 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 			lastSkipped = `<span class="date">` + song.LastSkipped.Format("2006-01-02 15:04:05") + `</span>`
 		}
 
-		// Calculate individual weight components based on whether we have a reference song
-		var timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight float64
-		if referenceSongID != "" {
-			timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight = h.shuffle.GetWeightComponentsWithTransition(userID, song, referenceSongID, similarSongs)
-		} else {
-			timeWeight, playSkipWeight, transitionWeight, artistWeight, similarityWeight = h.shuffle.GetWeightComponents(userID, song, similarSongs)
-		}
+		// Calculate individual weight components
+		timeWeight, playSkipWeight, artistWeight, similarityWeight := h.shuffle.GetWeightComponents(userID, song, similarSongs)
 
 		// Recalculate final weight with all components
-		finalWeight := 1.0 * timeWeight * playSkipWeight * transitionWeight * artistWeight * similarityWeight
+		finalWeight := 1.0 * timeWeight * playSkipWeight * artistWeight * similarityWeight
 
 		// Determine row class based on final weight
 		rowClass := ""
@@ -445,7 +433,6 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td>` + lastSkipped + `</td>
 				<td class="num">` + strconv.FormatFloat(timeWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(playSkipWeight, 'f', 4, 64) + `</td>
-				<td class="num">` + strconv.FormatFloat(transitionWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(artistWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(similarityWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(finalWeight, 'f', 4, 64) + `</td>

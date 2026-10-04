@@ -5,7 +5,7 @@ The models module defines all data structures and types used throughout the appl
 ## Overview
 
 This module provides:
-- Core data structures for songs, events, and transitions
+- Core data structures for songs, events, and artist statistics
 - HTTP request/response types
 - Function type definitions
 - JSON marshaling tags
@@ -44,19 +44,6 @@ type PlayEvent struct {
     EventType   string    `json:"eventType"` // "play", "skip", "start"
     Timestamp   time.Time `json:"timestamp"`
     PreviousSong *string  `json:"previousSong,omitempty"`
-}
-```
-
-### SongTransition
-Tracks transition probabilities between songs.
-
-```go
-type SongTransition struct {
-    FromSongID string  `json:"fromSongId"`
-    ToSongID   string  `json:"toSongId"`
-    PlayCount  int     `json:"playCount"`
-    SkipCount  int     `json:"skipCount"`
-    Probability float64 `json:"probability"`
 }
 ```
 

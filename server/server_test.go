@@ -375,7 +375,7 @@ func TestRecordPlayEvent(t *testing.T) {
 		previousSong := "1"
 		server.RecordPlayEvent("testuser", "2", "play", &previousSong)
 
-		// Should record both play event and transition
+		// Should record the play event with its previous song
 	})
 
 	t.Run("Record skip event", func(t *testing.T) {
