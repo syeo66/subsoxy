@@ -1,286 +1,84 @@
-# Development Guide
+# Development
 
-This document provides information for developers working on the Subsonic proxy server.
+## Build and run
 
-## Project Structure
+Requires Go 1.25+ and a C toolchain (`mattn/go-sqlite3` uses CGO).
 
-```
-.
-├── main.go              # Application entry point
-├── config/              # Configuration management with validation
-│   ├── config.go        # Configuration struct and validation logic
-│   ├── config_test.go   # Configuration tests
-│   └── README.md        # Configuration documentation
-├── models/              # Data structures and types
-│   ├── models.go        # Core data models
-│   ├── models_test.go   # Model tests
-│   └── README.md        # Models documentation
-├── database/            # Database operations with error handling
-│   ├── database.go      # Database interface and operations
-│   ├── database_test.go # Database tests
-│   └── README.md        # Database documentation
-├── handlers/            # HTTP request handlers with validation
-│   ├── handlers.go      # HTTP endpoint handlers
-│   ├── handlers_test.go # Handler tests
-│   └── README.md        # Handlers documentation
-├── middleware/          # HTTP middleware components
-│   ├── security.go      # Security headers middleware
-│   ├── security_test.go # Security middleware tests
-│   └── README.md        # Middleware documentation
-├── server/              # Main server logic with error recovery
-│   ├── server.go        # Proxy server implementation
-│   ├── server_test.go   # Server tests
-│   └── README.md        # Server documentation
-├── credentials/         # Multi-mode authentication (password/token) with timeout protection
-│   ├── credentials.go   # Credential validation and storage
-│   ├── credentials_test.go # Credential tests
-│   └── README.md        # Credentials documentation
-├── shuffle/             # Weighted shuffling algorithm
-│   ├── shuffle.go       # Song shuffling logic
-│   ├── shuffle_test.go  # Shuffle tests
-│   └── README.md        # Shuffle documentation
-├── errors/              # Structured error handling
-│   ├── errors.go        # Error types and utilities
-│   ├── errors_test.go   # Error handling tests
-│   └── README.md        # Error handling documentation
-├── docs/                # Documentation
-│   ├── architecture.md  # System architecture
-│   ├── configuration.md # Configuration guide
-│   ├── database.md      # Database features
-│   ├── multi-tenancy.md # Multi-tenancy details
-│   ├── security.md      # Security features
-│   ├── weighted-shuffle.md # Shuffle algorithm
-│   └── development.md   # This file
-├── go.mod               # Go module definition
-├── go.sum               # Go module checksums
-├── CLAUDE.md            # Development guidance
-└── README.md            # Main documentation
-```
-
-## Building and Testing
-
-### Dependencies
 ```bash
-# Install dependencies
-go mod tidy
+make build          # go build -o subsoxy
+make test           # go test ./...
+make clean          # rm subsoxy
+./start_server.sh   # build to a temp file and run with dotenvx (.env)
 ```
 
-### Testing ✅ **ENHANCED**
+`.air.toml` is included for live reload with [air](https://github.com/air-verse/air). The `Dockerfile` builds a static binary, runs the tests in a separate stage, and produces an Alpine image. `make deploy` merges `main` into `stage` and pushes it.
+
+CI (`.github/workflows/go.yml`) builds and tests on every push and pull request to `main`.
+
+## Testing
+
 ```bash
-# Run all tests - all tests pass with comprehensive coverage (78.4%+ overall)
-go test ./...
+go test ./...                       # everything
+go test ./... -race                 # with the race detector (recommended before committing)
+go test ./... -coverprofile=c.out && go tool cover -html=c.out
 
-# Run tests with race detection (recommended)
-go test ./... -race
+# Focused runs
+go test ./shuffle -v -run TestCalculateSongWeight
+go test ./shuffle -v -run TestProcessScrobbleTimeBasedSkipDetection
+go test ./database -run ErrorHandling
+go test ./handlers -run BoundaryConditions
+go test ./credentials -run Network
 
-# Run specific test categories
-go test ./database -run="ErrorHandling"  # Database error scenarios
-go test ./handlers -run="BoundaryConditions"  # Input validation tests
-go test ./credentials -run="Network"  # Network failure scenarios
-
-# Run enhanced shuffle algorithm tests
-go test ./shuffle -v -run="TestCalculateSongWeight"  # Core weight calculation tests
-go test ./shuffle -v -run="TestCalculateSongWeightBoundaryConditions"  # Edge case tests
-
-# Run benchmarks
-go test ./shuffle/... -bench=BenchmarkShuffle -benchtime=3s
-go test ./shuffle/... -run=TestMemoryUsage -v
+# Performance
+go test ./shuffle -bench BenchmarkShuffle -benchtime 3s
+go test ./shuffle -run TestMemoryUsage -v
 ```
 
-### Building
+Tests use temporary SQLite files and `httptest` servers in place of a real upstream. If a run is interrupted, delete any leftover `test*.db` files.
+
+### Against a real server
+
 ```bash
-# Build the application
-go build -o subsoxy
-
-# Clean up build artifacts
-rm subsoxy
-```
-
-## Testing Strategies
-
-### Test Categories ✅ **ENHANCED**
-- **Algorithm Correctness**: Core shuffle weight calculations with mathematical precision validation
-- **Error Handling**: Complete database operation error scenarios with validation testing
-- **Boundary Conditions**: Input validation limits, edge cases, parameter validation, extreme values
-- **Security Testing**: SQL injection prevention, malicious input patterns
-- **Network Scenarios**: Timeouts, failures, slow responses, connection testing
-- **Concurrent Access**: Thread safety and race condition prevention verification
-- **Performance Testing**: Large datasets, memory efficiency, concurrent operations
-
-### Enhanced Weight Calculation Testing
-- **Mathematical Validation**: Precise weight calculations with tolerance checking
-- **Edge Case Coverage**: Zero values, extreme counts, ancient timestamps, recent plays
-- **Finite Validation**: Ensures all weights are positive, finite, and within bounds
-- **Component Testing**: Individual validation of time decay, play/skip ratios, artist weights
-- **Scenario Coverage**: Never played, recently played, skipped, mixed history songs
-- **Boundary Testing**: 30-day thresholds, million-count extremes, 10-year-old dates
-
-### Multi-User Testing
-```bash
-# Test credentials and sync functionality
-go test ./credentials -v -run="TestGetAllValid"
-go test ./server -v -run="TestFetchAndStoreSongsMultiUser|TestSyncSongsForUserError|TestGetSortedUsernames"
-
-# Test immediate sync with fresh credentials (clears database first)
 rm -f subsoxy.db
-./subsoxy -upstream https://your-server.com -port 8081 &
-sleep 2
-curl -s "http://localhost:8081/rest/ping?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&f=json" | jq .
-# Check sync was triggered immediately
-sleep 10 && sqlite3 subsoxy.db "SELECT COUNT(*) FROM songs WHERE user_id = 'testuser1';"
+./subsoxy -upstream https://your-server -port 8081 -log-level debug &
 
-# Test multi-user endpoints with password authentication
-curl -s "http://localhost:8081/rest/ping?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&f=json" | jq .
-curl -s "http://localhost:8081/rest/getRandomSongs?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&size=5&f=json" | jq .
-curl -s "http://localhost:8081/rest/scrobble?u=testuser1&p=testpass1&v=1.15.0&c=subsoxy&id=song123&submission=true"
+# First request captures credentials and starts a sync right away
+curl -s "http://localhost:8081/rest/ping?u=me&p=secret&v=1.15.0&c=dev&f=json"
+sleep 10 && sqlite3 subsoxy.db "SELECT COUNT(*) FROM songs WHERE user_id='me';"
 
-# Test with token authentication (requires generating valid token/salt)
-curl -s "http://localhost:8081/rest/ping?u=testuser1&t=generatedtoken&s=randomsalt&v=1.15.0&c=subsoxy&f=json" | jq .
-curl -s "http://localhost:8081/rest/getRandomSongs?u=testuser1&t=generatedtoken&s=randomsalt&v=1.15.0&c=subsoxy&size=5&f=json" | jq .
+curl -s "http://localhost:8081/rest/getRandomSongs?u=me&p=secret&v=1.15.0&c=dev&size=5&f=json" | jq .
+curl -s "http://localhost:8081/rest/scrobble?u=me&p=secret&v=1.15.0&c=dev&id=SONG_ID&submission=true"
+
+# CORS
+curl -i -X OPTIONS -H "Origin: http://localhost:3000" -H "Access-Control-Request-Method: GET" http://localhost:8081/rest/ping
 ```
 
-### Performance Testing
-```bash
-# Test performance with curl
-curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=50&f=json" | jq '.["subsonic-response"].songs.song | length'
-time curl -s "http://localhost:8080/rest/getRandomSongs?u=user&p=pass&size=1000&f=json" > /dev/null
+## Debug UI
+
+Start with `-debug-mode` (or `DEBUG=1`) and open:
+
+```
+http://localhost:8080/debug?u=USER&p=PASSWORD[&id=SONG_ID]
 ```
 
-### Debug Endpoint Testing
-```bash
-# Start server with debug mode enabled
-./subsoxy -debug-mode &
+The page lists every song with its final weight and each factor (time, play/skip, artist, similarity), color-coded high/medium/low. It also shows raw and adjusted play/skip counts and the last played/skipped times. Similarity is measured against `id`, or against the last played track if `id` is missing. Click a song ID to make it the reference, and the password is carried over in the link. See [Security](security.md#debug-endpoint) before turning this on anywhere public.
 
-# Access debug UI in browser to visualize song weights
-open "http://localhost:8080/debug?u=testuser&p=testpass"
-
-# Access with specific reference track for similarity weight analysis
-open "http://localhost:8080/debug?u=testuser&p=testpass&id=songID"
-
-# Debug UI shows:
-# - All songs with calculated weights
-# - Individual weight components (time decay, play/skip ratio, artist weight, similarity weight)
-# - Color-coded weight visualization (high/medium/low)
-# - Interactive song IDs that can be clicked to set as reference track
-# - Highlighted reference track with blue background
-# - Similarity weights calculated relative to the selected reference track
-# - Raw counts (play/skip) and time-decayed adjusted values for each song
-# - Last played/skipped timestamps
-
-# Interactive Features:
-# - Click any song ID to set it as the reference track
-# - Similarity weights update to show which songs sound like the selected track
-# - Reference track is visually highlighted in the table
-# - Authentication parameters are preserved when clicking song IDs
-```
-
-### CORS Testing
-```bash
-# Test CORS headers
-curl -H "Origin: http://localhost:3000" -i http://localhost:8080/rest/ping
-curl -X OPTIONS -H "Origin: http://localhost:3000" -H "Access-Control-Request-Method: GET" -i http://localhost:8080/rest/ping
-```
-
-## Hook System
-
-The proxy includes a hook system that allows you to intercept requests at specific endpoints. Hooks are functions that can:
-
-- Log or monitor specific API calls
-- Block requests (return `true` to prevent forwarding)
-- Allow requests to continue (return `false` to forward normally)
-
-### Built-in Hooks
-
-The server includes built-in hooks for:
-- `/rest/ping` - Logs ping requests
-- `/rest/getLicense` - Logs license requests
-- `/rest/stream` - Records song start events for play tracking
-- `/rest/scrobble` - Records song play/skip events and updates play statistics
-- `/rest/getRandomSongs` - Returns weighted shuffle of songs based on play history and preferences
-- `/debug` - Interactive HTML UI for visualizing song weights with clickable IDs for similarity analysis (only enabled with `-debug-mode` flag or `DEBUG=1`)
-
-### Adding Custom Hooks
+## Adding a hook
 
 ```go
-server.AddHook("/rest/getArtists", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-    // Your custom logic here
-    log.Printf("Artist list requested by %s", r.RemoteAddr)
-    return false // Continue with normal proxy behavior
+proxyServer.AddHook("/rest/getArtists", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+    logger.Info("artists requested")
+    return false // false = keep proxying, true = this hook wrote the response
 })
 ```
 
-## Error Handling
+Put the logic in a `handlers` method, register it in `main.go`, validate inputs with `handlers.ValidateSongID` and similar helpers, and pass anything user-supplied through `SanitizeForLogging` before logging it.
 
-The application implements comprehensive structured error handling with Go 1.13+ compatibility:
+## Conventions
 
-### Error Categories
-
-Errors are categorized for better debugging and monitoring:
-
-- **`config`**: Configuration validation errors (invalid ports, URLs, etc.)
-- **`database`**: Database connection, query, and transaction errors
-- **`credentials`**: Authentication and credential validation errors
-- **`server`**: Server startup, shutdown, and proxy errors
-- **`network`**: Upstream server connectivity and timeout errors
-- **`validation`**: Input validation and parameter errors
-
-### Go 1.13+ Compatibility
-
-The application uses modern Go error handling with full Go 1.13+ compatibility:
-
-- **Error Wrapping**: Proper error chains with `Unwrap()` support
-- **Error Comparison**: `Is()` method for error type comparison
-- **Error Unwrapping**: `As()` method for extracting specific error types
-- **Error Navigation**: Helper functions for traversing error chains
-
-### Error Recovery
-
-The application implements graceful error recovery:
-
-- **Configuration errors**: Application exits with helpful error messages
-- **Database errors**: Operations are retried or gracefully degraded
-- **Network errors**: Automatic retry with exponential backoff
-- **Credential errors**: Invalid credentials are automatically cleaned up
-- **Input validation**: Invalid requests return appropriate HTTP error codes
-
-## Code Style and Conventions
-
-### Go Best Practices
-- Follow standard Go formatting with `go fmt`
-- Use descriptive variable and function names
-- Include comprehensive error handling
-- Write unit tests for all new functionality
-- Use structured logging with context
-
-### Security Best Practices
-- Never log passwords or sensitive data
-- Use `url.Values{}` for URL parameter encoding
-- Follow established error handling patterns
-- Test security fixes thoroughly
-- Keep credentials in structured, protected storage
-
-### Testing Best Practices ✅ **ENHANCED**
-- Write tests for both happy path and error scenarios
-- Include boundary condition tests with extreme value validation
-- Test concurrent access patterns with race detection
-- Use table-driven tests where appropriate with comprehensive scenario coverage
-- Mock external dependencies for isolated testing
-- Validate mathematical correctness with tolerance checking
-- Ensure all calculated values are finite and within expected ranges
-- Test algorithm components individually and in integration
-
-## Contributing
-
-1. Ensure all tests pass: `go test ./... -race`
-2. Follow Go coding standards and project conventions
-3. Add tests for new functionality
-4. Update documentation as needed
-5. Run security and performance tests for critical changes
-
-## Maintenance Reminders
-
-- Clean up build files and binaries after building
-- Regularly review and update dependencies
-- Monitor test coverage and add tests for uncovered code
-- Review security implementations periodically
-- Update documentation when adding new features
+- `go fmt`. Use structured logging with `logrus.Fields`.
+- Return `errors.SubsoxyError` values (predefined or `errors.New`/`errors.Wrap`) with useful `WithContext` fields (see [Architecture](architecture.md#error-handling)).
+- Every DB query filters by `user_id`.
+- Never log passwords or tokens. Build upstream URLs with `url.Values{}`.
+- Add tests for new behavior, including error paths and boundary values. Run `go test ./... -race` before you push.
+- Update the relevant guide in `docs/` when behavior or configuration changes.

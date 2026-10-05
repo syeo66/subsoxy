@@ -1,242 +1,49 @@
-# Subsonic API Proxy Server
+# Subsoxy
 
-A high-performance Go-based proxy server that enhances your Subsonic music server with intelligent features like personalized song recommendations, play tracking, and multi-user support.
+A Go proxy that sits between your music client and a Subsonic-compatible server (Subsonic, Navidrome, …) and adds a personalized shuffle, play/skip tracking, and per-user listening history. Every other request is forwarded unchanged, so existing clients keep working.
 
-## 🎵 What It Does
+## Features
 
-**Subsoxy** sits between your music client and Subsonic server to add powerful features:
+- **Smart shuffle**: `/rest/getRandomSongs` returns weighted picks instead of uniformly random ones. The weights favor songs you play over songs you skip, give unheard songs a boost, and learn which artists you like.
+- **Two-week replay prevention**: Songs you played or skipped in the last 14 days are left out.
+- **Acoustic flow**: If the upstream server provides AudioMuse-AI similarity (`getSonicSimilarTracks`), songs that sound like what you just played get a boost.
+- **Play/skip tracking**: Plays and skips are worked out from scrobbles, with checks for duplicate submissions and long pauses.
+- **Multi-user**: Every user has their own library copy, history and preferences.
+- **Library sync**: The library syncs as soon as a new user's credentials are first seen, and again every hour after that.
+- **Hardening**: Credentials are encrypted in memory, and the proxy has rate limiting, input sanitization, security headers and CORS.
 
-- **🎯 Smart Shuffle**: Personalized song recommendations with robust 2-week replay prevention for both played and skipped songs
-- **📊 Play Tracking**: Automatic monitoring of what you play, skip, and enjoy
-- **👥 Multi-User**: Complete isolation - each user gets their own personalized experience  
-- **🔄 Auto-Sync**: Keeps your music library updated automatically
-- **🎨 Cover Art**: Full cover art support in shuffled song responses
-- **🛡️ Secure**: Enterprise-grade security with encrypted credential storage
-- **⚡ Fast**: Connection pooling and optimized algorithms for smooth performance
+## Quick start
 
-## 🚀 Quick Start
-
-### 1. Install
 ```bash
 go build -o subsoxy
-```
-
-### 2. Run
-```bash
-# Basic setup - connects to Subsonic server at localhost:4533
-./subsoxy
-
-# Custom Subsonic server
 ./subsoxy -upstream http://my-subsonic-server:4533 -port 8080
 ```
 
-### 3. Use
-Point your music client to `http://localhost:8080` instead of your Subsonic server. All your existing apps work without changes!
+Point your client at `http://localhost:8080` instead of the Subsonic server. On your first request Subsoxy checks your credentials against the upstream server, syncs your library in the background, and starts learning from your scrobbles.
 
-```bash
-# Your music client now connects to:
-http://localhost:8080/rest/...
+For a local run that loads `.env` through [dotenvx](https://dotenvx.com), use `./start_server.sh`.
 
-# Instead of directly to:  
-http://my-subsonic-server:4533/rest/...
-```
+## Enhanced endpoints
 
-That's it! Subsoxy will automatically:
-- ✅ Capture your credentials securely on first use
-- ✅ Sync your music library immediately  
-- ✅ Start learning your preferences
-- ✅ Provide intelligent shuffle recommendations
+| Endpoint | Behavior |
+|----------|----------|
+| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`) |
+| `/rest/scrobble` | Records plays and skips, then forwards to the upstream server |
+| `/rest/stream`, `/rest/ping`, `/rest/getLicense` | Logged, then forwarded |
+| `/debug` | HTML view of per-song weights (only with `-debug-mode`) |
+| everything else | Forwarded unchanged |
 
-## ⭐ Key Features
+## Documentation
 
-### Intelligent Music Recommendations
-Your `/rest/getRandomSongs` requests now return personalized recommendations instead of random songs:
-- **Learns Your Taste**: Tracks what you play vs skip with enhanced, preload-resistant skip detection
-- **Bayesian Weighting**: ✅ **NEW** - Uses statistical Bayesian approach for fair song scoring that handles uncertainty in small samples
-- **Artist Preferences**: ✅ **NEW** - Learns which artists you prefer and boosts/reduces songs accordingly
-- **2-Week Replay Prevention**: Songs are strictly excluded for 14 days after being played OR skipped with consistent timing and robust filtering
-- **Smart Flow**: Favors songs acoustically similar to what you just played (when AudioMuse-AI is available on the upstream server)
-- **Individual Learning**: Each user gets their own personalized experience
-- **Cover Art Included**: Full cover art support in both JSON and XML responses
+| Guide | Contents |
+|-------|----------|
+| [Configuration](docs/configuration.md) | All flags and environment variables, validation rules, tuning |
+| [How it works](docs/how-it-works.md) | Shuffle algorithm, skip detection, library sync, multi-user isolation |
+| [Architecture](docs/architecture.md) | Packages, request flow, database schema, error handling |
+| [Security](docs/security.md) | Credential handling, input validation, rate limiting, headers |
+| [Development](docs/development.md) | Building, testing, debug UI, adding hooks |
+| [Troubleshooting](docs/troubleshooting.md) | Common errors and how to fix them |
 
-#### Time-Based Skip Detection ✅ **ENHANCED**
-The system implements intelligent, accurate skip detection based on scrobble events with time validation:
-- **Scrobble-Based**: Uses only scrobble events (submission=true/false) for detection
-- **Time-Based Validation**: ✅ **NEW** - Only marks as skipped if time between scrobbles < 2x song duration
-- **Extended Pause Handling**: ✅ **NEW** - Ignores skips when hours pass between songs (prevents false skips from paused playback)
-- **Duplicate Prevention**: Same song scrobbled multiple times doesn't double-count plays
-- **Real Skips**: Songs marked as skipped when another song is scrobbled without definitive play (within reasonable time)
-- **Same-Song Safe**: Scrobbling the same song again updates status, doesn't mark as skipped
-- **Fallback Behavior**: When song duration is unavailable, uses 1-hour maximum timeout instead of always marking as skipped
-- **Accurate Analytics**: Skip counts reflect actual listening behavior without false positives from paused playback
+## License
 
-### Multi-User Support ✅ **NEW**
-- **Complete Isolation**: Each user has their own music library and preferences
-- **Privacy First**: No data bleeding between users
-- **Scales**: Supports unlimited users with optimal performance
-- **Works with all clients**: Symfonium, DSub, and other modern Subsonic clients
-
-### Automatic Music Library Sync
-- **Immediate Sync**: New users get instant access - no waiting for hourly syncs
-- **Smart Updates**: Automatically removes deleted songs while preserving your play history
-- **Background Processing**: Never blocks your music streaming
-- **Reliable**: Uses proper Subsonic API discovery methods
-
-### Enterprise Security
-- **Encrypted Storage**: AES-256-GCM encryption for all credentials
-- **Modern Auth**: Supports both password and token-based authentication
-- **Rate Limiting**: Protection against abuse and DoS attacks
-- **Security Headers**: Comprehensive protection against web vulnerabilities
-
-## 🎛️ Configuration
-
-### Quick Examples
-```bash
-# Basic usage
-./subsoxy
-
-# Custom port and server
-./subsoxy -port 9090 -upstream http://music.example.com:4533
-
-# Debug mode
-./subsoxy -log-level debug
-
-# High-performance setup
-./subsoxy -db-max-open-conns 50 -rate-limit-rps 200
-
-# CORS for web apps
-./subsoxy -cors-allow-origins "https://myapp.com,http://localhost:3000"
-```
-
-### Environment Variables
-```bash
-# Use environment variables instead of flags
-export PORT=8080
-export UPSTREAM_URL=http://my-subsonic-server:4533
-export LOG_LEVEL=info
-./subsoxy
-```
-
-## 📊 How It Works
-
-1. **Transparent Proxy**: All requests flow through to your Subsonic server
-2. **Smart Hooks**: Specific endpoints get enhanced with intelligent features
-3. **Learning Engine**: Builds personalized models from your listening habits
-4. **Isolated Data**: Each user gets their own private learning model
-
-### Enhanced Endpoints
-
-| Endpoint | Enhancement |
-|----------|-------------|
-| `/rest/getRandomSongs` | Intelligent shuffle with 2-week replay prevention and cover art |
-| `/rest/stream` | Logged for debugging (no longer used for skip detection) |
-| `/rest/scrobble` | Records plays/skips for personalization with duplicate prevention |
-| All others | Transparent proxy with full compatibility |
-
-## 🔧 Advanced Configuration
-
-For detailed configuration options, see [Configuration Guide](docs/configuration.md).
-
-Common settings:
-- **Port**: `-port 8080` (default)
-- **Database**: `-db-path ./music.db` (auto-created)
-- **Rate Limiting**: `-rate-limit-rps 100` (requests per second)
-- **Connection Pool**: `-db-max-open-conns 25` (database connections)
-- **Worker Pool**: `-credential-workers 100` (concurrent credential validations)
-- **CORS**: `-cors-allow-origins "*"` (for web clients)
-
-## 🏗️ Architecture
-
-Subsoxy uses a modular architecture designed for reliability and performance:
-
-- **Multi-tenant database** with complete user isolation
-- **Connection pooling** for optimal database performance
-- **Bounded worker pools** to prevent resource exhaustion under high load
-- **Memory-efficient algorithms** that scale to large music libraries
-- **Comprehensive error handling** with structured logging
-- **Thread-safe operations** for concurrent users with graceful shutdown
-
-For technical details, see [Architecture Guide](docs/architecture.md).
-
-## 🛡️ Security
-
-Security is built-in, not bolted-on:
-
-- **AES-256-GCM encryption** for credential storage
-- **Rate limiting** to prevent abuse
-- **Input validation** and sanitization
-- **Security headers** for web vulnerability protection
-- **Multi-mode authentication** (password + token support)
-
-For security details, see [Security Guide](docs/security.md).
-
-## 🎯 Multi-User Features
-
-Perfect for families, shared servers, or multiple music libraries:
-
-- **Complete Data Isolation**: Each user's data is completely separate
-- **Individual Preferences**: Personal recommendations for every user
-- **Modern Client Support**: Works with Symfonium, DSub, and other apps
-- **Scalable**: Handles unlimited users efficiently
-
-For multi-tenancy details, see [Multi-Tenancy Guide](docs/multi-tenancy.md).
-
-## 📈 Performance
-
-Optimized for real-world usage:
-
-- **Memory Efficient**: Handles 100,000+ song libraries
-- **Fast Queries**: Optimized database operations with connection pooling
-- **Smart Algorithms**: Automatically adapts to library size
-- **Concurrent Access**: Thread-safe for multiple simultaneous users
-
-For performance details, see [Weighted Shuffle Guide](docs/weighted-shuffle.md).
-
-## 🧪 Testing ✅ **ENHANCED**
-
-```bash
-# Run all tests with comprehensive coverage
-go test ./...
-
-# Run with race detection (recommended)
-go test ./... -race
-
-# Run enhanced shuffle algorithm tests
-go test ./shuffle -v -run="TestCalculateSongWeight"
-
-# Test boundary conditions and edge cases
-go test ./shuffle -v -run="TestCalculateSongWeightBoundaryConditions"
-
-# Test with real Subsonic server
-./subsoxy -upstream https://your-server.com &
-curl "http://localhost:8080/rest/ping?u=user&p=pass&f=json"
-```
-
-## 📖 Documentation
-
-- [**Configuration Guide**](docs/configuration.md) - Complete configuration reference
-- [**Architecture Guide**](docs/architecture.md) - Technical architecture details  
-- [**Security Guide**](docs/security.md) - Security features and best practices
-- [**Multi-Tenancy Guide**](docs/multi-tenancy.md) - Multi-user setup and features
-- [**Database Guide**](docs/database.md) - Database schema and features
-- [**Weighted Shuffle Guide**](docs/weighted-shuffle.md) - How intelligent recommendations work
-- [**Development Guide**](docs/development.md) - Contributing and development setup
-
-## 🆘 Getting Help
-
-- Check the [Configuration Guide](docs/configuration.md) for setup issues
-- Review [Security Guide](docs/security.md) for authentication problems  
-- See [Development Guide](docs/development.md) for contributing
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-**Ready to enhance your music experience?** 
-```bash
-go build -o subsoxy && ./subsoxy
-```
-
-Then point your music client to `http://localhost:8080` and enjoy intelligent, personalized music recommendations! 🎵
+MIT, see [LICENSE](LICENSE).
