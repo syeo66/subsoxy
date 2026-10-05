@@ -23,6 +23,8 @@ For each user, Subsoxy remembers the last scrobble it saw. When a new scrobble a
 | Previous song's duration is unknown | The cut-off is 1 hour (`MaxSkipTimeoutHours`) instead of 2× duration |
 | Same song scrobbled again | Status updated, never counted as a skip |
 
+**Client requirements:** this works because the client sends a "now playing" scrobble (`submission=false`) when a track starts, and a `submission=true` scrobble once its play threshold is reached. [Voidweaver](https://github.com/syeo66/voidweaver) does both for every track, and queues and retries scrobbles while offline. With a client that only sends `submission=true`, plays are still counted but skips are never detected. When a skip is detected also depends on the client's scrobble threshold. In Voidweaver that's configurable: a minimum play time or percentage, whichever comes first.
+
 Recording an event updates the song's `play_count`/`skip_count`, its `last_played`/`last_skipped` timestamp, and its decayed counters.
 
 ### Decayed counters

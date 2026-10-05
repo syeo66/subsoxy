@@ -2,6 +2,8 @@
 
 A Go proxy that sits between your music client and a Subsonic-compatible server (Subsonic, Navidrome, …) and adds a personalized shuffle, play/skip tracking, and per-user listening history. Every other request is forwarded unchanged, so existing clients keep working.
 
+> **Note:** Subsoxy is meant to be used with [Voidweaver](https://github.com/syeo66/voidweaver), a Flutter music player for Android and iOS, in front of [Navidrome](https://www.navidrome.org/). Other Subsonic clients and servers can work, but that setup isn't the focus. In particular, skip detection depends on the client sending a "now playing" scrobble when each track starts (see [How it works](docs/how-it-works.md#play-and-skip-detection)).
+
 ## Features
 
 - **Smart shuffle**: `/rest/getRandomSongs` returns weighted picks instead of uniformly random ones. The weights favor songs you play over songs you skip, give unheard songs a boost, and learn which artists you like.
@@ -22,6 +24,19 @@ go build -o subsoxy
 Point your client at `http://localhost:8080` instead of the Subsonic server. On your first request Subsoxy checks your credentials against the upstream server, syncs your library in the background, and starts learning from your scrobbles.
 
 For a local run that loads `.env` through [dotenvx](https://dotenvx.com), use `./start_server.sh`.
+
+## Recommended setup
+
+```
+Voidweaver ──HTTPS──▶ reverse proxy ──▶ subsoxy (:8080) ──▶ Navidrome (:4533)
+```
+
+1. **Navidrome**: run it as usual.
+2. **Subsoxy**: run it as a Docker container next to Navidrome, built from the included `Dockerfile` (a `captain-definition` for CapRover is included too). Set `UPSTREAM_URL` to Navidrome's address (e.g. `http://navidrome:4533`). Set `DB_PATH` to a file on a mounted volume so listening history survives restarts.
+3. **Reverse proxy**: Subsoxy only speaks plain HTTP and Voidweaver only connects over HTTPS, so put Caddy, nginx, Traefik or similar with a valid certificate in front of Subsoxy.
+4. **Voidweaver**: log in with the reverse proxy's HTTPS URL and your Navidrome username and password.
+
+To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin in Navidrome.
 
 ## Enhanced endpoints
 

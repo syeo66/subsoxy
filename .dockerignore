@@ -63,10 +63,8 @@ temp/
 
 # Documentation (already in image via COPY)
 README.md
-TODO.md
-TROUBLESHOOTING.md
 LICENSE
-*/README.md
+docs/
 
 # Docker files (don't need these in the image)
 Dockerfile*

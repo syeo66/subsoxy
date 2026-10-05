@@ -21,6 +21,6 @@ RUN apk --no-cache add --no-check-certificate ca-certificates \
 
 COPY --from=build-stage /server /server
 
-EXPOSE 3333
+EXPOSE 8080
 
 ENTRYPOINT ["/server"]
