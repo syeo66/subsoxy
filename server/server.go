@@ -85,8 +85,9 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
+		// Go moves the Host header into req.Host, so read it there before replacing it
+		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Host = upstreamURL.Host
-		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
 	}
 
 	// Create database connection pool configuration
@@ -437,6 +438,15 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	}
 	ps.syncMutex.RUnlock()
 
+	// Stop accepting requests and let in-flight handlers finish while the database is still open
+	var shutdownErr error
+	if ps.server != nil {
+		if err := ps.server.Shutdown(ctx); err != nil {
+			ps.logger.WithError(err).Error("Failed to shutdown HTTP server")
+			shutdownErr = errors.Wrap(err, errors.CategoryServer, "SHUTDOWN_FAILED", "failed to shutdown HTTP server")
+		}
+	}
+
 	// Wait for in-flight credential validations to complete
 	ps.logger.Info("Waiting for credential validation workers to finish...")
 	done := make(chan struct{})
@@ -458,11 +468,8 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	if ps.server != nil {
-		if err := ps.server.Shutdown(ctx); err != nil {
-			ps.logger.WithError(err).Error("Failed to shutdown HTTP server")
-			return errors.Wrap(err, errors.CategoryServer, "SHUTDOWN_FAILED", "failed to shutdown HTTP server")
-		}
+	if shutdownErr != nil {
+		return shutdownErr
 	}
 
 	ps.logger.Info("Proxy server shut down successfully")
@@ -557,6 +564,10 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 
 	var allSongs []models.Song
 
+	// Set when any part of the library could not be fetched. The song list is then
+	// partial, so songs missing from it must not be treated as removed upstream.
+	incomplete := false
+
 	// Traverse each music folder
 	for _, folder := range musicFolders {
 		// Convert folder ID to string
@@ -575,6 +586,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 				"user":      sanitizeUsername(username),
 				"folder_id": folderID,
 			}).Warn("Failed to get indexes for folder, skipping")
+			incomplete = true
 			continue
 		}
 
@@ -594,6 +606,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 						"user":      sanitizeUsername(username),
 						"artist_id": artist.ID,
 					}).Warn("Failed to get albums for artist, skipping")
+					incomplete = true
 					continue
 				}
 
@@ -613,6 +626,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 								"user":     sanitizeUsername(username),
 								"album_id": album.ID,
 							}).Warn("Failed to get songs for album, skipping")
+							incomplete = true
 							continue
 						}
 
@@ -647,6 +661,15 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		if !upstreamSongIDs[existingSongID] {
 			songsToDelete = append(songsToDelete, existingSongID)
 		}
+	}
+
+	// Deleting a song also deletes its play history, so only do it after a complete fetch
+	if incomplete && len(songsToDelete) > 0 {
+		ps.logger.WithFields(logrus.Fields{
+			"user":            sanitizeUsername(username),
+			"songs_to_delete": len(songsToDelete),
+		}).Warn("Library fetch was incomplete, keeping songs missing from upstream until the next complete sync")
+		songsToDelete = nil
 	}
 
 	// Delete removed songs first

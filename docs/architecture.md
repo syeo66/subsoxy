@@ -44,7 +44,7 @@ A **hook** is `func(w http.ResponseWriter, r *http.Request, endpoint string) boo
 - **Immediate sync**: started from the credential worker when credentials are new.
 - **DB health check**: runs every 30s when `-db-health-check` is on.
 
-`Shutdown(ctx)` closes the shutdown channel (which stops the sync loop), waits for in-flight credential validations, closes the database (which stops the health-check goroutine), and then shuts down the HTTP server.
+`Shutdown(ctx)` closes the shutdown channel (which stops the sync loop), shuts down the HTTP server (letting in-flight requests finish), waits for in-flight credential validations, and then closes the database (which stops the health-check goroutine).
 
 ## Database
 

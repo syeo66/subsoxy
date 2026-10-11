@@ -121,7 +121,7 @@ A sync walks the library through the standard Subsonic API: `getMusicFolders` â†
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.
-- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history.
+- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts.
 
 Each sync logs added, updated, unchanged and deleted counts per user.
 

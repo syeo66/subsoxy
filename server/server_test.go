@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1752,5 +1754,232 @@ func TestAuthenticatedHookCapturesCredentials(t *testing.T) {
 
 	if _, ok := server.credentials.GetAllValid()["alice"]; !ok {
 		t.Error("verified credentials should be stored for background sync")
+	}
+}
+
+func TestSyncSongsForUserIncompleteFetchKeepsSongs(t *testing.T) {
+	var mu sync.Mutex
+	albumIDs := []string{"album1", "album2"}
+	failAlbum2 := false
+
+	subsonicOK := func(w http.ResponseWriter, key string, value interface{}) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0", key: value},
+		})
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch r.URL.Path {
+		case "/rest/getMusicFolders":
+			subsonicOK(w, "musicFolders", map[string]interface{}{
+				"musicFolder": []models.MusicFolder{{ID: "1", Name: "Music"}},
+			})
+		case "/rest/getIndexes":
+			subsonicOK(w, "indexes", map[string]interface{}{
+				"index": []models.Index{{Name: "A", Artists: []models.Artist{{ID: "artist1", Name: "Artist 1"}}}},
+			})
+		case "/rest/getMusicDirectory":
+			var children []models.Song
+			switch id := r.URL.Query().Get("id"); id {
+			case "artist1":
+				for _, albumID := range albumIDs {
+					children = append(children, models.Song{ID: albumID, Title: albumID, IsDir: true})
+				}
+			case "album1":
+				children = []models.Song{
+					{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "album1"},
+					{ID: "song2", Title: "Song 2", Artist: "Artist 1", Album: "album1"},
+				}
+			case "album2":
+				if failAlbum2 {
+					http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
+					return
+				}
+				children = []models.Song{{ID: "song3", Title: "Song 3", Artist: "Artist 1", Album: "album2"}}
+			}
+			subsonicOK(w, "directory", map[string]interface{}{"child": children})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_incomplete.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	songsByID := func() map[string]models.Song {
+		t.Helper()
+		songs, err := server.db.GetAllSongs("user1")
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+		byID := make(map[string]models.Song, len(songs))
+		for _, song := range songs {
+			byID[song.ID] = song
+		}
+		return byID
+	}
+
+	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		t.Fatalf("Initial sync failed: %v", err)
+	}
+	if got := len(songsByID()); got != 3 {
+		t.Fatalf("Expected 3 songs after initial sync, got %d", got)
+	}
+	if err := server.db.RecordPlayEvent("user1", "song3", "play", nil); err != nil {
+		t.Fatalf("Failed to record play: %v", err)
+	}
+
+	// A failed album fetch must not be mistaken for the album being removed upstream
+	mu.Lock()
+	failAlbum2 = true
+	mu.Unlock()
+	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		t.Fatalf("Incomplete sync failed: %v", err)
+	}
+	song3, ok := songsByID()["song3"]
+	if !ok {
+		t.Fatal("song3 was deleted after an incomplete library fetch")
+	}
+	if song3.PlayCount != 1 {
+		t.Errorf("Expected song3 play count 1 to survive incomplete sync, got %d", song3.PlayCount)
+	}
+
+	// Once the fetch is complete again, songs really removed upstream are deleted
+	mu.Lock()
+	failAlbum2 = false
+	albumIDs = []string{"album1"}
+	mu.Unlock()
+	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		t.Fatalf("Complete sync failed: %v", err)
+	}
+	songs := songsByID()
+	if _, ok := songs["song3"]; ok {
+		t.Error("song3 should be deleted after a complete sync that no longer lists it")
+	}
+	if len(songs) != 2 {
+		t.Errorf("Expected 2 songs after complete sync, got %d", len(songs))
+	}
+}
+
+func TestProxySetsForwardedHost(t *testing.T) {
+	var gotForwardedHost, gotHost string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForwardedHost = r.Header.Get("X-Forwarded-Host")
+		gotHost = r.Host
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_forwarded_host.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	req := httptest.NewRequest("GET", "http://music.example.com/rest/getAlbum", nil)
+	server.proxyHandler(httptest.NewRecorder(), req)
+
+	if gotForwardedHost != "music.example.com" {
+		t.Errorf("Expected X-Forwarded-Host %q, got %q", "music.example.com", gotForwardedHost)
+	}
+	upstreamURL, _ := url.Parse(mockServer.URL)
+	if gotHost != upstreamURL.Host {
+		t.Errorf("Expected upstream Host %q, got %q", upstreamURL.Host, gotHost)
+	}
+}
+
+func TestShutdownLetsInFlightRequestsUseDatabase(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to find free port: %v", err)
+	}
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	listener.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         port,
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "error",
+		DatabasePath:      "test_shutdown_order.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	dbErr := make(chan error, 1)
+	server.AddHook("/slow", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		close(entered)
+		<-release
+		dbErr <- server.db.StoreSongs("user1", []models.Song{{ID: "song1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1"}})
+		w.WriteHeader(http.StatusOK)
+		return true
+	})
+
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+
+	go func() {
+		for i := 0; i < 50; i++ {
+			resp, err := http.Get("http://127.0.0.1:" + port + "/slow")
+			if err == nil {
+				resp.Body.Close()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Request never reached the hook")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- server.Shutdown(ctx) }()
+
+	// Give Shutdown time to get as far as it can while the request is still running
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	if err := <-dbErr; err != nil {
+		t.Errorf("In-flight request could not use the database during shutdown: %v", err)
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Errorf("Shutdown failed: %v", err)
 	}
 }
