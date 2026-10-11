@@ -547,8 +547,6 @@ func (ps *ProxyServer) syncSongs() {
 	}
 }
 
-// cleanupPendingSongs method removed - no longer needed with simplified skip detection
-
 func (ps *ProxyServer) fetchAndStoreSongs() {
 	// Get all valid credentials for multi-user sync
 	allCredentials := ps.credentials.GetAllValid()
@@ -700,12 +698,6 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 
 	// Priors average over the user's songs and artists, which may have just changed
 	ps.shuffle.InvalidateEmpiricalPriors(username)
-
-	// Calculate artist statistics after sync completes
-	if err := ps.db.CalculateInitialArtistStats(username); err != nil {
-		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Warn("Failed to calculate artist statistics")
-		// Don't fail the entire sync if artist stats calculation fails
-	}
 
 	return nil
 }

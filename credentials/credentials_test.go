@@ -56,7 +56,7 @@ func TestValidateAndStoreValidCredentials(t *testing.T) {
 	_, _ = manager.ValidateAndStore("testuser", "testpass")
 
 	// Verify credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "testuser" || storedPass != "testpass" {
 		t.Errorf("Expected stored credentials testuser/testpass, got %s/%s", storedUser, storedPass)
 	}
@@ -87,7 +87,7 @@ func TestValidateAndStoreInvalidCredentials(t *testing.T) {
 	_, _ = manager.ValidateAndStore("wronguser", "wrongpass")
 
 	// Verify no credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "" || storedPass != "" {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
 	}
@@ -110,7 +110,7 @@ func TestValidateAndStoreServerError(t *testing.T) {
 	_, _ = manager.ValidateAndStore("testuser", "testpass")
 
 	// Verify no credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "" || storedPass != "" {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
 	}
@@ -163,7 +163,7 @@ func TestValidateAndStoreInvalidJSON(t *testing.T) {
 	_, _ = manager.ValidateAndStore("testuser", "testpass")
 
 	// Verify no credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "" || storedPass != "" {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
 	}
@@ -180,107 +180,9 @@ func TestValidateAndStoreUnreachableServer(t *testing.T) {
 	_, _ = manager.ValidateAndStore("testuser", "testpass")
 
 	// Verify no credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "" || storedPass != "" {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
-	}
-}
-
-func TestGetValidEmpty(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	manager := New(logger, "http://localhost:4533")
-
-	// Test getting valid credentials when none are stored
-	user, pass := manager.GetValid()
-	if user != "" || pass != "" {
-		t.Errorf("Expected empty credentials, got %s/%s", user, pass)
-	}
-}
-
-func TestGetValidMultipleUsers(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]interface{}{
-			"subsonic-response": map[string]interface{}{
-				"status":  "ok",
-				"version": "1.15.0",
-			},
-		}
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer mockServer.Close()
-
-	manager := New(logger, mockServer.URL)
-
-	// Store multiple users
-	_, _ = manager.ValidateAndStore("user1", "pass1")
-	_, _ = manager.ValidateAndStore("user2", "pass2")
-
-	// GetValid should return one of them (implementation returns first found)
-	user, pass := manager.GetValid()
-	if user == "" || pass == "" {
-		t.Error("Expected non-empty credentials")
-	}
-
-	// Should be one of the stored pairs
-	if !((user == "user1" && pass == "pass1") || (user == "user2" && pass == "pass2")) {
-		t.Errorf("Expected user1/pass1 or user2/pass2, got %s/%s", user, pass)
-	}
-}
-
-func TestClearInvalid(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]interface{}{
-			"subsonic-response": map[string]interface{}{
-				"status":  "ok",
-				"version": "1.15.0",
-			},
-		}
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer mockServer.Close()
-
-	manager := New(logger, mockServer.URL)
-
-	// Store credentials
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
-
-	// Verify credentials are stored
-	user, pass := manager.GetValid()
-	if user != "testuser" || pass != "testpass" {
-		t.Errorf("Expected stored credentials testuser/testpass, got %s/%s", user, pass)
-	}
-
-	// Clear invalid credentials
-	manager.ClearInvalid()
-
-	// Verify credentials are cleared
-	user, pass = manager.GetValid()
-	if user != "" || pass != "" {
-		t.Errorf("Expected cleared credentials, got %s/%s", user, pass)
-	}
-}
-
-func TestClearInvalidEmpty(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	manager := New(logger, "http://localhost:4533")
-
-	// Clear when no credentials are stored (should not panic)
-	manager.ClearInvalid()
-
-	// Verify still empty
-	user, pass := manager.GetValid()
-	if user != "" || pass != "" {
-		t.Errorf("Expected empty credentials, got %s/%s", user, pass)
 	}
 }
 
@@ -340,13 +242,13 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Goroutine 2: Get credentials
 	go func() {
-		manager.GetValid()
+		manager.GetAllValid()
 		done <- true
 	}()
 
-	// Goroutine 3: Clear credentials
+	// Goroutine 3: Check credential freshness
 	go func() {
-		manager.ClearInvalid()
+		manager.HasRecent("user1", time.Hour)
 		done <- true
 	}()
 
@@ -424,62 +326,6 @@ func TestEncryptionWithDifferentKeys(t *testing.T) {
 	}
 }
 
-func TestSecureCredentialClearing(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]interface{}{
-			"subsonic-response": map[string]interface{}{
-				"status":  "ok",
-				"version": "1.15.0",
-			},
-		}
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer mockServer.Close()
-
-	manager := New(logger, mockServer.URL)
-
-	// Store credentials
-	_, err := manager.ValidateAndStore("testuser", "testpass")
-	if err != nil {
-		t.Errorf("Failed to store credentials: %v", err)
-	}
-
-	// Verify credentials are stored and encrypted
-	user, pass := manager.GetValid()
-	if user != "testuser" || pass != "testpass" {
-		t.Errorf("Expected stored credentials testuser/testpass, got %s/%s", user, pass)
-	}
-
-	// Get reference to encrypted data before clearing
-	manager.mutex.RLock()
-	var encryptedData []byte
-	if cred, exists := manager.validCredentials["testuser"]; exists {
-		encryptedData = make([]byte, len(cred.EncryptedPassword))
-		copy(encryptedData, cred.EncryptedPassword)
-	}
-	manager.mutex.RUnlock()
-
-	// Clear credentials
-	manager.ClearInvalid()
-
-	// Verify credentials are cleared
-	user, pass = manager.GetValid()
-	if user != "" || pass != "" {
-		t.Errorf("Expected cleared credentials, got %s/%s", user, pass)
-	}
-
-	// Verify encrypted data was zeroed (this is a basic check)
-	if len(encryptedData) > 0 {
-		// Note: We can't reliably test if the original memory was zeroed
-		// because Go's garbage collector may have moved the data
-		// This test mainly verifies the clearing logic executes without error
-		_ = encryptedData // Reference to avoid unused variable warning
-	}
-}
-
 func TestEncryptionWithCorruptedData(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -548,7 +394,7 @@ func TestMemorySecurityValidation(t *testing.T) {
 	manager.mutex.RUnlock()
 
 	// Verify retrieval still works
-	user, pass := manager.GetValid()
+	user, pass := onlyCredential(t, manager)
 	if user != "testuser" || pass != password {
 		t.Errorf("Expected retrieved credentials testuser/%s, got %s/%s", password, user, pass)
 	}
@@ -575,7 +421,7 @@ func TestValidateInvalidResponseFormat(t *testing.T) {
 	_, _ = manager.ValidateAndStore("testuser", "testpass")
 
 	// Verify no credentials were stored
-	storedUser, storedPass := manager.GetValid()
+	storedUser, storedPass := onlyCredential(t, manager)
 	if storedUser != "" || storedPass != "" {
 		t.Errorf("Expected no stored credentials, got %s/%s", storedUser, storedPass)
 	}
@@ -656,7 +502,7 @@ func TestNetworkTimeout(t *testing.T) {
 	}
 
 	// Verify no credentials were stored
-	user, pass := manager.GetValid()
+	user, pass := onlyCredential(t, manager)
 	if user != "" || pass != "" {
 		t.Errorf("Expected no credentials stored after error, got %s/%s", user, pass)
 	}
@@ -713,7 +559,7 @@ func TestNetworkSlowResponse(t *testing.T) {
 	}
 
 	// Verify credentials were stored
-	user, pass := manager.GetValid()
+	user, pass := onlyCredential(t, manager)
 	if user != "testuser" || pass != "testpass" {
 		t.Errorf("Expected credentials testuser/testpass, got %s/%s", user, pass)
 	}
@@ -917,5 +763,55 @@ func TestGet(t *testing.T) {
 	}
 	if _, ok := manager.Get("carol"); ok {
 		t.Error("Get should report unknown users as missing")
+	}
+}
+
+// onlyCredential returns the single stored credential, or empty strings when none is stored
+func onlyCredential(t *testing.T, cm *Manager) (string, string) {
+	t.Helper()
+	all := cm.GetAllValid()
+	if len(all) > 1 {
+		t.Fatalf("Expected at most one stored credential, got %d", len(all))
+	}
+	for username, password := range all {
+		return username, password
+	}
+	return "", ""
+}
+
+func TestGetAllValidEmpty(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	manager := New(logger, "http://localhost:4533")
+
+	if all := manager.GetAllValid(); len(all) != 0 {
+		t.Errorf("Expected no credentials, got %d", len(all))
+	}
+}
+
+func TestGetAllValidMultipleUsers(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status":  "ok",
+				"version": "1.15.0",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer mockServer.Close()
+
+	manager := New(logger, mockServer.URL)
+
+	_, _ = manager.ValidateAndStore("user1", "pass1")
+	_, _ = manager.ValidateAndStore("user2", "pass2")
+
+	all := manager.GetAllValid()
+	if len(all) != 2 || all["user1"] != "pass1" || all["user2"] != "pass2" {
+		t.Errorf("Expected user1/pass1 and user2/pass2, got %v", all)
 	}
 }

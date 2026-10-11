@@ -27,7 +27,7 @@ Start with `-log-level debug`. Errors look like `[category:CODE] message`, and t
    ```
    Special characters in the password need to be URL-encoded.
 3. **Everything was played recently.** Songs played or skipped in the last 14 days are excluded, and there's no fallback. A small library that you play heavily can run out of eligible songs.
-4. **Missing `u` parameter.** That gives HTTP 400 `Missing user parameter`.
+4. **Missing `u` parameter.** That gives a Subsonic error response with code 10, `Required parameter is missing: u`.
 
 ## Upstream connectivity
 

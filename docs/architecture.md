@@ -79,22 +79,11 @@ CREATE TABLE play_events (
     previous_song TEXT
 );
 
-CREATE TABLE artist_stats (
-    user_id    TEXT NOT NULL,
-    artist     TEXT NOT NULL,
-    play_count INTEGER DEFAULT 0,
-    skip_count INTEGER DEFAULT 0,
-    ratio      REAL DEFAULT 0.5,
-    PRIMARY KEY (user_id, artist)
-);
-
 CREATE INDEX idx_songs_user_id         ON songs(user_id);
 CREATE INDEX idx_play_events_user_id   ON play_events(user_id);
-CREATE INDEX idx_artist_stats_user_id  ON artist_stats(user_id);
-CREATE INDEX idx_artist_stats_artist   ON artist_stats(artist);
 ```
 
-The shuffle's artist factor doesn't read `artist_stats`. It sums `adjusted_plays`/`adjusted_skips` from `songs` (`GetAllArtistAdjustedStats`, one grouped query per shuffle). `artist_stats` holds raw counts.
+There's no separate artist table. The shuffle's artist factor sums `adjusted_plays`/`adjusted_skips` from `songs` (`GetAllArtistAdjustedStats`, one grouped query per shuffle).
 
 ### Migrations
 
@@ -102,12 +91,12 @@ These run automatically at startup and are idempotent:
 
 - Single-tenant to multi-tenant schema upgrade (existing data is backed up first).
 - Add missing columns `cover_art`, `last_skipped`, `adjusted_plays`, `adjusted_skips`. The adjusted values start out equal to the raw counts.
-- Create `artist_stats` and backfill it from `play_events`. A failure here doesn't block startup.
 - Drop the old `song_transitions` table (and its indexes and `song_transitions_backup`), then `VACUUM`. That table grew quadratically with library size and rarely affected the shuffle.
+- Drop the old `artist_stats` table (and its indexes). It held raw per-artist counts that the shuffle no longer read.
 
 ### Connection pool
 
-`database.NewWithPool` applies the `-db-*` settings. `GetConnectionStats()` returns pool statistics and `UpdatePoolConfig()` changes limits at runtime. `Close()` is idempotent and stops the health-check goroutine.
+`database.NewWithPool` applies the `-db-*` settings. With `-db-health-check`, a goroutine pings the database every 30s and logs pool statistics at debug level. `Close()` is idempotent and stops the health-check goroutine.
 
 ## Error handling
 
@@ -128,7 +117,7 @@ They format as `[category:CODE] message: cause` and support `Unwrap`, `Is` and `
 What happens on failure:
 
 - **Config errors**: fatal at startup.
-- **Invalid request input**: HTTP 400.
-- **Shuffle failures**: HTTP 500.
+- **Invalid `getRandomSongs` input or shuffle failures**: a Subsonic error response (`"status": "failed"` with an `error` code and message) sent with HTTP 200, in the requested format, since Subsonic clients read errors from the response body. A missing `u` is code 10, anything else code 0.
+- **Invalid `/debug` input**: HTTP 400.
 - **Upstream errors during sync**: logged, and that user is skipped until the next cycle.
 - **Failed credential validation**: the credentials are not stored.

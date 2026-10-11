@@ -109,7 +109,7 @@ Rough timings: about 2 ms for 1k songs, about 40 ms for 10k, about 0.9 s for 50k
 curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=secret&size=50&f=json"
 ```
 
-- `size`: defaults to 50, maximum 10,000. Invalid or oversized values return HTTP 400.
+- `size`: defaults to 50, and zero or negative values also get 50. Larger values than 10,000 are served as 10,000. A value that isn't an integer returns a Subsonic error (code 0).
 - `f`: `json` (default) or `xml`.
 - Each song includes `id`, `title`, `artist`, `album`, `duration` and, when available, `coverArt`. You can pass `coverArt` straight to the upstream `/rest/getCoverArt`.
 
@@ -131,7 +131,7 @@ Each sync logs added, updated, unchanged and deleted counts per user.
 
 ## Multi-user isolation
 
-- `/rest/getRandomSongs` and `/debug` need the `u` parameter. If it's missing, they fail with HTTP 400 `Missing user parameter`.
+- `/rest/getRandomSongs` and `/debug` need the `u` parameter. If it's missing, `getRandomSongs` returns a Subsonic error (code 10, `Required parameter is missing: u`) and `/debug` returns HTTP 400 `Missing user parameter`.
 - The `songs` table is keyed on `(id, user_id)`, and every query filters by `user_id`.
 - Shuffle state (last played track, last scrobble, cached priors, similarity cache) is keyed by user and protected by a mutex.
 - One user's plays and skips never affect another user's shuffle.

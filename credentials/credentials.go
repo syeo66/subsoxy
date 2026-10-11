@@ -235,22 +235,6 @@ func (cm *Manager) validate(username, password string) error {
 		WithContext("reason", "invalid response format from upstream server")
 }
 
-func (cm *Manager) GetValid() (string, string) {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	for username, encryptedCred := range cm.validCredentials {
-		if password, err := cm.decryptPassword(encryptedCred); err == nil {
-			return username, password
-		} else {
-			// If decryption fails, skip this credential
-			cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored password")
-		}
-	}
-
-	return "", ""
-}
-
 // Get returns the stored credential for one user
 func (cm *Manager) Get(username string) (string, bool) {
 	cm.mutex.RLock()
@@ -284,29 +268,6 @@ func (cm *Manager) GetAllValid() map[string]string {
 	}
 
 	return validCreds
-}
-
-func (cm *Manager) ClearInvalid() {
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
-
-	if len(cm.validCredentials) > 0 {
-		cm.logger.Warn("Clearing potentially invalid credentials")
-		// Clear encrypted credentials securely
-		for username := range cm.validCredentials {
-			// Zero out the encrypted data before clearing
-			if cred, exists := cm.validCredentials[username]; exists {
-				for i := range cred.EncryptedPassword {
-					cred.EncryptedPassword[i] = 0
-				}
-				for i := range cred.Nonce {
-					cred.Nonce[i] = 0
-				}
-			}
-		}
-		cm.validCredentials = make(map[string]encryptedCredential)
-	}
-	cm.verifiedSecrets = make(map[string]map[string]time.Time)
 }
 
 // generateEncryptionKey creates a random 32-byte key for AES-256

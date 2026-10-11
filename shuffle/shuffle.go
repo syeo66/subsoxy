@@ -568,27 +568,11 @@ func (s *Service) calculateBaseWeight(userID string, song models.Song, artistSta
 	return timeWeight * playSkipWeight * artistWeight
 }
 
+// calculateSongWeight returns a song's full weight, including the similarity factor.
+// It runs for every song in the library, so it doesn't log per song; the debug view shows
+// the individual weight components instead.
 func (s *Service) calculateSongWeight(userID string, song models.Song, artistStats ArtistStats, similarSongs map[string]float64) float64 {
-	baseWeight := 1.0
-
-	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-	playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
-	artistWeight := s.calculateArtistWeight(userID, song.Artist, artistStats)
-	similarityWeight := s.calculateSimilarityWeight(song.ID, similarSongs)
-
-	finalWeight := baseWeight * timeWeight * playSkipWeight * artistWeight * similarityWeight
-
-	s.logger.WithFields(logrus.Fields{
-		"userID":           userID,
-		"songId":           song.ID,
-		"timeWeight":       timeWeight,
-		"playSkipWeight":   playSkipWeight,
-		"artistWeight":     artistWeight,
-		"similarityWeight": similarityWeight,
-		"finalWeight":      finalWeight,
-	}).Debug("Calculated song weight")
-
-	return finalWeight
+	return s.calculateBaseWeight(userID, song, artistStats) * s.calculateSimilarityWeight(song.ID, similarSongs)
 }
 
 func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) float64 {
@@ -685,20 +669,7 @@ func (s *Service) calculateArtistWeight(userID, artist string, artistStats Artis
 	// ratio=0 (all skips) -> 0.5x weight
 	// ratio=0.5 (equal) -> 1.0x weight
 	// ratio=1.0 (all plays) -> 1.5x weight
-	artistWeight := ArtistRatioMinWeight + (bayesianArtistRatio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
-
-	s.logger.WithFields(logrus.Fields{
-		"user_id":        userID,
-		"artist":         artist,
-		"adjusted_plays": adjustedPlays,
-		"adjusted_skips": adjustedSkips,
-		"alpha":          alpha,
-		"beta":           beta,
-		"bayesian_ratio": bayesianArtistRatio,
-		"artist_weight":  artistWeight,
-	}).Debug("Calculated artist weight (Bayesian with decay)")
-
-	return artistWeight
+	return ArtistRatioMinWeight + (bayesianArtistRatio * (ArtistRatioMaxWeight - ArtistRatioMinWeight))
 }
 
 // ArtistStats maps artist name to the artist's adjusted play/skip totals.

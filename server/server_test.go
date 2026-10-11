@@ -2385,10 +2385,11 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 		if err := server.syncSongsForUser("user1", "pass1"); err != nil {
 			t.Fatalf("%s: sync failed: %v", name, err)
 		}
-		count, err := server.db.GetSongCount("user1")
+		songIDs, err := server.db.GetExistingSongIDs("user1")
 		if err != nil {
 			t.Fatalf("%s: failed to count songs: %v", name, err)
 		}
+		count := len(songIDs)
 		mu.Lock()
 		defer mu.Unlock()
 		return count, calls["/rest/search3"], calls["/rest/getMusicFolders"]

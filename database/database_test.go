@@ -123,7 +123,7 @@ func TestCreateTables(t *testing.T) {
 	defer db.Close()
 
 	// Check that tables were created
-	tables := []string{"songs", "play_events", "artist_stats"}
+	tables := []string{"songs", "play_events"}
 	for _, table := range tables {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count)
@@ -136,7 +136,7 @@ func TestCreateTables(t *testing.T) {
 	}
 
 	// Check that indexes were created
-	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp", "idx_artist_stats_user_id"}
+	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp"}
 	for _, index := range indexes {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count)
@@ -606,84 +606,6 @@ func TestNewWithPool(t *testing.T) {
 	}
 }
 
-func TestUpdatePoolConfig(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test_update.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Test valid config update
-	newConfig := &ConnectionPool{
-		MaxOpenConns:    15,
-		MaxIdleConns:    7,
-		ConnMaxLifetime: 20 * time.Minute,
-		ConnMaxIdleTime: 3 * time.Minute,
-		HealthCheck:     false,
-	}
-
-	err = db.UpdatePoolConfig(newConfig)
-	if err != nil {
-		t.Errorf("Failed to update pool config: %v", err)
-	}
-
-	if db.pool.MaxOpenConns != 15 {
-		t.Errorf("Expected MaxOpenConns 15, got %d", db.pool.MaxOpenConns)
-	}
-
-	// Test invalid config (max idle > max open)
-	invalidConfig := &ConnectionPool{
-		MaxOpenConns: 10,
-		MaxIdleConns: 15, // Invalid: > MaxOpenConns
-	}
-
-	err = db.UpdatePoolConfig(invalidConfig)
-	if err == nil {
-		t.Error("Expected error for invalid pool config")
-	}
-
-	// Test invalid config (zero max open)
-	invalidConfig2 := &ConnectionPool{
-		MaxOpenConns: 0, // Invalid
-		MaxIdleConns: 1,
-	}
-
-	err = db.UpdatePoolConfig(invalidConfig2)
-	if err == nil {
-		t.Error("Expected error for zero max open connections")
-	}
-}
-
-func TestGetConnectionStats(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test_stats.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	stats := db.GetConnectionStats()
-
-	// Basic validation that stats are being tracked
-	if stats.OpenConnections < 0 {
-		t.Errorf("OpenConnections should not be negative, got %d", stats.OpenConnections)
-	}
-	if stats.IdleConnections < 0 {
-		t.Errorf("IdleConnections should not be negative, got %d", stats.IdleConnections)
-	}
-}
-
 func TestPerformHealthCheck(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -697,15 +619,11 @@ func TestPerformHealthCheck(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Perform health check manually
+	// Perform health check manually; it only pings and logs, so it must not disturb the database
 	db.performHealthCheck()
 
-	stats := db.GetConnectionStats()
-	if stats.HealthChecks == 0 {
-		t.Error("Expected health check count to be > 0")
-	}
-	if stats.LastHealthCheck.IsZero() {
-		t.Error("Expected LastHealthCheck to be set")
+	if _, err := db.GetAllSongs("testuser"); err != nil {
+		t.Errorf("Database unusable after health check: %v", err)
 	}
 }
 
@@ -777,10 +695,10 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 						t.Errorf("Goroutine %d: RecordPlayEvent (skip) failed: %v", goroutineID, err)
 					}
 				case 3:
-					// Get song count
-					_, err := db.GetSongCount("testuser")
+					// Get existing song IDs
+					_, err := db.GetExistingSongIDs("testuser")
 					if err != nil {
-						t.Errorf("Goroutine %d: GetSongCount failed: %v", goroutineID, err)
+						t.Errorf("Goroutine %d: GetExistingSongIDs failed: %v", goroutineID, err)
 					}
 				}
 			}
@@ -815,53 +733,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 // concurrent testing. Additional concurrent tests were removed to avoid complexity
 // with table creation in the test environment.
 
-func TestGetSongCount(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	userID := "testuser"
-
-	// Test with no songs
-	count, err := db.GetSongCount(userID)
-	if err != nil {
-		t.Fatalf("Failed to get song count: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Expected 0 songs, got %d", count)
-	}
-
-	// Add some songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 180},
-		{ID: "2", Title: "Song 2", Artist: "Artist 2", Album: "Album 2", Duration: 200},
-		{ID: "3", Title: "Song 3", Artist: "Artist 3", Album: "Album 3", Duration: 220},
-	}
-
-	err = db.StoreSongs(userID, songs)
-	if err != nil {
-		t.Fatalf("Failed to store songs: %v", err)
-	}
-
-	// Test with songs
-	count, err = db.GetSongCount(userID)
-	if err != nil {
-		t.Fatalf("Failed to get song count: %v", err)
-	}
-	if count != 3 {
-		t.Errorf("Expected 3 songs, got %d", count)
-	}
-
-	// Test with empty user ID
-	_, err = db.GetSongCount("")
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-}
-
-func TestGetSongsBatch(t *testing.T) {
+func TestGetSongsBatchFiltered(t *testing.T) {
 	db, err := New(":memory:", logrus.New())
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
@@ -884,8 +756,11 @@ func TestGetSongsBatch(t *testing.T) {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
 
+	// None of the songs has been played, so every song is older than any cutoff
+	cutoff := time.Now()
+
 	// Test getting first batch
-	batch, err := db.GetSongsBatch(userID, 2, 0)
+	batch, err := db.GetSongsBatchFiltered(userID, 2, 0, cutoff)
 	if err != nil {
 		t.Fatalf("Failed to get songs batch: %v", err)
 	}
@@ -894,7 +769,7 @@ func TestGetSongsBatch(t *testing.T) {
 	}
 
 	// Test getting second batch
-	batch, err = db.GetSongsBatch(userID, 2, 2)
+	batch, err = db.GetSongsBatchFiltered(userID, 2, 2, cutoff)
 	if err != nil {
 		t.Fatalf("Failed to get songs batch: %v", err)
 	}
@@ -903,7 +778,7 @@ func TestGetSongsBatch(t *testing.T) {
 	}
 
 	// Test getting last batch (partial)
-	batch, err = db.GetSongsBatch(userID, 2, 4)
+	batch, err = db.GetSongsBatchFiltered(userID, 2, 4, cutoff)
 	if err != nil {
 		t.Fatalf("Failed to get songs batch: %v", err)
 	}
@@ -912,19 +787,19 @@ func TestGetSongsBatch(t *testing.T) {
 	}
 
 	// Test with empty user ID
-	_, err = db.GetSongsBatch("", 2, 0)
+	_, err = db.GetSongsBatchFiltered("", 2, 0, cutoff)
 	if err == nil {
 		t.Error("Expected error for empty user ID")
 	}
 
 	// Test with invalid limit
-	_, err = db.GetSongsBatch(userID, 0, 0)
+	_, err = db.GetSongsBatchFiltered(userID, 0, 0, cutoff)
 	if err == nil {
 		t.Error("Expected error for zero limit")
 	}
 
 	// Test with invalid offset
-	_, err = db.GetSongsBatch(userID, 2, -1)
+	_, err = db.GetSongsBatchFiltered(userID, 2, -1, cutoff)
 	if err == nil {
 		t.Error("Expected error for negative offset")
 	}
@@ -1424,59 +1299,6 @@ func TestGetAllSongsErrorHandling(t *testing.T) {
 	}
 }
 
-func TestDatabaseConnectionPoolErrorHandling(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	// Test with invalid max open connections
-	invalidConfig := &ConnectionPool{
-		MaxOpenConns:    0,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: 30 * time.Minute,
-		ConnMaxIdleTime: 5 * time.Minute,
-		HealthCheck:     false,
-	}
-
-	db, err := New(":memory:", logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	err = db.UpdatePoolConfig(invalidConfig)
-	if err == nil {
-		t.Error("Expected error for invalid max open connections")
-	}
-
-	// Test with negative max idle connections
-	invalidConfig.MaxOpenConns = 5
-	invalidConfig.MaxIdleConns = -1
-	err = db.UpdatePoolConfig(invalidConfig)
-	if err == nil {
-		t.Error("Expected error for negative max idle connections")
-	}
-
-	// Test with max idle > max open
-	invalidConfig.MaxIdleConns = 10
-	err = db.UpdatePoolConfig(invalidConfig)
-	if err == nil {
-		t.Error("Expected error for max idle > max open")
-	}
-
-	// Test with valid config (should work)
-	validConfig := &ConnectionPool{
-		MaxOpenConns:    10,
-		MaxIdleConns:    3,
-		ConnMaxLifetime: 15 * time.Minute,
-		ConnMaxIdleTime: 2 * time.Minute,
-		HealthCheck:     false,
-	}
-	err = db.UpdatePoolConfig(validConfig)
-	if err != nil {
-		t.Errorf("Unexpected error for valid config: %v", err)
-	}
-}
-
 func TestDatabaseCloseErrorHandling(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -1536,9 +1358,9 @@ func TestSQLInjectionResistance(t *testing.T) {
 		t.Errorf("Unexpected error type for malicious user ID: %v", err)
 	}
 
-	_, err = db.GetSongCount(maliciousUserID)
+	_, err = db.GetExistingSongIDs(maliciousUserID)
 	if err != nil && !strings.Contains(err.Error(), "validation") {
-		t.Errorf("Unexpected error type for malicious user ID in GetSongCount: %v", err)
+		t.Errorf("Unexpected error type for malicious user ID in GetExistingSongIDs: %v", err)
 	}
 
 	// Test with potential SQL injection in song ID
@@ -1752,5 +1574,46 @@ func TestAdjustedAtMigration(t *testing.T) {
 		if math.Abs(song.AdjustedPlays-want) > 1e-3 {
 			t.Errorf("Song %s AdjustedPlays after migration = %.4f, want %.1f", song.ID, song.AdjustedPlays, want)
 		}
+	}
+}
+
+func TestDropArtistStatsMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_drop_artist_stats.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+
+	// Recreate the artist_stats table that older versions kept
+	for _, q := range []string{
+		`CREATE TABLE artist_stats (user_id TEXT NOT NULL, artist TEXT NOT NULL, play_count INTEGER DEFAULT 0,
+			skip_count INTEGER DEFAULT 0, ratio REAL DEFAULT 0.5, PRIMARY KEY (user_id, artist))`,
+		`CREATE INDEX idx_artist_stats_user_id ON artist_stats(user_id)`,
+		`INSERT INTO artist_stats (user_id, artist, play_count) VALUES ('user1', 'Artist', 3)`,
+	} {
+		if _, err := db.conn.Exec(q); err != nil {
+			t.Fatalf("Failed to set up old schema: %v", err)
+		}
+	}
+	db.Close()
+
+	db, err = New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to reopen database: %v", err)
+	}
+	defer db.Close()
+
+	var count int
+	err = db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('artist_stats', 'idx_artist_stats_user_id')`).Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to check for artist_stats: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected artist_stats and its index to be dropped, found %d objects", count)
 	}
 }

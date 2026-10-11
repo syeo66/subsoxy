@@ -159,28 +159,16 @@ func BenchmarkDatabaseBatchQueries(b *testing.B) {
 	// Setup 10000 songs
 	setupLargeDataset(b, db, userID, 10000)
 
-	b.Run("GetSongsBatch", func(b *testing.B) {
+	b.Run("GetSongsBatchFiltered", func(b *testing.B) {
+		cutoff := time.Now().AddDate(0, 0, -TwoWeekReplayThreshold)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			songs, err := db.GetSongsBatch(userID, 1000, 0)
+			songs, err := db.GetSongsBatchFiltered(userID, 1000, 0, cutoff)
 			if err != nil {
 				b.Fatalf("Failed to get songs batch: %v", err)
 			}
 			if len(songs) == 0 {
 				b.Fatalf("No songs returned")
-			}
-		}
-	})
-
-	b.Run("GetSongCount", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			count, err := db.GetSongCount(userID)
-			if err != nil {
-				b.Fatalf("Failed to get song count: %v", err)
-			}
-			if count == 0 {
-				b.Fatalf("No songs counted")
 			}
 		}
 	})

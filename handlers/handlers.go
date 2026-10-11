@@ -29,6 +29,12 @@ const (
 	SubsonicAPIVersion = "1.15.0"
 )
 
+// Subsonic API error codes
+const (
+	SubsonicErrorGeneric          = 0
+	SubsonicErrorMissingParameter = 10
+)
+
 // ASCII control character constants
 const (
 	ASCIIControlCharMin = 32
@@ -76,96 +82,102 @@ func ValidateSongID(songID string) error {
 	return nil
 }
 
+// writeSubsonicResponse writes a Subsonic response envelope in the requested format ("xml",
+// otherwise JSON). Exactly one of songs and subsonicErr is used: a non-nil subsonicErr makes
+// it a failed response. Subsonic clients read failures from the envelope, so the HTTP status
+// is always 200.
+func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.Song, subsonicErr *models.XMLError) error {
+	status := "ok"
+	if subsonicErr != nil {
+		status = "failed"
+	}
+
+	if format == "xml" {
+		xmlResponse := models.XMLSubsonicResponse{
+			Status:  status,
+			Version: SubsonicAPIVersion,
+			Error:   subsonicErr,
+		}
+		if subsonicErr == nil {
+			xmlResponse.Songs = &models.XMLSongs{Song: songs}
+		}
+
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
+		return xml.NewEncoder(w).Encode(xmlResponse)
+	}
+
+	body := map[string]interface{}{
+		"status":  status,
+		"version": SubsonicAPIVersion,
+	}
+	if subsonicErr != nil {
+		body["error"] = map[string]interface{}{
+			"code":    subsonicErr.Code,
+			"message": subsonicErr.Message,
+		}
+	} else {
+		body["songs"] = map[string]interface{}{
+			"song": songs,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(map[string]interface{}{"subsonic-response": body})
+}
+
+// writeSubsonicError writes a failed Subsonic response with the given error code and message
+func (h *Handler) writeSubsonicError(w http.ResponseWriter, format string, code int, message string) {
+	if err := writeSubsonicResponse(w, format, nil, &models.XMLError{Code: code, Message: message}); err != nil {
+		h.logger.WithError(err).Error("Failed to encode Subsonic error response")
+	}
+}
+
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	format := r.FormValue("f")
+
 	// Extract user ID from request
 	userID := r.FormValue("u")
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
 			Warn("Shuffle request missing user ID")
-		http.Error(w, "Missing user parameter", http.StatusBadRequest)
+		h.writeSubsonicError(w, format, SubsonicErrorMissingParameter, "Required parameter is missing: u")
 		return true
 	}
 
 	sizeStr := r.FormValue("size")
 	size := DefaultShuffleSize
 	if sizeStr != "" {
-		if parsedSize, err := strconv.Atoi(sizeStr); err == nil {
-			if parsedSize > MaxShuffleSize { // Prevent extremely large requests
-				validationErr := errors.ErrValidationFailed.WithContext("field", "size").
-					WithContext("value", parsedSize).
-					WithContext("max_allowed", MaxShuffleSize)
-				h.logger.WithError(validationErr).Warn("Size parameter too large")
-				http.Error(w, "Size parameter too large (max: 10000)", http.StatusBadRequest)
-				return true
-			}
-			if parsedSize > 0 { // Only use valid positive sizes, otherwise keep default
-				size = parsedSize
-			}
-		} else {
+		parsedSize, err := strconv.Atoi(sizeStr)
+		if err != nil {
 			validationErr := errors.ErrInvalidInput.WithContext("field", "size").
 				WithContext("value", sizeStr)
 			h.logger.WithError(validationErr).Warn("Invalid size parameter")
-			http.Error(w, "Invalid size parameter", http.StatusBadRequest)
+			h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Invalid size parameter")
 			return true
+		}
+		if parsedSize > 0 { // Only use valid positive sizes, otherwise keep default
+			// Larger requests are served at the maximum rather than rejected
+			size = min(parsedSize, MaxShuffleSize)
 		}
 	}
 
 	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size)
 	if err != nil {
 		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Internal server error")
 		return true
 	}
 
-	// Check format parameter (defaults to json if not specified)
-	format := r.FormValue("f")
-	if format == "" {
-		format = "json"
-	}
-
-	if format == "xml" {
-		// XML response
-		xmlResponse := models.XMLSubsonicResponse{
-			Status:  "ok",
-			Version: "1.15.0",
-			Songs: &models.XMLSongs{
-				Song: songs,
-			},
-		}
-
-		w.Header().Set("Content-Type", "application/xml")
-		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
-		if err := xml.NewEncoder(w).Encode(xmlResponse); err != nil {
-			encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode XML shuffle response").
-				WithContext("size", size).
-				WithContext("song_count", len(songs)).
-				WithContext("userID", userID)
-			h.logger.WithError(encodeErr).Error("Failed to encode XML shuffle response")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return true
-		}
-	} else {
-		// JSON response (default)
-		response := map[string]interface{}{
-			"subsonic-response": map[string]interface{}{
-				"status":  "ok",
-				"version": "1.15.0",
-				"songs": map[string]interface{}{
-					"song": songs,
-				},
-			},
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode JSON shuffle response").
-				WithContext("size", size).
-				WithContext("song_count", len(songs)).
-				WithContext("userID", userID)
-			h.logger.WithError(encodeErr).Error("Failed to encode JSON shuffle response")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return true
-		}
+	// Once encoding has started part of the body may be written, so a failure can only be logged
+	if err := writeSubsonicResponse(w, format, songs, nil); err != nil {
+		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
+			WithContext("format", format).
+			WithContext("size", size).
+			WithContext("song_count", len(songs)).
+			WithContext("userID", userID)
+		h.logger.WithError(encodeErr).Error("Failed to encode shuffle response")
+		return true
 	}
 
 	h.logger.WithFields(logrus.Fields{

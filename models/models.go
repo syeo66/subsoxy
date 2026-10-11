@@ -31,14 +31,6 @@ type PlayEvent struct {
 	PreviousSong *string   `json:"previousSong,omitempty"`
 }
 
-type ArtistStats struct {
-	UserID    string  `json:"userId"`
-	Artist    string  `json:"artist"`
-	PlayCount int     `json:"playCount"`
-	SkipCount int     `json:"skipCount"`
-	Ratio     float64 `json:"ratio"`
-}
-
 type WeightedSong struct {
 	Song   Song    `json:"song"`
 	Weight float64 `json:"weight"`
@@ -116,6 +108,13 @@ type XMLSubsonicResponse struct {
 	Status  string    `xml:"status,attr"`
 	Version string    `xml:"version,attr"`
 	Songs   *XMLSongs `xml:"songs,omitempty"`
+	Error   *XMLError `xml:"error,omitempty"`
+}
+
+// XMLError is the error element of a failed Subsonic response
+type XMLError struct {
+	Code    int    `xml:"code,attr"`
+	Message string `xml:"message,attr"`
 }
 
 type XMLSongs struct {

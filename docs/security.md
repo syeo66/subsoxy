@@ -17,7 +17,7 @@ Subsoxy has no credentials of its own. It picks them up from client requests and
 |-------|------|
 | Song ID | Required where used, max 255 chars |
 | Username | Max 100 chars (truncated with a warning) |
-| `size` on `getRandomSongs` | Positive integer ≤ 10,000, otherwise HTTP 400 |
+| `size` on `getRandomSongs` | Integer; ≤ 0 means the default of 50, values above 10,000 are capped at 10,000, anything else is a Subsonic error |
 | Anything logged | Control characters (ASCII 0–31, 127) removed, cut to 1,000 chars |
 
 All SQL uses prepared statements.

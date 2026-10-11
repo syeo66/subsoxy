@@ -157,14 +157,12 @@ func TestHandleShuffle(t *testing.T) {
 			t.Error("HandleShuffle should return true (handled)")
 		}
 
-		// Should return HTTP 400 error for invalid size parameter
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
+		status, code, message := decodeSubsonicStatus(t, w)
+		if status != "failed" || code != SubsonicErrorGeneric {
+			t.Errorf("Expected failed response with code %d, got status %q code %d", SubsonicErrorGeneric, status, code)
 		}
-
-		body := w.Body.String()
-		if !strings.Contains(body, "Invalid size parameter") {
-			t.Errorf("Expected error message about invalid size parameter, got: %s", body)
+		if message != "Invalid size parameter" {
+			t.Errorf("Expected error message about invalid size parameter, got: %q", message)
 		}
 	})
 
@@ -230,10 +228,41 @@ func TestHandleShuffle(t *testing.T) {
 			t.Error("HandleShuffle should return true when user parameter is missing")
 		}
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("Expected status 400, got %d", w.Code)
+		status, code, _ := decodeSubsonicStatus(t, w)
+		if status != "failed" || code != SubsonicErrorMissingParameter {
+			t.Errorf("Expected failed response with code %d, got status %q code %d", SubsonicErrorMissingParameter, status, code)
 		}
 	})
+}
+
+// decodeSubsonicStatus checks that a response is a JSON Subsonic envelope sent with HTTP 200
+// and returns its status and, for a failed response, the error code and message
+func decodeSubsonicStatus(t *testing.T, w *httptest.ResponseRecorder) (status string, code int, message string) {
+	t.Helper()
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected HTTP status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response struct {
+		SubsonicResponse struct {
+			Status string `json:"status"`
+			Error  *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to decode response %q: %v", w.Body.String(), err)
+	}
+
+	status = response.SubsonicResponse.Status
+	if response.SubsonicResponse.Error != nil {
+		code = response.SubsonicResponse.Error.Code
+		message = response.SubsonicResponse.Error.Message
+	}
+	return status, code, message
 }
 
 func TestHandleShuffleEmpty(t *testing.T) {
@@ -825,49 +854,49 @@ func TestShuffleSizeBoundaryConditions(t *testing.T) {
 	tests := []struct {
 		name           string
 		sizeParam      string
-		expectedStatus int
+		expectedStatus string
 		shouldHandle   bool
 	}{
 		{
 			name:           "Zero size",
 			sizeParam:      "0",
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 			shouldHandle:   true,
 		},
 		{
 			name:           "Negative size",
 			sizeParam:      "-1",
-			expectedStatus: http.StatusOK, // Negative sizes are handled gracefully
+			expectedStatus: "ok", // Negative sizes are handled gracefully
 			shouldHandle:   true,
 		},
 		{
 			name:           "Very large size",
 			sizeParam:      "999999",
-			expectedStatus: http.StatusBadRequest, // Very large sizes are rejected
+			expectedStatus: "ok", // Very large sizes are served at the maximum
 			shouldHandle:   true,
 		},
 		{
 			name:           "Non-numeric size",
 			sizeParam:      "abc",
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: "failed",
 			shouldHandle:   true,
 		},
 		{
 			name:           "Float size",
 			sizeParam:      "10.5",
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: "failed",
 			shouldHandle:   true,
 		},
 		{
 			name:           "Empty size",
 			sizeParam:      "",
-			expectedStatus: http.StatusOK, // Should use default
+			expectedStatus: "ok", // Should use default
 			shouldHandle:   true,
 		},
 		{
 			name:           "Size with leading zeros",
 			sizeParam:      "0010",
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 			shouldHandle:   true,
 		},
 	}
@@ -888,8 +917,8 @@ func TestShuffleSizeBoundaryConditions(t *testing.T) {
 				t.Errorf("Expected handled=%v, got %v", tt.shouldHandle, handled)
 			}
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			if status, _, _ := decodeSubsonicStatus(t, w); status != tt.expectedStatus {
+				t.Errorf("Expected status %q, got %q", tt.expectedStatus, status)
 			}
 		})
 	}
@@ -914,32 +943,32 @@ func TestHandlerUserParameterBoundaryConditions(t *testing.T) {
 	tests := []struct {
 		name           string
 		userParam      string
-		expectedStatus int
+		expectedStatus string
 	}{
 		{
 			name:           "Empty user",
 			userParam:      "",
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: "failed",
 		},
 		{
 			name:           "Very long username",
 			userParam:      strings.Repeat("a", 1000),
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 		},
 		{
 			name:           "Unicode username",
 			userParam:      "用户名",
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 		},
 		{
 			name:           "Special characters in username",
 			userParam:      "user@domain.com",
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 		},
 		{
 			name:           "Username with control characters",
 			userParam:      "user\x01\x02",
-			expectedStatus: http.StatusOK,
+			expectedStatus: "ok",
 		},
 	}
 
@@ -955,8 +984,8 @@ func TestHandlerUserParameterBoundaryConditions(t *testing.T) {
 
 			handler.HandleShuffle(w, req, "/rest/getRandomSongs")
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			if status, _, _ := decodeSubsonicStatus(t, w); status != tt.expectedStatus {
+				t.Errorf("Expected status %q, got %q", tt.expectedStatus, status)
 			}
 		})
 	}
@@ -1119,5 +1148,47 @@ func TestHandleDebugEscapesOutputAndOmitsPassword(t *testing.T) {
 	}
 	if strings.Contains(body, "hunter2") {
 		t.Error("debug page must not echo the password")
+	}
+}
+
+func TestHandleShuffleXMLError(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_xml_error.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	req := httptest.NewRequest("GET", "/rest/getRandomSongs?f=xml", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected HTTP status %d, got %d", http.StatusOK, w.Code)
+	}
+	if contentType := w.Header().Get("Content-Type"); contentType != "application/xml" {
+		t.Errorf("Expected Content-Type application/xml, got %s", contentType)
+	}
+
+	var xmlResponse models.XMLSubsonicResponse
+	if err := xml.Unmarshal(w.Body.Bytes(), &xmlResponse); err != nil {
+		t.Fatalf("Failed to parse XML response: %v", err)
+	}
+	if xmlResponse.Status != "failed" {
+		t.Errorf("Expected status 'failed', got '%s'", xmlResponse.Status)
+	}
+	if xmlResponse.Songs != nil {
+		t.Error("Expected no songs element in a failed response")
+	}
+	if xmlResponse.Error == nil || xmlResponse.Error.Code != SubsonicErrorMissingParameter {
+		t.Errorf("Expected error code %d, got %+v", SubsonicErrorMissingParameter, xmlResponse.Error)
 	}
 }
