@@ -2,7 +2,7 @@
 
 ## Build and run
 
-Requires Go 1.25+ and a C toolchain (`mattn/go-sqlite3` uses CGO).
+Requires Go 1.26+ and a C toolchain (`mattn/go-sqlite3` uses CGO).
 
 ```bash
 make build          # go build -o subsoxy
