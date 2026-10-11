@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -41,13 +40,6 @@ const (
 	ClientName           = "subsoxy"
 )
 
-// Subsonic API error codes
-const (
-	SubsonicErrGeneric          = 0
-	SubsonicErrMissingParameter = 10
-	SubsonicErrWrongCredentials = 40
-)
-
 // ASCII control character constants
 const (
 	ASCIIControlCharMin = 32
@@ -59,7 +51,6 @@ type ProxyServer struct {
 	logger            *logrus.Logger
 	proxy             *httputil.ReverseProxy
 	hooks             map[string][]models.Hook
-	authRequired      map[string]bool // Endpoints whose hooks act on the user's data and need verified credentials
 	db                *database.DB
 	credentials       *credentials.Manager
 	handlers          *handlers.Handler
@@ -146,7 +137,6 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		logger:            logger,
 		proxy:             proxy,
 		hooks:             make(map[string][]models.Hook),
-		authRequired:      make(map[string]bool),
 		db:                db,
 		credentials:       credManager,
 		handlers:          handlersService,
@@ -209,14 +199,6 @@ func sanitizeUsername(username string) string {
 
 func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 	ps.hooks[endpoint] = append(ps.hooks[endpoint], hook)
-}
-
-// AddAuthenticatedHook registers a hook that only runs once the request's credentials
-// have been verified. Use it for hooks that answer locally or record data for the user,
-// since those never get the upstream server's own authentication check in time.
-func (ps *ProxyServer) AddAuthenticatedHook(endpoint string, hook models.Hook) {
-	ps.authRequired[endpoint] = true
-	ps.AddHook(endpoint, hook)
 }
 
 // setCORSHeaders sets CORS headers based on configuration
@@ -293,9 +275,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	needsAuth := ps.authRequired[endpoint]
-
-	if strings.HasPrefix(endpoint, "/rest/") || needsAuth {
+	if strings.HasPrefix(endpoint, "/rest/") {
 		username, password := ps.extractCredentials(r)
 
 		// Validate input lengths
@@ -307,11 +287,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			username = username[:MaxUsernameLength]
 		}
 
-		if needsAuth {
-			if !ps.authenticateRequest(w, r, username, password) {
-				return
-			}
-		} else if username != "" && password != "" {
+		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
 			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
 
 			// Acquire a worker slot (blocks if all workers are busy)
@@ -324,7 +300,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 					ps.credentialWg.Done() // Mark goroutine as complete
 				}()
 
-				isNewCredential, err := ps.credentials.Capture(username, password)
+				isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
 				if err != nil {
 					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
 				} else if isNewCredential {
@@ -360,88 +336,6 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ps.proxy.ServeHTTP(w, r)
-}
-
-// authenticateRequest verifies the request's credentials before an authenticated hook
-// runs, writing an error response and returning false when they are not valid.
-func (ps *ProxyServer) authenticateRequest(w http.ResponseWriter, r *http.Request, username, password string) bool {
-	if username == "" || password == "" {
-		ps.writeAuthError(w, r, SubsonicErrMissingParameter, "Required parameter is missing")
-		return false
-	}
-
-	isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
-	if err != nil {
-		if errors.Is(err, errors.ErrInvalidCredentials) {
-			ps.writeAuthError(w, r, SubsonicErrWrongCredentials, "Wrong username or password")
-		} else {
-			ps.writeAuthError(w, r, SubsonicErrGeneric, "Could not verify credentials with upstream server")
-		}
-		return false
-	}
-
-	// Hooks identify the user by the "u" query parameter, so it must name the user
-	// whose credentials were verified (which may have come from a form or header).
-	query := r.URL.Query()
-	if u := query.Get("u"); u == "" {
-		query.Set("u", username)
-		r.URL.RawQuery = query.Encode()
-	} else if u != username {
-		ps.logger.WithFields(logrus.Fields{
-			"username":    sanitizeUsername(username),
-			"query_user":  sanitizeUsername(u),
-			"endpoint":    sanitizeForLogging(r.URL.Path),
-			"remote_addr": sanitizeRemoteAddr(r.RemoteAddr),
-		}).Warn("Request user does not match authenticated credentials")
-		ps.writeAuthError(w, r, SubsonicErrWrongCredentials, "Wrong username or password")
-		return false
-	}
-
-	if isNewCredential {
-		ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
-		ps.credentialWg.Add(1)
-		go func() {
-			defer ps.credentialWg.Done()
-			ps.fetchAndStoreSongs()
-		}()
-	}
-
-	return true
-}
-
-// writeAuthError writes a Subsonic API error response, or a plain 401 for non-API endpoints.
-func (ps *ProxyServer) writeAuthError(w http.ResponseWriter, r *http.Request, code int, message string) {
-	if !strings.HasPrefix(r.URL.Path, "/rest/") {
-		// Lets browsers prompt for Basic auth, so pages like /debug never need the
-		// password in the URL.
-		w.Header().Set("WWW-Authenticate", `Basic realm="subsoxy", charset="UTF-8"`)
-		http.Error(w, message, http.StatusUnauthorized)
-		return
-	}
-
-	// Subsonic reports errors in the response body with HTTP 200
-	if r.URL.Query().Get("f") == "xml" {
-		w.Header().Set("Content-Type", "application/xml")
-		w.WriteHeader(http.StatusOK)
-		var escaped strings.Builder
-		_ = xml.EscapeText(&escaped, []byte(message))
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="%s"><error code="%d" message="%s"/></subsonic-response>`,
-			SubsonicAPIVersion, code, escaped.String())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"subsonic-response": map[string]interface{}{
-			"status":  "failed",
-			"version": SubsonicAPIVersion,
-			"error": map[string]interface{}{
-				"code":    code,
-				"message": message,
-			},
-		},
-	})
 }
 
 func (ps *ProxyServer) Start() error {
@@ -613,9 +507,6 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	}
 
 	var allSongs []models.Song
-	// Set when any part of the library could not be fetched; the song list is then
-	// partial and must not be used to decide which songs were removed upstream.
-	incomplete := false
 
 	// Traverse each music folder
 	for _, folder := range musicFolders {
@@ -635,7 +526,6 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 				"user":      sanitizeUsername(username),
 				"folder_id": folderID,
 			}).Warn("Failed to get indexes for folder, skipping")
-			incomplete = true
 			continue
 		}
 
@@ -655,7 +545,6 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 						"user":      sanitizeUsername(username),
 						"artist_id": artist.ID,
 					}).Warn("Failed to get albums for artist, skipping")
-					incomplete = true
 					continue
 				}
 
@@ -675,7 +564,6 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 								"user":     sanitizeUsername(username),
 								"album_id": album.ID,
 							}).Warn("Failed to get songs for album, skipping")
-							incomplete = true
 							continue
 						}
 
@@ -704,17 +592,11 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		upstreamSongIDs[song.ID] = true
 	}
 
-	// Determine songs to delete (exist locally but not upstream). Skipped when the
-	// traversal was incomplete, otherwise a transient upstream error would wipe the
-	// play history of every song that could not be fetched.
+	// Determine songs to delete (exist locally but not upstream)
 	var songsToDelete []string
-	if incomplete {
-		ps.logger.WithField("user", sanitizeUsername(username)).Warn("Library sync incomplete, skipping removal of missing songs")
-	} else {
-		for existingSongID := range existingSongIDs {
-			if !upstreamSongIDs[existingSongID] {
-				songsToDelete = append(songsToDelete, existingSongID)
-			}
+	for existingSongID := range existingSongIDs {
+		if !upstreamSongIDs[existingSongID] {
+			songsToDelete = append(songsToDelete, existingSongID)
 		}
 	}
 

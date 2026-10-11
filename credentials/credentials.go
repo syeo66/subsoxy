@@ -3,12 +3,9 @@ package credentials
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -28,17 +25,12 @@ const (
 	HTTPClientTimeout      = 10 * time.Second
 	SubsonicAPIVersion     = "1.15.0"
 	ClientName             = "subsoxy"
-	// RevalidateInterval is how long a stored credential is trusted for background
-	// capture before an unverifiable token causes another upstream validation.
-	RevalidateInterval = 1 * time.Hour
-	tokenPrefix        = "TOKEN:"
 )
 
 // encryptedCredential holds encrypted password data
 type encryptedCredential struct {
-	EncryptedPassword []byte    `json:"encrypted_password"`
-	Nonce             []byte    `json:"nonce"`
-	ValidatedAt       time.Time `json:"validated_at"`
+	EncryptedPassword []byte `json:"encrypted_password"`
+	Nonce             []byte `json:"nonce"`
 }
 
 type Manager struct {
@@ -68,9 +60,14 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		return false, err
 	}
 
-	if cm.matchesStored(username, password) {
-		return false, nil // Existing credential, not new
+	cm.mutex.RLock()
+	if storedCred, exists := cm.validCredentials[username]; exists {
+		if decryptedPassword, err := cm.decryptPassword(storedCred); err == nil && decryptedPassword == password {
+			cm.mutex.RUnlock()
+			return false, nil // Existing credential, not new
+		}
 	}
+	cm.mutex.RUnlock()
 
 	if err := cm.validate(username, password); err != nil {
 		cm.logger.WithError(err).WithField("username", username).Warn("Invalid credentials provided")
@@ -81,7 +78,6 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 	if err != nil {
 		return false, errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt password")
 	}
-	encryptedCred.ValidatedAt = time.Now()
 
 	cm.mutex.Lock()
 	isNewCredential := len(cm.validCredentials) == 0 || cm.validCredentials[username].EncryptedPassword == nil
@@ -98,54 +94,6 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		}
 	}
 	return isNewCredential, nil
-}
-
-// Capture records credentials seen on a proxied request so they can be used for
-// background sync. Unlike ValidateAndStore it does not contact upstream for a token
-// it cannot verify locally while the user's stored credential is still fresh: clients
-// typically send a new salt with every request, so validating each token would cost
-// one upstream ping per request. Upstream still authenticates the proxied request itself.
-func (cm *Manager) Capture(username, password string) (bool, error) {
-	if strings.HasPrefix(password, tokenPrefix) {
-		cm.mutex.RLock()
-		storedCred, exists := cm.validCredentials[username]
-		cm.mutex.RUnlock()
-		if exists && time.Since(storedCred.ValidatedAt) < RevalidateInterval {
-			return false, nil
-		}
-	}
-	return cm.ValidateAndStore(username, password)
-}
-
-// matchesStored reports whether the given credentials can be verified against the
-// stored credential without contacting upstream: an identical password or token, or
-// a token derived from the stored plaintext password (t = md5(password + salt)).
-func (cm *Manager) matchesStored(username, password string) bool {
-	cm.mutex.RLock()
-	storedCred, exists := cm.validCredentials[username]
-	cm.mutex.RUnlock()
-	if !exists {
-		return false
-	}
-
-	storedPassword, err := cm.decryptPassword(storedCred)
-	if err != nil {
-		return false
-	}
-	if subtle.ConstantTimeCompare([]byte(storedPassword), []byte(password)) == 1 {
-		return true
-	}
-
-	if strings.HasPrefix(storedPassword, tokenPrefix) || !strings.HasPrefix(password, tokenPrefix) {
-		return false
-	}
-	parts := strings.Split(password, ":")
-	if len(parts) != 3 {
-		return false
-	}
-	sum := md5.Sum([]byte(storedPassword + parts[2]))
-	expected := hex.EncodeToString(sum[:])
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(parts[1]))) == 1
 }
 
 func (cm *Manager) validate(username, password string) error {
