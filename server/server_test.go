@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1618,5 +1619,138 @@ func TestRecordPlayEventRefreshesPriors(t *testing.T) {
 
 	if before == after {
 		t.Errorf("play/skip weight stayed %.4f after new events; cached priors were not refreshed", before)
+	}
+}
+
+func TestAuthenticatedHooks(t *testing.T) {
+	var mu sync.Mutex
+	forwarded := 0 // getRandomSongs requests that reached upstream
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/rest/ping" {
+			if r.URL.Path == "/rest/getRandomSongs" {
+				mu.Lock()
+				forwarded++
+				mu.Unlock()
+			}
+			w.Write([]byte("upstream"))
+			return
+		}
+		status := "failed"
+		if q.Get("u") == "alice" && (q.Get("p") == "secret" || (q.Get("t") == "goodtoken" && q.Get("s") == "salt")) {
+			status = "ok"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": status, "version": "1.15.0"},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_auth_hooks.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_auth_hooks.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	hookRan := false
+	server.AddAuthenticatedHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		hookRan = true
+		w.Write([]byte("local"))
+		return true
+	})
+
+	tests := []struct {
+		name      string
+		query     string
+		basicAuth []string
+		wantLocal bool
+	}{
+		{"valid password", "u=alice&p=secret", nil, true},
+		{"valid token", "u=alice&t=goodtoken&s=salt", nil, true},
+		{"no credentials", "u=alice", nil, false},
+		{"wrong password", "u=alice&p=wrong", nil, false},
+		{"wrong token", "u=alice&t=badtoken&s=salt", nil, false},
+		{"credentials for another user", "u=bob", []string{"alice", "secret"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hookRan = false
+			mu.Lock()
+			forwarded = 0
+			mu.Unlock()
+
+			req := httptest.NewRequest("GET", "/rest/getRandomSongs?"+tt.query, nil)
+			if tt.basicAuth != nil {
+				req.SetBasicAuth(tt.basicAuth[0], tt.basicAuth[1])
+			}
+			w := httptest.NewRecorder()
+			server.proxyHandler(w, req)
+
+			if hookRan != tt.wantLocal {
+				t.Errorf("hook ran = %v, want %v", hookRan, tt.wantLocal)
+			}
+			wantBody := "upstream"
+			if tt.wantLocal {
+				wantBody = "local"
+			}
+			if w.Body.String() != wantBody {
+				t.Errorf("body = %q, want %q", w.Body.String(), wantBody)
+			}
+			mu.Lock()
+			gotForwarded := forwarded
+			mu.Unlock()
+			wantForwarded := 1
+			if tt.wantLocal {
+				wantForwarded = 0
+			}
+			if gotForwarded != wantForwarded {
+				t.Errorf("forwarded upstream %d times, want %d", gotForwarded, wantForwarded)
+			}
+		})
+	}
+}
+
+func TestAuthenticatedHookCapturesCredentials(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_auth_capture.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_auth_capture.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	server.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		return false
+	})
+
+	req := httptest.NewRequest("GET", "/rest/scrobble?u=alice&p=secret&id=song1", nil)
+	server.proxyHandler(httptest.NewRecorder(), req)
+
+	if _, ok := server.credentials.GetAllValid()["alice"]; !ok {
+		t.Error("verified credentials should be stored for background sync")
 	}
 }

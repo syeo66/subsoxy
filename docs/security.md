@@ -6,6 +6,7 @@ Subsoxy has no credentials of its own. It picks them up from client requests and
 
 - **Supported auth modes**: password (`u` + `p`) and token (`u` + `t` + `s`). Credentials are read from the query string, POST form data, or an Authorization header. Internally a token is stored as `TOKEN:<token>:<salt>` and sent upstream as `t`/`s` again.
 - **Validation**: before storing anything, Subsoxy calls upstream `/rest/ping` with the same auth mode (10s timeout). Invalid credentials are never stored.
+- **Locally handled endpoints**: `getRandomSongs` and `scrobble` act on a user's data before upstream sees the request, so Subsoxy first validates the request's credentials against upstream `/rest/ping` and checks that they belong to the user in `u`. If that fails, Subsoxy does nothing locally and forwards the request unchanged, so the client gets upstream's own authentication response.
 - **Encryption in memory**: stored credentials are sealed with AES-256-GCM, using a random 32-byte key per process and a fresh nonce for every value. Nothing is written to disk, and a restart throws away both the credentials and the key.
 - **Concurrency**: the store is protected by an `RWMutex`. Validation runs in a bounded worker pool (`-credential-workers`) so a flood of requests can't create unlimited goroutines.
 - **No credential logging**: upstream URLs are built with `url.Values{}`, and usernames are sanitized before they're logged. Passwords and tokens are never logged.

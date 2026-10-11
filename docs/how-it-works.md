@@ -113,7 +113,7 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=secret&size=50&f=json"
 
 Subsoxy doesn't need any upstream credentials of its own. It learns them from client requests:
 
-1. A `/rest/*` request with `u` + `p` or `u` + `t` + `s` is validated against upstream `/rest/ping`. This runs in the background, limited by `-credential-workers`.
+1. A `/rest/*` request with `u` + `p` or `u` + `t` + `s` is validated against upstream `/rest/ping`. For forwarded requests this runs in the background, limited by `-credential-workers`. For `getRandomSongs` and `scrobble` it runs before Subsoxy handles the request (see [Security](security.md)).
 2. If the credentials are **new**, a full sync starts right away.
 3. After that, every known user is re-synced **hourly**, with staggered delays so the upstream server isn't overloaded.
 

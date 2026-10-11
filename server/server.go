@@ -51,6 +51,7 @@ type ProxyServer struct {
 	logger            *logrus.Logger
 	proxy             *httputil.ReverseProxy
 	hooks             map[string][]models.Hook
+	authRequired      map[string]bool // Endpoints whose hooks act on the user's data and need verified credentials
 	db                *database.DB
 	credentials       *credentials.Manager
 	handlers          *handlers.Handler
@@ -137,6 +138,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		logger:            logger,
 		proxy:             proxy,
 		hooks:             make(map[string][]models.Hook),
+		authRequired:      make(map[string]bool),
 		db:                db,
 		credentials:       credManager,
 		handlers:          handlersService,
@@ -199,6 +201,47 @@ func sanitizeUsername(username string) string {
 
 func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 	ps.hooks[endpoint] = append(ps.hooks[endpoint], hook)
+}
+
+// AddAuthenticatedHook registers a hook that only runs once the request's credentials
+// have been verified against upstream for the user named in "u". Use it for hooks that
+// answer locally or record data for the user. When verification fails the hooks are
+// skipped and the request is forwarded unchanged, so upstream answers it with its own
+// authentication handling.
+func (ps *ProxyServer) AddAuthenticatedHook(endpoint string, hook models.Hook) {
+	ps.authRequired[endpoint] = true
+	ps.AddHook(endpoint, hook)
+}
+
+// isAuthenticated verifies the request's credentials with the same upstream validation
+// used for credential capture, and checks that they belong to the user the hooks act on.
+func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password string) bool {
+	if username == "" || password == "" {
+		return false
+	}
+
+	// Hooks identify the user by the "u" query parameter
+	if r.URL.Query().Get("u") != username {
+		ps.logger.WithFields(logrus.Fields{
+			"username": sanitizeUsername(username),
+			"endpoint": sanitizeForLogging(r.URL.Path),
+			"remote":   sanitizeRemoteAddr(r.RemoteAddr),
+		}).Warn("Request user does not match credentials, forwarding without local handling")
+		return false
+	}
+
+	isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
+	if err != nil {
+		ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials, forwarding without local handling")
+		return false
+	}
+
+	if isNewCredential {
+		ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
+		ps.credentialWg.Go(ps.fetchAndStoreSongs)
+	}
+
+	return true
 }
 
 // setCORSHeaders sets CORS headers based on configuration
@@ -275,7 +318,10 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if strings.HasPrefix(endpoint, "/rest/") {
+	needsAuth := ps.authRequired[endpoint]
+	authenticated := false
+
+	if strings.HasPrefix(endpoint, "/rest/") || needsAuth {
 		username, password := ps.extractCredentials(r)
 
 		// Validate input lengths
@@ -287,7 +333,10 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			username = username[:MaxUsernameLength]
 		}
 
-		if username != "" && password != "" && len(username) > 0 && len(password) > 0 {
+		if needsAuth {
+			// Validated synchronously, which also captures the credentials for sync
+			authenticated = ps.isAuthenticated(r, username, password)
+		} else if username != "" && password != "" {
 			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
 
 			// Acquire a worker slot (blocks if all workers are busy)
@@ -323,7 +372,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if hooks, exists := ps.hooks[endpoint]; exists {
+	if hooks, exists := ps.hooks[endpoint]; exists && (!needsAuth || authenticated) {
 		for _, hook := range hooks {
 			if hook(w, r, endpoint) {
 				return

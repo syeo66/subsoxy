@@ -45,11 +45,11 @@ func main() {
 		return handlers.HandleStream(w, r, endpoint)
 	})
 
-	proxyServer.AddHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	proxyServer.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 		return handlers.HandleScrobble(w, r, endpoint, proxyServer.RecordPlayEvent, proxyServer.SetLastPlayed, proxyServer.ProcessScrobble)
 	})
 
-	proxyServer.AddHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	proxyServer.AddAuthenticatedHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 		return handlers.HandleShuffle(w, r, endpoint)
 	})
 
