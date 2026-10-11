@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"container/heap"
 	"math"
 	"math/rand"
 	"sort"
@@ -14,12 +15,8 @@ import (
 	"github.com/syeo66/subsoxy/models"
 )
 
-// Algorithm selection constants
-const (
-	LargeLibraryThreshold = 5000
-	BatchSize             = 1000
-	OversampleFactor      = 3
-)
+// Number of songs read from the database at a time while shuffling
+const BatchSize = 1000
 
 // Weight calculation constants
 const (
@@ -419,291 +416,220 @@ func (s *Service) updateScrobbleState(userID, songID string, isSubmission bool) 
 	return skippedSong, true // OK to record play event
 }
 
-// GetWeightedShuffledSongs returns a shuffled list of songs based on user listening history
-// with strict 2-week replay prevention. Songs played OR skipped within the last 14 days are
-// strictly excluded from the results.
-// Uses consistent cutoff time calculation and improved database filtering for reliability.
+// racer is one song in the exponential race that orders the shuffle. Each song has a clock
+// that runs at the song's current weight and fires once it has used up a random Exp(1)
+// budget, so the next clock to fire belongs to a song picked with probability proportional
+// to its weight. The clocks are memoryless, so a song's rate can change partway through the
+// race, when the similarity reference moves, without biasing later picks.
+type racer struct {
+	song      models.Song
+	weight    float64 // Base weight: time × play/skip × artist
+	rate      float64 // Base weight × current similarity factor
+	remaining float64 // Budget left as of since
+	since     float64
+	fireAt    float64
+	index     int // Position in the heap, -1 once picked
+}
+
+func (r *racer) setRate(now, rate float64) {
+	r.remaining -= r.rate * (now - r.since)
+	r.since = now
+	r.rate = rate
+	r.fireAt = now + r.remaining/rate
+}
+
+// raceQueue is a heap of racers ordered by earliest firing time, or by latest when
+// latestFirst is set (used to keep the earliest songs while streaming the library).
+type raceQueue struct {
+	items       []*racer
+	latestFirst bool
+}
+
+func (q *raceQueue) Len() int { return len(q.items) }
+
+func (q *raceQueue) Less(i, j int) bool {
+	if q.latestFirst {
+		return q.items[i].fireAt > q.items[j].fireAt
+	}
+	return q.items[i].fireAt < q.items[j].fireAt
+}
+
+func (q *raceQueue) Swap(i, j int) {
+	q.items[i], q.items[j] = q.items[j], q.items[i]
+	q.items[i].index = i
+	q.items[j].index = j
+}
+
+func (q *raceQueue) Push(x interface{}) {
+	r := x.(*racer)
+	r.index = len(q.items)
+	q.items = append(q.items, r)
+}
+
+func (q *raceQueue) Pop() interface{} {
+	last := len(q.items) - 1
+	r := q.items[last]
+	q.items = q.items[:last]
+	r.index = -1
+	return r
+}
+
+// GetWeightedShuffledSongs returns up to count songs, each picked with probability
+// proportional to its weight among the songs not picked yet. Songs played or skipped within
+// the last TwoWeekReplayThreshold days are strictly excluded.
+//
+// The picks are run as an exponential race (see racer). That lets the library be streamed in
+// batches while keeping only count songs in memory, without losing any weighting: every
+// other song's clock fires later at its base weight, so it can only be picked if the
+// similarity boost speeds it up, and those songs are loaded when they become similar.
 func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {
-	// For small libraries, use the original algorithm
-	totalSongs, err := s.db.GetSongCount(userID)
-	if err != nil {
-		return nil, err
+	if count <= 0 {
+		return []models.Song{}, nil
 	}
 
-	// Switch to memory-efficient algorithm for large libraries
-	if totalSongs > LargeLibraryThreshold {
-		return s.getWeightedShuffledSongsOptimized(userID, count, totalSongs)
+	// Calculate cutoff time once so every query filters against the same moment
+	cutoffTime := time.Now().AddDate(0, 0, -TwoWeekReplayThreshold)
+
+	// Start the similarity chain from the last-played track, fetching it in the
+	// background while the library is scanned.
+	s.mu.RLock()
+	lastPlayed := s.lastPlayed[userID]
+	s.mu.RUnlock()
+	referenceID := ""
+	if lastPlayed != nil {
+		referenceID = lastPlayed.ID
+	}
+	if referenceID != "" {
+		go s.getSimilarSongsForUser(userID, referenceID)
 	}
 
-	// Original algorithm for small libraries
-	songs, err := s.db.GetAllSongs(userID)
-	if err != nil {
-		return nil, err
+	artistStats := s.LoadArtistStats(userID)
+
+	// Keep the count songs whose clocks fire first at base weight
+	pool := &raceQueue{latestFirst: true}
+	eligible := 0
+	for offset := 0; ; offset += BatchSize {
+		batch, err := s.db.GetSongsBatchFiltered(userID, BatchSize, offset, cutoffTime)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, song := range batch {
+			weight := s.calculateBaseWeight(userID, song, artistStats)
+			if weight <= 0 {
+				continue
+			}
+			eligible++
+
+			budget := rand.ExpFloat64()
+			r := &racer{song: song, weight: weight, rate: weight, remaining: budget, fireAt: budget / weight}
+			if pool.Len() < count {
+				heap.Push(pool, r)
+			} else if r.fireAt < pool.items[0].fireAt {
+				r.index = 0
+				pool.items[0] = r
+				heap.Fix(pool, 0)
+			}
+		}
 	}
 
-	// Calculate cutoff time once for consistency to prevent edge cases
-	// from multiple time.Now() calls across components
-	now := time.Now()
-	twoWeeksAgo := now.AddDate(0, 0, -TwoWeekReplayThreshold)
+	// Every eligible song left out of the pool fires after horizon at its base weight
+	horizon := math.Inf(1)
+	if eligible > pool.Len() {
+		horizon = pool.items[0].fireAt
+	}
 
-	var eligibleSongs []models.Song
-	var recentSongs []models.Song
+	race := &raceQueue{items: pool.items}
+	heap.Init(race)
 
-	for _, song := range songs {
-		if (song.LastPlayed.IsZero() || song.LastPlayed.Before(twoWeeksAgo)) && (song.LastSkipped.IsZero() || song.LastSkipped.Before(twoWeeksAgo)) {
-			eligibleSongs = append(eligibleSongs, song)
-		} else {
-			recentSongs = append(recentSongs, song)
+	racers := make(map[string]*racer, race.Len()) // Songs still in the race
+	seen := make(map[string]bool, race.Len())     // Songs already in the race or looked up
+	for _, r := range race.items {
+		racers[r.song.ID] = r
+		seen[r.song.ID] = true
+	}
+
+	now := 0.0
+	var similarSongs map[string]float64
+
+	// setSimilarSongs moves the similarity boost to a new set of songs at the current time
+	setSimilarSongs := func(next map[string]float64) {
+		if !math.IsInf(horizon, 1) {
+			var missing []string
+			for id := range next {
+				if !seen[id] {
+					seen[id] = true
+					missing = append(missing, id)
+				}
+			}
+
+			songs, err := s.db.GetEligibleSongsByIDs(userID, missing, cutoffTime)
+			if err != nil {
+				s.logger.WithError(err).WithField("userID", userID).Warn("Failed to load similar songs, continuing without them")
+			}
+			for _, song := range songs {
+				weight := s.calculateBaseWeight(userID, song, artistStats)
+				if weight <= 0 {
+					continue
+				}
+				// The song's clock hasn't fired by horizon at base weight, so by memorylessness
+				// its budget left now is what it would use until horizon plus a fresh Exp(1).
+				remaining := weight*(horizon-now) + rand.ExpFloat64()
+				r := &racer{song: song, weight: weight, rate: weight, remaining: remaining, since: now, fireAt: now + remaining/weight}
+				heap.Push(race, r)
+				racers[song.ID] = r
+			}
+		}
+
+		for _, ids := range []map[string]float64{similarSongs, next} {
+			for id := range ids {
+				if r, ok := racers[id]; ok {
+					r.setRate(now, r.weight*s.calculateSimilarityWeight(id, next))
+					heap.Fix(race, r.index)
+				}
+			}
+		}
+		similarSongs = next
+	}
+
+	if referenceID != "" {
+		setSimilarSongs(s.getSimilarSongsForUser(userID, referenceID))
+	}
+
+	result := make([]models.Song, 0, min(count, race.Len()))
+	for len(result) < count && race.Len() > 0 {
+		r := heap.Pop(race).(*racer)
+		delete(racers, r.song.ID)
+		now = r.fireAt
+		result = append(result, r.song)
+
+		// Refresh the similarity reference every SimilarityChainStep picks instead of every
+		// pick. This reduces API calls by that factor while preserving acoustic flow.
+		if len(result)%SimilarityChainStep == 0 && len(result) < count {
+			setSimilarSongs(s.getSimilarSongsForUser(userID, r.song.ID))
 		}
 	}
 
 	s.logger.WithFields(logrus.Fields{
 		"userID":         userID,
-		"totalSongs":     len(songs),
-		"eligibleSongs":  len(eligibleSongs),
-		"recentSongs":    len(recentSongs),
+		"eligibleSongs":  eligible,
 		"requestedCount": count,
-	}).Debug("Filtered songs by 2-week replay threshold")
-
-	// Precompute stable base weights (time × play/skip × artist).
-	// Similarity is intentionally excluded here — it updates after each pick.
-	artistStats := s.LoadArtistStats(userID)
-	baseWeights := make(map[string]float64, len(eligibleSongs))
-	for _, song := range eligibleSongs {
-		baseWeights[song.ID] = s.calculateSongWeight(userID, song, artistStats, nil)
-	}
-
-	// Start similarity chain from the last-played track.
-	s.mu.RLock()
-	lastPlayed, hasLastPlayed := s.lastPlayed[userID]
-	s.mu.RUnlock()
-	referenceID := ""
-	if hasLastPlayed && lastPlayed != nil {
-		referenceID = lastPlayed.ID
-	}
-
-	// Pre-warm similarity cache in background so the HTTP call overlaps
-	// with the base-weight computation loop below.
-	if referenceID != "" {
-		go s.getSimilarSongsForUser(userID, referenceID)
-	}
-
-	// Pick songs one at a time, refreshing the similarity reference every
-	// SimilarityChainStep picks instead of every pick. This reduces API calls
-	// by that factor while preserving acoustic flow across the queue.
-	result := make([]models.Song, 0, count)
-	used := make(map[string]bool)
-	pickCount := 0
-
-	type candidate struct {
-		song   models.Song
-		weight float64
-	}
-
-	for len(result) < count && len(used) < len(eligibleSongs) {
-		var similarSongs map[string]float64
-		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
-		}
-
-		// Build candidate pool: base weight × current similarity factor
-		pool := make([]candidate, 0, len(eligibleSongs)-len(used))
-		totalWeight := 0.0
-		for _, song := range eligibleSongs {
-			if !used[song.ID] {
-				w := baseWeights[song.ID] * s.calculateSimilarityWeight(song.ID, similarSongs)
-				pool = append(pool, candidate{song, w})
-				totalWeight += w
-			}
-		}
-
-		if totalWeight <= 0 || len(pool) == 0 {
-			break
-		}
-
-		target := rand.Float64() * totalWeight
-		current := 0.0
-		for _, c := range pool {
-			current += c.weight
-			if current >= target {
-				result = append(result, c.song)
-				used[c.song.ID] = true
-				pickCount++
-				if pickCount%SimilarityChainStep == 0 {
-					referenceID = c.song.ID
-					go s.getSimilarSongsForUser(userID, referenceID)
-				}
-				break
-			}
-		}
-	}
+		"resultCount":    len(result),
+	}).Debug("Completed weighted shuffle with 2-week replay prevention")
 
 	return result, nil
 }
 
-// getWeightedShuffledSongsOptimized implements a memory-efficient shuffle algorithm
-// for large song libraries using reservoir sampling and batch processing with strict 2-week
-// replay prevention. Filters at the database level for optimal memory usage.
-// Uses consistent cutoff time passed to database methods for timing consistency.
-func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, totalSongs int) ([]models.Song, error) {
-	const batchSize = BatchSize
-	result := make([]models.Song, 0, count)
-
-	// Calculate cutoff time once for consistency to prevent edge cases
-	// from multiple time.Now() calls across database methods
-	now := time.Now()
-	cutoffTime := now.AddDate(0, 0, -TwoWeekReplayThreshold)
-
-	// First try to get songs that haven't been played within 2 weeks
-	eligibleSongs, err := s.db.GetSongCountFiltered(userID, cutoffTime)
-	if err != nil {
-		return nil, err
-	}
-
-	// Always use filtered songs - no fallback to recent songs
-	songsToSampleFrom := eligibleSongs
-	useFiltered := true
-
-	s.logger.WithFields(logrus.Fields{
-		"userID":         userID,
-		"eligibleSongs":  eligibleSongs,
-		"totalSongs":     totalSongs,
-		"requestedCount": count,
-	}).Debug("Using filtered songs (not played within 2 weeks)")
-
-	// Use reservoir sampling approach to avoid loading all songs
-	// We'll sample more songs than needed to account for weight distribution
-	oversampleFactor := OversampleFactor
-	sampleSize := count * oversampleFactor
-	if sampleSize > songsToSampleFrom {
-		sampleSize = songsToSampleFrom
-	}
-
-	// Create reservoir for sampling
-	reservoir := make([]models.Song, 0, sampleSize)
-
-	// Track total number of songs processed (not database offset)
-	totalProcessed := 0
-
-	// Process songs in batches to control memory usage
-	for offset := 0; offset < songsToSampleFrom; offset += batchSize {
-		var batch []models.Song
-		var err error
-
-		if useFiltered {
-			batch, err = s.db.GetSongsBatchFiltered(userID, batchSize, offset, cutoffTime)
-		} else {
-			batch, err = s.db.GetSongsBatch(userID, batchSize, offset)
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		// Apply reservoir sampling to this batch
-		for _, song := range batch {
-			totalProcessed++
-			if len(reservoir) < sampleSize {
-				reservoir = append(reservoir, song)
-			} else {
-				// Replace with probability sampleSize/totalProcessed
-				randomIndex := rand.Intn(totalProcessed)
-				if randomIndex < sampleSize {
-					reservoir[randomIndex] = song
-				}
-			}
-		}
-	}
-
-	// Precompute stable base weights.
-	// Similarity is excluded — it updates after each pick during selection.
-	artistStats := s.LoadArtistStats(userID)
-	baseWeights := make(map[string]float64, len(reservoir))
-	for _, song := range reservoir {
-		timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
-		playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
-		artistWeight := s.calculateArtistWeight(userID, song.Artist, artistStats)
-		baseWeights[song.ID] = timeWeight * playSkipWeight * artistWeight
-	}
-
-	// Determine initial similarity reference.
-	s.mu.RLock()
-	lastPlayed, exists := s.lastPlayed[userID]
-	s.mu.RUnlock()
-	referenceID := ""
-	if exists && lastPlayed != nil {
-		referenceID = lastPlayed.ID
-	}
-
-	// Pre-warm similarity cache in background. The reservoir sampling and
-	// base-weight computation above provide overlap time for the HTTP call
-	// to complete before the first pick iteration needs the result.
-	if referenceID != "" {
-		go s.getSimilarSongsForUser(userID, referenceID)
-	}
-
-	// Pick songs one at a time, refreshing the similarity reference every
-	// SimilarityChainStep picks instead of every pick.
-	type candidate struct {
-		song   models.Song
-		weight float64
-	}
-	used := make(map[string]bool)
-	pickCount := 0
-
-	for len(result) < count && len(used) < len(reservoir) {
-		var similarSongs map[string]float64
-		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
-		}
-
-		pool := make([]candidate, 0, len(reservoir)-len(used))
-		totalWeight := 0.0
-		for _, song := range reservoir {
-			if !used[song.ID] {
-				w := baseWeights[song.ID] * s.calculateSimilarityWeight(song.ID, similarSongs)
-				pool = append(pool, candidate{song, w})
-				totalWeight += w
-			}
-		}
-
-		if totalWeight <= 0 || len(pool) == 0 {
-			break
-		}
-
-		target := rand.Float64() * totalWeight
-		current := 0.0
-		for _, c := range pool {
-			current += c.weight
-			if current >= target {
-				result = append(result, c.song)
-				used[c.song.ID] = true
-				pickCount++
-				if pickCount%SimilarityChainStep == 0 {
-					referenceID = c.song.ID
-					go s.getSimilarSongsForUser(userID, referenceID)
-				}
-				break
-			}
-		}
-	}
-
-	algorithmType := "optimized"
-	if useFiltered {
-		algorithmType = "optimized-filtered"
-	}
-
-	s.logger.WithFields(logrus.Fields{
-		"userID":        userID,
-		"totalSongs":    totalSongs,
-		"eligibleSongs": eligibleSongs,
-		"sampleSize":    sampleSize,
-		"resultCount":   len(result),
-		"algorithm":     algorithmType,
-		"useFiltered":   useFiltered,
-	}).Debug("Completed optimized weighted shuffle with 2-week replay prevention")
-
-	return result, nil
+// calculateBaseWeight returns a song's weight without the similarity factor, which changes
+// as the shuffle progresses.
+func (s *Service) calculateBaseWeight(userID string, song models.Song, artistStats ArtistStats) float64 {
+	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
+	playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
+	artistWeight := s.calculateArtistWeight(userID, song.Artist, artistStats)
+	return timeWeight * playSkipWeight * artistWeight
 }
 
 func (s *Service) calculateSongWeight(userID string, song models.Song, artistStats ArtistStats, similarSongs map[string]float64) float64 {

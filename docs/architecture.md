@@ -48,7 +48,7 @@ A **hook** is `func(w http.ResponseWriter, r *http.Request, endpoint string) boo
 
 ## Database
 
-SQLite, one file (`-db-path`). Every table that holds user data is keyed or indexed by `user_id`.
+SQLite, one file (`-db-path`), in WAL mode with a 5s busy timeout so a library sync and incoming scrobbles can write without failing on a locked database. WAL keeps `-wal` and `-shm` files next to the database, so put all three on the same volume. Every table that holds user data is keyed or indexed by `user_id`.
 
 ```sql
 CREATE TABLE songs (

@@ -60,9 +60,9 @@ The first start after upgrading from a version that still had `song_transitions`
 
 ## Performance
 
-- Libraries over 5,000 songs switch automatically to the sampled algorithm. Debug logs show the eligible and total song counts for each request.
+- Debug logs show the eligible song count for each shuffle request.
 - Time a request: `time curl -s "http://localhost:8080/rest/getRandomSongs?u=USER&p=PASS&size=500&f=json" > /dev/null`
-- If the first request after a play is slow, it's usually the similarity lookup to the upstream server. Results are cached for 5 minutes.
+- If the first request after a play is slow, it's usually the similarity lookup to the upstream server. Results are cached for 5 minutes, and a lookup gives up after 5s.
 
 ## Shutdown hangs
 

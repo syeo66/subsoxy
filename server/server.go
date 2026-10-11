@@ -36,8 +36,13 @@ const (
 	SongSyncInterval     = 1 * time.Hour
 	UserSyncStaggerDelay = 2 * time.Second
 	CORSMaxAge           = "86400"
-	SubsonicAPIVersion   = "1.15.0"
-	ClientName           = "subsoxy"
+	// Upper bound for one library sync request. Generous, since a directory listing can be large.
+	UpstreamRequestTimeout = 30 * time.Second
+	// Similarity lookups run while a client waits for getRandomSongs, so they give up sooner.
+	SimilarSongsTimeout = 5 * time.Second
+	ReadHeaderTimeout   = 10 * time.Second
+	SubsonicAPIVersion  = "1.15.0"
+	ClientName          = "subsoxy"
 )
 
 // ASCII control character constants
@@ -56,6 +61,7 @@ type ProxyServer struct {
 	credentials       *credentials.Manager
 	handlers          *handlers.Handler
 	shuffle           *shuffle.Service
+	upstreamClient    *http.Client
 	server            *http.Server
 	syncTicker        *time.Ticker
 	syncMutex         sync.RWMutex
@@ -144,6 +150,7 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		credentials:       credManager,
 		handlers:          handlersService,
 		shuffle:           shuffleService,
+		upstreamClient:    &http.Client{Timeout: UpstreamRequestTimeout},
 		shutdownChan:      make(chan struct{}),
 		rateLimiter:       rateLimiter,
 		credentialWorkers: credentialWorkers,
@@ -407,8 +414,9 @@ func (ps *ProxyServer) Start() error {
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
 	ps.server = &http.Server{
-		Addr:    ":" + ps.config.ProxyPort,
-		Handler: router,
+		Addr:              ":" + ps.config.ProxyPort,
+		Handler:           router,
+		ReadHeaderTimeout: ReadHeaderTimeout,
 	}
 
 	ps.logger.WithFields(logrus.Fields{
@@ -752,7 +760,7 @@ func (ps *ProxyServer) getMusicFolders(username, password string) ([]models.Musi
 	params := ps.buildAuthParams(username, password)
 	baseURL.RawQuery = params.Encode()
 
-	resp, err := http.Get(baseURL.String())
+	resp, err := ps.upstreamClient.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music folders")
 	}
@@ -787,7 +795,7 @@ func (ps *ProxyServer) getIndexes(username, password, musicFolderId string) ([]m
 	}
 	baseURL.RawQuery = params.Encode()
 
-	resp, err := http.Get(baseURL.String())
+	resp, err := ps.upstreamClient.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch indexes")
 	}
@@ -820,7 +828,7 @@ func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]model
 	params.Add("id", id)
 	baseURL.RawQuery = params.Encode()
 
-	resp, err := http.Get(baseURL.String())
+	resp, err := ps.upstreamClient.Get(baseURL.String())
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music directory")
 	}
@@ -1024,7 +1032,14 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]floa
 	params.Add("count", "50")
 	baseURL.RawQuery = params.Encode()
 
-	resp, err := http.Get(baseURL.String())
+	ctx, cancel := context.WithTimeout(context.Background(), SimilarSongsTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := ps.upstreamClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

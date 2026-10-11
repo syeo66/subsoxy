@@ -23,6 +23,11 @@ const (
 	HealthCheckInterval    = 30 * time.Second
 )
 
+// SQLite connection settings. WAL lets reads run alongside a write, the busy timeout makes
+// a writer wait for the lock instead of failing with "database is locked", and immediate
+// transactions take the write lock at BEGIN so that wait applies to them too.
+const sqliteConnParams = "_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate"
+
 // Database operation constants
 const (
 	DefaultDateString = "1970-01-01"
@@ -48,6 +53,16 @@ func parseTimestamp(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, lastErr
+}
+
+// sqliteDSN appends the connection settings to the database path, keeping any
+// parameters the path already carries.
+func sqliteDSN(dbPath string) string {
+	separator := "?"
+	if strings.Contains(dbPath, "?") {
+		separator = "&"
+	}
+	return dbPath + separator + sqliteConnParams
 }
 
 type DB struct {
@@ -86,7 +101,7 @@ func New(dbPath string, logger *logrus.Logger) (*DB, error) {
 
 // NewWithPool creates a new database connection with custom pool configuration
 func NewWithPool(dbPath string, logger *logrus.Logger, poolConfig *ConnectionPool) (*DB, error) {
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := sql.Open("sqlite3", sqliteDSN(dbPath))
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "CONNECTION_FAILED", "failed to open database").
 			WithContext("path", dbPath)
@@ -660,6 +675,74 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime
 			WithContext("limit", limit).
 			WithContext("offset", offset).
 			WithContext("cutoffTime", cutoffTime.Format("2006-01-02 15:04:05"))
+	}
+
+	return songs, nil
+}
+
+// GetEligibleSongsByIDs returns the given songs for a user, leaving out any played or skipped
+// after cutoffTime, with the same filtering as GetSongsBatchFiltered. IDs that are unknown
+// or recently heard are simply missing from the result.
+func (db *DB) GetEligibleSongsByIDs(userID string, songIDs []string, cutoffTime time.Time) ([]models.Song, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+	if len(songIDs) == 0 {
+		return nil, nil
+	}
+
+	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
+
+	placeholders := make([]string, len(songIDs))
+	args := make([]interface{}, 0, len(songIDs)+3)
+	args = append(args, userID, cutoffStr, cutoffStr)
+	for i, songID := range songIDs {
+		placeholders[i] = "?"
+		args = append(args, songID)
+	}
+
+	rows, err := db.conn.Query(`SELECT id, title, artist, album, duration,
+		COALESCE(last_played, '1970-01-01') as last_played,
+		COALESCE(last_skipped, '1970-01-01') as last_skipped,
+		COALESCE(play_count, 0) as play_count,
+		COALESCE(skip_count, 0) as skip_count,
+		COALESCE(adjusted_plays, 0.0) as adjusted_plays,
+		COALESCE(adjusted_skips, 0.0) as adjusted_skips,
+		COALESCE(cover_art, '') as cover_art
+		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') < ?) AND (COALESCE(last_skipped, '1970-01-01') < ?)
+		AND id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query eligible songs by IDs").
+			WithContext("userID", userID).
+			WithContext("songCount", len(songIDs))
+	}
+	defer rows.Close()
+
+	var songs []models.Song
+	for rows.Next() {
+		var song models.Song
+		var lastPlayedStr, lastSkippedStr string
+		err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album,
+			&song.Duration, &lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount, &song.AdjustedPlays, &song.AdjustedSkips, &song.CoverArt)
+		if err != nil {
+			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan eligible song")
+			continue
+		}
+
+		if lastPlayedStr != DefaultDateString {
+			song.LastPlayed, _ = parseTimestamp(lastPlayedStr)
+		}
+
+		if lastSkippedStr != DefaultDateString {
+			song.LastSkipped, _ = parseTimestamp(lastSkippedStr)
+		}
+
+		songs = append(songs, song)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during eligible songs by IDs iteration").
+			WithContext("userID", userID)
 	}
 
 	return songs, nil

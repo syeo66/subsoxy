@@ -90,14 +90,11 @@ Songs are drawn one at a time by weighted random selection, without replacement.
 
 The queue drifts gradually instead of jumping between moods. Similarity scores come from the upstream `/rest/getSonicSimilarTracks` endpoint, which is provided by the AudioMuse-AI-NV plugin (Navidrome v0.62+, OpenSubsonic `sonicSimilarity` extension). Results are cached for 5 minutes, and concurrent lookups for the same track are deduplicated. If the endpoint is missing or fails, the similarity factor is 1.0 and nothing else changes.
 
-### Large libraries
+### Streaming the library
 
-| Library size | Strategy |
-|--------------|----------|
-| ≤ 5,000 songs | Load all songs, filter in memory, weight all of them |
-| > 5,000 songs | Filter at the database level, then reservoir-sample 3× the requested count in 1,000-row batches, then weight and select from the sample |
+Selection runs as an exponential race. Each eligible song gets a random clock that runs at the speed of its weight, and songs are picked in the order their clocks finish. That gives exactly the same odds as drawing one song at a time in proportion to weight, and it lets the library be read in 1,000-row batches while only the requested number of songs is kept in memory. All other songs finish later at their base weight, so they can only overtake when the similarity factor speeds them up. Those songs are loaded from the database when they become similar. Every song in the library is weighted, whatever its size.
 
-The large-library path keeps memory proportional to the sample size, not the library size. Rough timings: about 5 ms for 1k songs, about 100 ms for 10k, about 2.4 s for 50k.
+Rough timings: about 2 ms for 1k songs, about 40 ms for 10k, about 0.9 s for 50k.
 
 ### Request and response
 
@@ -121,7 +118,7 @@ A sync walks the library through the standard Subsonic API: `getMusicFolders` �
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.
-- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts.
+- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts. Each sync request gives up after 30s, so a stalled upstream server can't block later syncs.
 
 Each sync logs added, updated, unchanged and deleted counts per user.
 

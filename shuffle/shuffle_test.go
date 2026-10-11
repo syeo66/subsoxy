@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -1388,4 +1389,107 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 			t.Errorf("Expected song2 NOT to be marked as skipped (exceeded 2x300s threshold), got %d", skipRecords["song2"])
 		}
 	})
+}
+
+// Songs that similarity boosts must keep their boost even when they are not among the songs
+// the shuffle holds in memory, so the share of similar songs has to match the weights.
+func TestGetWeightedShuffledSongsBoostsSimilarSongsAcrossLibrary(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+	userID := "testuser"
+
+	// 200 unplayed songs share the same base weight; half of them are fully similar to the
+	// reference track, which makes them 1.5× as likely to be picked.
+	songs := make([]models.Song, 200)
+	similar := make(map[string]float64)
+	for i := range songs {
+		id := fmt.Sprintf("song%03d", i)
+		songs[i] = models.Song{ID: id, Title: id, Artist: fmt.Sprintf("artist%03d", i), Album: "album", Duration: 180}
+		if i%2 == 0 {
+			similar[id] = 1.0
+		}
+	}
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		return similar, nil
+	})
+	service.SetLastPlayed(userID, &models.Song{ID: "reference"})
+
+	// Five picks per shuffle, so the reference never moves. Only 5 of the 200 songs fit in
+	// the shuffle's pool, so most similar picks have to come from outside it.
+	const trials = 2000
+	similarPicks, totalPicks := 0, 0
+	for range trials {
+		result, err := service.GetWeightedShuffledSongs(userID, 5)
+		if err != nil {
+			t.Fatalf("Failed to shuffle: %v", err)
+		}
+		if len(result) != 5 {
+			t.Fatalf("Expected 5 songs, got %d", len(result))
+		}
+		for _, song := range result {
+			if _, ok := similar[song.ID]; ok {
+				similarPicks++
+			}
+			totalPicks++
+		}
+	}
+
+	// Each pick lands on a similar song with probability close to 150/250 = 0.6; without the
+	// boost reaching songs outside the pool it would be 0.5.
+	share := float64(similarPicks) / float64(totalPicks)
+	if share < 0.57 || share > 0.63 {
+		t.Errorf("Expected about 60%% similar picks, got %.3f", share)
+	}
+}
+
+func TestGetWeightedShuffledSongsReturnsEveryEligibleSong(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+	userID := "testuser"
+
+	// More songs than one database batch, so the scan has to page
+	songs := make([]models.Song, BatchSize+10)
+	for i := range songs {
+		id := fmt.Sprintf("song%05d", i)
+		songs[i] = models.Song{ID: id, Title: id, Artist: "artist", Album: "album", Duration: 180}
+	}
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	result, err := service.GetWeightedShuffledSongs(userID, len(songs)+50)
+	if err != nil {
+		t.Fatalf("Failed to shuffle: %v", err)
+	}
+	if len(result) != len(songs) {
+		t.Fatalf("Expected all %d songs, got %d", len(songs), len(result))
+	}
+
+	picked := make(map[string]bool, len(result))
+	for _, song := range result {
+		if picked[song.ID] {
+			t.Fatalf("Song %s picked twice", song.ID)
+		}
+		picked[song.ID] = true
+	}
 }
