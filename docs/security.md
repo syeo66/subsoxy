@@ -5,7 +5,8 @@
 Subsoxy has no credentials of its own. It picks them up from client requests and uses them for background sync and similarity lookups.
 
 - **Supported auth modes**: password (`u` + `p`) and token (`u` + `t` + `s`). Credentials are read from the query string, POST form data, or an Authorization header. Internally a token is stored as `TOKEN:<token>:<salt>` and sent upstream as `t`/`s` again.
-- **Validation**: before storing anything, Subsoxy calls upstream `/rest/ping` with the same auth mode (10s timeout). Invalid credentials are never stored.
+- **Validation**: before storing anything, Subsoxy calls upstream `/rest/ping` with the same auth mode (10s timeout). Invalid credentials are never stored. A token is verified locally when the user's plaintext password is already known (`t = md5(password + salt)`).
+- **Locally handled endpoints**: `getRandomSongs`, `scrobble` and `/debug` act on a user's data before upstream sees the request, so they only run after the credentials are verified synchronously. The `u` parameter must name the authenticated user. Failures return a Subsonic error (`10` missing credentials, `40` wrong credentials; `/debug` returns HTTP 401).
 - **Encryption in memory**: stored credentials are sealed with AES-256-GCM, using a random 32-byte key per process and a fresh nonce for every value. Nothing is written to disk, and a restart throws away both the credentials and the key.
 - **Concurrency**: the store is protected by an `RWMutex`. Validation runs in a bounded worker pool (`-credential-workers`) so a flood of requests can't create unlimited goroutines.
 - **No credential logging**: upstream URLs are built with `url.Values{}`, and usernames are sanitized before they're logged. Passwords and tokens are never logged.

@@ -45,17 +45,17 @@ func main() {
 		return handlers.HandleStream(w, r, endpoint)
 	})
 
-	proxyServer.AddHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	proxyServer.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 		return handlers.HandleScrobble(w, r, endpoint, proxyServer.RecordPlayEvent, proxyServer.SetLastPlayed, proxyServer.ProcessScrobble)
 	})
 
-	proxyServer.AddHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+	proxyServer.AddAuthenticatedHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 		return handlers.HandleShuffle(w, r, endpoint)
 	})
 
 	// Register debug endpoint only when DEBUG=1 is set
 	if cfg.DebugMode {
-		proxyServer.AddHook("/debug", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		proxyServer.AddAuthenticatedHook("/debug", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 			return handlers.HandleDebug(w, r, endpoint)
 		})
 		fmt.Println("Debug endpoint enabled at /debug")

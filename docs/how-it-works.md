@@ -113,7 +113,7 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=secret&size=50&f=json"
 
 Subsoxy doesn't need any upstream credentials of its own. It learns them from client requests:
 
-1. A `/rest/*` request with `u` + `p` or `u` + `t` + `s` is validated against upstream `/rest/ping`. This runs in the background, limited by `-credential-workers`.
+1. A `/rest/*` request with `u` + `p` or `u` + `t` + `s` is validated against upstream `/rest/ping`. For forwarded requests this runs in the background, limited by `-credential-workers`. Tokens for a user whose credentials were validated within the last hour are not re-checked, since clients usually send a new salt with every request and upstream authenticates the forwarded request anyway.
 2. If the credentials are **new**, a full sync starts right away.
 3. After that, every known user is re-synced **hourly**, with staggered delays so the upstream server isn't overloaded.
 
@@ -121,7 +121,7 @@ A sync walks the library through the standard Subsonic API: `getMusicFolders` â†
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.
-- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history.
+- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album could not be fetched during the sync, nothing is deleted in that run.
 
 Each sync logs added, updated, unchanged and deleted counts per user.
 

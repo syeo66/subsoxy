@@ -1,10 +1,13 @@
 package credentials
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -791,5 +794,131 @@ func TestNetworkPartialResponse(t *testing.T) {
 	}
 	if result {
 		t.Error("Expected validation failure due to incomplete response, got success")
+	}
+}
+
+// newPingServer returns an upstream mock that accepts only the given user/password
+// (as a password or as md5(password+salt) token) and counts ping requests.
+func newPingServer(t *testing.T, username, password string, pings *int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(pings, 1)
+		q := r.URL.Query()
+		status := "failed"
+		if q.Get("u") == username {
+			sum := md5.Sum([]byte(password + q.Get("s")))
+			if q.Get("p") == password || (q.Get("t") != "" && q.Get("t") == hex.EncodeToString(sum[:])) {
+				status = "ok"
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": status, "version": "1.15.0"},
+		})
+	}))
+}
+
+func tokenFor(password, salt string) string {
+	sum := md5.Sum([]byte(password + salt))
+	return "TOKEN:" + hex.EncodeToString(sum[:]) + ":" + salt
+}
+
+func TestValidateAndStoreVerifiesTokenAgainstStoredPassword(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	var pings int32
+	mockServer := newPingServer(t, "testuser", "testpass", &pings)
+	defer mockServer.Close()
+
+	manager := New(logger, mockServer.URL)
+	if _, err := manager.ValidateAndStore("testuser", "testpass"); err != nil {
+		t.Fatalf("Failed to store password: %v", err)
+	}
+
+	for _, salt := range []string{"salt1", "salt2", "salt3"} {
+		if _, err := manager.ValidateAndStore("testuser", tokenFor("testpass", salt)); err != nil {
+			t.Errorf("Token with salt %s should be valid: %v", salt, err)
+		}
+	}
+	if atomic.LoadInt32(&pings) != 1 {
+		t.Errorf("Expected tokens to be verified locally (1 ping total), got %d pings", pings)
+	}
+
+	// A token for a different password must still be rejected by upstream
+	if _, err := manager.ValidateAndStore("testuser", tokenFor("wrongpass", "salt4")); err == nil {
+		t.Error("Token for wrong password should be rejected")
+	}
+
+	// The stored plaintext password must not be replaced by a token
+	if _, pass := manager.GetValid(); pass != "testpass" {
+		t.Errorf("Expected stored password to remain testpass, got %s", pass)
+	}
+}
+
+func TestValidateAndStoreTokenOnlyRequiresUpstream(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	var pings int32
+	mockServer := newPingServer(t, "testuser", "testpass", &pings)
+	defer mockServer.Close()
+
+	manager := New(logger, mockServer.URL)
+	isNew, err := manager.ValidateAndStore("testuser", tokenFor("testpass", "salt1"))
+	if err != nil || !isNew {
+		t.Fatalf("Expected new valid token credential, got isNew=%v err=%v", isNew, err)
+	}
+
+	// Same token again is a cache hit; a fresh salt cannot be verified locally
+	_, _ = manager.ValidateAndStore("testuser", tokenFor("testpass", "salt1"))
+	if atomic.LoadInt32(&pings) != 1 {
+		t.Errorf("Expected identical token to be cached, got %d pings", pings)
+	}
+	if _, err := manager.ValidateAndStore("testuser", tokenFor("testpass", "salt2")); err != nil {
+		t.Errorf("Fresh token should validate upstream: %v", err)
+	}
+	if atomic.LoadInt32(&pings) != 2 {
+		t.Errorf("Expected fresh token to be validated upstream, got %d pings", pings)
+	}
+}
+
+func TestCaptureSkipsUpstreamForFreshTokenUser(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	var pings int32
+	mockServer := newPingServer(t, "testuser", "testpass", &pings)
+	defer mockServer.Close()
+
+	manager := New(logger, mockServer.URL)
+
+	// Unknown user: Capture must validate upstream
+	isNew, err := manager.Capture("testuser", tokenFor("testpass", "salt0"))
+	if err != nil || !isNew {
+		t.Fatalf("Expected first capture to validate and store, got isNew=%v err=%v", isNew, err)
+	}
+
+	// Simulate a client sending a new salt on every request
+	for i := 1; i <= 10; i++ {
+		if _, err := manager.Capture("testuser", tokenFor("testpass", "salt"+string(rune('a'+i)))); err != nil {
+			t.Errorf("Capture should not fail: %v", err)
+		}
+	}
+	if atomic.LoadInt32(&pings) != 1 {
+		t.Errorf("Expected a single upstream ping, got %d", pings)
+	}
+
+	// Once the stored credential is stale, the next token is validated again
+	manager.mutex.Lock()
+	cred := manager.validCredentials["testuser"]
+	cred.ValidatedAt = time.Now().Add(-2 * RevalidateInterval)
+	manager.validCredentials["testuser"] = cred
+	manager.mutex.Unlock()
+
+	if _, err := manager.Capture("testuser", tokenFor("testpass", "saltz")); err != nil {
+		t.Errorf("Capture of stale credential should revalidate: %v", err)
+	}
+	if atomic.LoadInt32(&pings) != 2 {
+		t.Errorf("Expected stale credential to trigger revalidation, got %d pings", pings)
 	}
 }
