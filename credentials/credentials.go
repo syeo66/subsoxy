@@ -3,6 +3,7 @@ package credentials
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -25,20 +26,28 @@ const (
 	HTTPClientTimeout      = 10 * time.Second
 	SubsonicAPIVersion     = "1.15.0"
 	ClientName             = "subsoxy"
+	// How long a secret confirmed by upstream is trusted without asking upstream again
+	VerifiedSecretTTL = 15 * time.Minute
+	// Upper bound on remembered secrets per user. Token clients may use a new salt for
+	// every request, so this keeps the cache small no matter how many they send.
+	MaxVerifiedSecretsPerUser = 16
 )
 
 // encryptedCredential holds encrypted password data
 type encryptedCredential struct {
-	EncryptedPassword []byte `json:"encrypted_password"`
-	Nonce             []byte `json:"nonce"`
+	EncryptedPassword []byte    `json:"encrypted_password"`
+	Nonce             []byte    `json:"nonce"`
+	ValidatedAt       time.Time `json:"-"`
 }
 
 type Manager struct {
 	validCredentials map[string]encryptedCredential
-	mutex            sync.RWMutex
-	logger           *logrus.Logger
-	upstreamURL      string
-	encryptionKey    []byte
+	// Recently verified secrets per user, keyed by an HMAC of the secret, with their expiry
+	verifiedSecrets map[string]map[string]time.Time
+	mutex           sync.RWMutex
+	logger          *logrus.Logger
+	upstreamURL     string
+	encryptionKey   []byte
 }
 
 func New(logger *logrus.Logger, upstreamURL string) *Manager {
@@ -47,6 +56,7 @@ func New(logger *logrus.Logger, upstreamURL string) *Manager {
 
 	return &Manager{
 		validCredentials: make(map[string]encryptedCredential),
+		verifiedSecrets:  make(map[string]map[string]time.Time),
 		logger:           logger,
 		upstreamURL:      upstreamURL,
 		encryptionKey:    encryptionKey,
@@ -60,14 +70,10 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		return false, err
 	}
 
-	cm.mutex.RLock()
-	if storedCred, exists := cm.validCredentials[username]; exists {
-		if decryptedPassword, err := cm.decryptPassword(storedCred); err == nil && decryptedPassword == password {
-			cm.mutex.RUnlock()
-			return false, nil // Existing credential, not new
-		}
+	secretKey := cm.secretKey(username, password)
+	if cm.isVerified(username, secretKey) {
+		return false, nil // Recently verified, not new
 	}
-	cm.mutex.RUnlock()
 
 	if err := cm.validate(username, password); err != nil {
 		cm.logger.WithError(err).WithField("username", username).Warn("Invalid credentials provided")
@@ -79,9 +85,13 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		return false, errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt password")
 	}
 
+	now := time.Now()
+	encryptedCred.ValidatedAt = now
+
 	cm.mutex.Lock()
 	isNewCredential := len(cm.validCredentials) == 0 || cm.validCredentials[username].EncryptedPassword == nil
 	cm.validCredentials[username] = encryptedCred
+	cm.rememberVerified(username, secretKey, now)
 	cm.mutex.Unlock()
 
 	// Only log when credentials are actually new or changed
@@ -94,6 +104,57 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		}
 	}
 	return isNewCredential, nil
+}
+
+// secretKey identifies a username/secret pair without keeping the secret itself
+func (cm *Manager) secretKey(username, password string) string {
+	mac := hmac.New(sha256.New, cm.encryptionKey)
+	mac.Write([]byte(username))
+	mac.Write([]byte{0})
+	mac.Write([]byte(password))
+	return string(mac.Sum(nil))
+}
+
+// isVerified reports whether upstream confirmed this secret for the user within VerifiedSecretTTL
+func (cm *Manager) isVerified(username, secretKey string) bool {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	expiry, ok := cm.verifiedSecrets[username][secretKey]
+	return ok && time.Now().Before(expiry)
+}
+
+// rememberVerified records a secret upstream just confirmed. The caller holds the write lock.
+func (cm *Manager) rememberVerified(username, secretKey string, now time.Time) {
+	secrets := cm.verifiedSecrets[username]
+	if secrets == nil {
+		secrets = make(map[string]time.Time)
+		cm.verifiedSecrets[username] = secrets
+	}
+
+	if len(secrets) >= MaxVerifiedSecretsPerUser {
+		var oldestKey string
+		var oldestExpiry time.Time
+		for key, expiry := range secrets {
+			if !now.Before(expiry) {
+				delete(secrets, key)
+			} else if oldestKey == "" || expiry.Before(oldestExpiry) {
+				oldestKey, oldestExpiry = key, expiry
+			}
+		}
+		if len(secrets) >= MaxVerifiedSecretsPerUser {
+			delete(secrets, oldestKey)
+		}
+	}
+
+	secrets[secretKey] = now.Add(VerifiedSecretTTL)
+}
+
+// HasRecent reports whether the user's stored credential was confirmed by upstream within maxAge
+func (cm *Manager) HasRecent(username string, maxAge time.Duration) bool {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	cred, ok := cm.validCredentials[username]
+	return ok && time.Since(cred.ValidatedAt) < maxAge
 }
 
 func (cm *Manager) validate(username, password string) error {
@@ -190,6 +251,23 @@ func (cm *Manager) GetValid() (string, string) {
 	return "", ""
 }
 
+// Get returns the stored credential for one user
+func (cm *Manager) Get(username string) (string, bool) {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+
+	encryptedCred, ok := cm.validCredentials[username]
+	if !ok {
+		return "", false
+	}
+	password, err := cm.decryptPassword(encryptedCred)
+	if err != nil {
+		cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored password")
+		return "", false
+	}
+	return password, true
+}
+
 // GetAllValid returns all valid credentials as a map of username to password
 func (cm *Manager) GetAllValid() map[string]string {
 	cm.mutex.RLock()
@@ -228,6 +306,7 @@ func (cm *Manager) ClearInvalid() {
 		}
 		cm.validCredentials = make(map[string]encryptedCredential)
 	}
+	cm.verifiedSecrets = make(map[string]map[string]time.Time)
 }
 
 // generateEncryptionKey creates a random 32-byte key for AES-256

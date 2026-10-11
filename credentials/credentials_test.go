@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -791,5 +793,129 @@ func TestNetworkPartialResponse(t *testing.T) {
 	}
 	if result {
 		t.Error("Expected validation failure due to incomplete response, got success")
+	}
+}
+
+// newPingCounter returns an upstream that accepts every ping and counts them
+func newPingCounter(t *testing.T) (*httptest.Server, func() int) {
+	var mu sync.Mutex
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+}
+
+func TestValidateAndStoreRemembersEarlierSecrets(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, calls := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	// Two devices of the same user, each with its own token and salt
+	for _, secret := range []string{"TOKEN:a:salt1", "TOKEN:b:salt2", "TOKEN:a:salt1", "TOKEN:b:salt2"} {
+		if _, err := manager.ValidateAndStore("alice", secret); err != nil {
+			t.Fatalf("ValidateAndStore(%q) failed: %v", secret, err)
+		}
+	}
+
+	if got := calls(); got != 2 {
+		t.Errorf("Expected 2 upstream validations, got %d", got)
+	}
+}
+
+func TestValidateAndStoreRevalidatesExpiredSecret(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, calls := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	if isNew, _ := manager.ValidateAndStore("alice", "secret"); !isNew {
+		t.Fatal("First validation should report new credentials")
+	}
+
+	key := manager.secretKey("alice", "secret")
+	manager.verifiedSecrets["alice"][key] = time.Now().Add(-time.Second)
+
+	isNew, err := manager.ValidateAndStore("alice", "secret")
+	if err != nil {
+		t.Fatalf("Revalidation failed: %v", err)
+	}
+	if isNew {
+		t.Error("Revalidating a known user should not report new credentials")
+	}
+	if got := calls(); got != 2 {
+		t.Errorf("Expected an expired secret to be validated again, got %d upstream calls", got)
+	}
+}
+
+func TestVerifiedSecretsAreBoundedPerUser(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, _ := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	for i := 0; i < MaxVerifiedSecretsPerUser*2; i++ {
+		if _, err := manager.ValidateAndStore("alice", "TOKEN:tok:salt"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("ValidateAndStore failed: %v", err)
+		}
+	}
+
+	if got := len(manager.verifiedSecrets["alice"]); got != MaxVerifiedSecretsPerUser {
+		t.Errorf("Expected %d remembered secrets, got %d", MaxVerifiedSecretsPerUser, got)
+	}
+	last := "TOKEN:tok:salt" + strconv.Itoa(MaxVerifiedSecretsPerUser*2-1)
+	if !manager.isVerified("alice", manager.secretKey("alice", last)) {
+		t.Error("The most recent secret should still be remembered")
+	}
+}
+
+func TestHasRecent(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, _ := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	if manager.HasRecent("alice", time.Hour) {
+		t.Error("Unknown user should not have recent credentials")
+	}
+
+	_, _ = manager.ValidateAndStore("alice", "secret")
+	if !manager.HasRecent("alice", time.Hour) {
+		t.Error("Just validated credentials should be recent")
+	}
+
+	cred := manager.validCredentials["alice"]
+	cred.ValidatedAt = time.Now().Add(-2 * time.Hour)
+	manager.validCredentials["alice"] = cred
+	if manager.HasRecent("alice", time.Hour) {
+		t.Error("Credentials validated two hours ago should not be recent")
+	}
+}
+
+func TestGet(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, _ := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	_, _ = manager.ValidateAndStore("alice", "secret")
+	_, _ = manager.ValidateAndStore("bob", "hunter2")
+
+	if password, ok := manager.Get("alice"); !ok || password != "secret" {
+		t.Errorf("Get(alice) = %q, %v; want secret, true", password, ok)
+	}
+	if _, ok := manager.Get("carol"); ok {
+		t.Error("Get should report unknown users as missing")
 	}
 }

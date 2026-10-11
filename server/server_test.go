@@ -2158,3 +2158,142 @@ func TestShutdownLetsInFlightRequestsUseDatabase(t *testing.T) {
 		t.Errorf("Shutdown failed: %v", err)
 	}
 }
+
+// upstreamRecorder is a mock upstream that accepts every ping and records the path and
+// user of each request
+type upstreamRecorder struct {
+	mu       sync.Mutex
+	requests []string // "path user"
+}
+
+func (u *upstreamRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	u.mu.Lock()
+	u.requests = append(u.requests, r.URL.Path+" "+r.URL.Query().Get("u"))
+	u.mu.Unlock()
+	if r.URL.Path == "/rest/ping" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+		})
+		return
+	}
+	w.Write([]byte("upstream"))
+}
+
+func (u *upstreamRecorder) count(request string) int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	n := 0
+	for _, r := range u.requests {
+		if r == request {
+			n++
+		}
+	}
+	return n
+}
+
+func newCaptureTestServer(t *testing.T, upstream *upstreamRecorder, workers int) *ProxyServer {
+	t.Helper()
+	mockServer := httptest.NewServer(upstream)
+	t.Cleanup(mockServer.Close)
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      t.TempDir() + "/capture.db",
+		CredentialWorkers: workers,
+	}
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	t.Cleanup(func() { server.Shutdown(context.Background()) })
+	return server
+}
+
+func TestForwardedRequestDoesNotWaitForCredentialWorkers(t *testing.T) {
+	upstream := &upstreamRecorder{}
+	server := newCaptureTestServer(t, upstream, 1)
+
+	// Occupy the only worker
+	server.credentialWorkers <- struct{}{}
+	defer func() { <-server.credentialWorkers }()
+
+	done := make(chan struct{})
+	go func() {
+		req := httptest.NewRequest("GET", "/rest/getCoverArt?u=alice&p=secret&id=1", nil)
+		server.proxyHandler(httptest.NewRecorder(), req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Forwarded request blocked waiting for a credential worker")
+	}
+	if got := upstream.count("/rest/getCoverArt alice"); got != 1 {
+		t.Errorf("Expected request to be forwarded once, got %d", got)
+	}
+	if got := upstream.count("/rest/ping alice"); got != 0 {
+		t.Errorf("Expected no validation while workers are busy, got %d", got)
+	}
+}
+
+func TestForwardedRequestsSkipValidationForRecentCredentials(t *testing.T) {
+	upstream := &upstreamRecorder{}
+	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
+
+	// A token client sends a new salt with every request
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest("GET", "/rest/getCoverArt?u=alice&t=tok&s=salt"+strconv.Itoa(i)+"&id=1", nil)
+		server.proxyHandler(httptest.NewRecorder(), req)
+		server.credentialWg.Wait()
+	}
+
+	if got := upstream.count("/rest/ping alice"); got != 1 {
+		t.Errorf("Expected 1 credential validation, got %d", got)
+	}
+}
+
+func TestNewCredentialsSyncOnlyThatUser(t *testing.T) {
+	upstream := &upstreamRecorder{}
+	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
+
+	if _, err := server.credentials.ValidateAndStore("bob", "hunter2"); err != nil {
+		t.Fatalf("Failed to store bob's credentials: %v", err)
+	}
+
+	server.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		return false
+	})
+	req := httptest.NewRequest("GET", "/rest/scrobble?u=alice&p=secret&id=1", nil)
+	server.proxyHandler(httptest.NewRecorder(), req)
+	server.credentialWg.Wait()
+
+	if got := upstream.count("/rest/getMusicFolders alice"); got != 1 {
+		t.Errorf("Expected alice to be synced once, got %d", got)
+	}
+	if got := upstream.count("/rest/getMusicFolders bob"); got != 0 {
+		t.Errorf("Expected bob not to be synced, got %d", got)
+	}
+}
+
+func TestSyncSkippedWhileUserSyncRunning(t *testing.T) {
+	upstream := &upstreamRecorder{}
+	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
+
+	server.syncingUsers.Store("alice", struct{}{})
+	server.syncUserWithPassword("alice", "secret")
+	if got := upstream.count("/rest/getMusicFolders alice"); got != 0 {
+		t.Errorf("Expected no second sync while one is running, got %d", got)
+	}
+
+	server.syncingUsers.Delete("alice")
+	server.syncUserWithPassword("alice", "secret")
+	if got := upstream.count("/rest/getMusicFolders alice"); got != 1 {
+		t.Errorf("Expected sync to run once the earlier one finished, got %d", got)
+	}
+	if _, running := server.syncingUsers.Load("alice"); running {
+		t.Error("Sync should be marked finished")
+	}
+}

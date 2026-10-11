@@ -40,7 +40,10 @@ const (
 const (
 	SongSyncInterval     = 1 * time.Hour
 	UserSyncStaggerDelay = 2 * time.Second
-	CORSMaxAge           = "86400"
+	// Forwarded requests only capture credentials for sync, so a user whose stored
+	// credential upstream confirmed this recently isn't validated again
+	CredentialRecaptureInterval = 1 * time.Hour
+	CORSMaxAge                  = "86400"
 	// Upper bound for one library sync request. Generous, since a directory listing can be large.
 	UpstreamRequestTimeout = 30 * time.Second
 	// Similarity lookups run while a client waits for getRandomSongs, so they give up sooner.
@@ -73,7 +76,8 @@ type ProxyServer struct {
 	shutdownChan      chan struct{}
 	rateLimiter       *rate.Limiter
 	credentialWorkers chan struct{}  // Semaphore for limiting concurrent credential validations
-	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations
+	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations and the syncs they start
+	syncingUsers      sync.Map       // Usernames with a library sync in progress
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -251,7 +255,7 @@ func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password strin
 
 	if isNewCredential {
 		ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
-		ps.credentialWg.Go(ps.fetchAndStoreSongs)
+		ps.credentialWg.Go(func() { ps.syncUser(username) })
 	}
 
 	return true
@@ -353,27 +357,9 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			// Validated synchronously, which also captures the credentials for sync
 			authenticated = ps.isAuthenticated(r, username, password)
 		} else if username != "" && password != "" {
-			ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
-
-			// Acquire a worker slot (blocks if all workers are busy)
-			ps.credentialWorkers <- struct{}{}
-			ps.credentialWg.Add(1)
-
-			go func() {
-				defer func() {
-					<-ps.credentialWorkers // Release worker slot
-					ps.credentialWg.Done() // Mark goroutine as complete
-				}()
-
-				isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
-				if err != nil {
-					ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
-				} else if isNewCredential {
-					ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
-					// Trigger immediate sync for new credentials
-					ps.fetchAndStoreSongs()
-				}
-			}()
+			if !ps.credentials.HasRecent(username, CredentialRecaptureInterval) {
+				ps.captureCredentials(username, password)
+			}
 		} else {
 			// Log details about request without exposing any credential information
 			ps.logger.WithFields(logrus.Fields{
@@ -401,6 +387,36 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ps.proxy.ServeHTTP(w, r)
+}
+
+// captureCredentials validates credentials from a forwarded request in the background and
+// stores them for sync. It's best effort: when every worker is busy the credentials are
+// left for a later request, so forwarding is never held up.
+func (ps *ProxyServer) captureCredentials(username, password string) {
+	select {
+	case ps.credentialWorkers <- struct{}{}:
+	default:
+		ps.logger.WithField("username", sanitizeUsername(username)).Debug("All credential workers busy, skipping credential capture")
+		return
+	}
+	ps.credentialWg.Add(1)
+
+	go func() {
+		defer func() {
+			<-ps.credentialWorkers // Release worker slot
+			ps.credentialWg.Done() // Mark goroutine as complete
+		}()
+
+		ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
+		isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
+		if err != nil {
+			ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
+		} else if isNewCredential {
+			ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
+			// Sync outside the worker slot, which is only meant for validation
+			ps.credentialWg.Go(func() { ps.syncUser(username) })
+		}
+	}()
 }
 
 func (ps *ProxyServer) Start() error {
@@ -542,29 +558,44 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 
 	ps.logger.WithField("user_count", len(allCredentials)).Info("Starting multi-user song sync")
 
-	// Sync songs for each user with staggered delays
+	// Sync users one after another, pausing between them to avoid overwhelming upstream
 	for i, username := range getSortedUsernames(allCredentials) {
-		password := allCredentials[username]
-
-		// Add staggered delay to avoid overwhelming upstream server (except for first user)
 		if i > 0 {
-			delay := time.Duration(i) * UserSyncStaggerDelay
-			ps.logger.WithFields(logrus.Fields{
-				"user":  sanitizeUsername(username),
-				"delay": delay,
-			}).Debug("Adding staggered delay for user sync")
-			time.Sleep(delay)
+			select {
+			case <-time.After(UserSyncStaggerDelay):
+			case <-ps.shutdownChan:
+				ps.logger.Info("Shutdown requested, stopping multi-user song sync")
+				return
+			}
 		}
 
-		// Sync songs for this specific user
-		if err := ps.syncSongsForUser(username, password); err != nil {
-			ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
-			// Continue with other users even if one fails
-			continue
-		}
+		ps.syncUserWithPassword(username, allCredentials[username])
 	}
 
 	ps.logger.Info("Multi-user song sync completed")
+}
+
+// syncUser syncs one user's library with their stored credentials
+func (ps *ProxyServer) syncUser(username string) {
+	password, ok := ps.credentials.Get(username)
+	if !ok {
+		ps.logger.WithField("user", sanitizeUsername(username)).Warn("No stored credentials for user, skipping sync")
+		return
+	}
+	ps.syncUserWithPassword(username, password)
+}
+
+// syncUserWithPassword syncs one user's library unless a sync for that user is already running
+func (ps *ProxyServer) syncUserWithPassword(username, password string) {
+	if _, running := ps.syncingUsers.LoadOrStore(username, struct{}{}); running {
+		ps.logger.WithField("user", sanitizeUsername(username)).Debug("Sync already in progress for user, skipping")
+		return
+	}
+	defer ps.syncingUsers.Delete(username)
+
+	if err := ps.syncSongsForUser(username, password); err != nil {
+		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
+	}
 }
 
 // syncSongsForUser handles song synchronization for a single user using directory traversal
@@ -1063,7 +1094,7 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 // Returns nil without error when the plugin is not available so the caller gracefully
 // skips the similarity weight.
 func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
-	password, ok := ps.credentials.GetAllValid()[userID]
+	password, ok := ps.credentials.Get(userID)
 	if !ok {
 		return nil, nil
 	}

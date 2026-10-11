@@ -24,7 +24,7 @@ client ─▶ security headers middleware ─▶ proxyHandler
                                            1. CORS headers (OPTIONS preflight answered here)
                                            2. rate limiter (HTTP 429 when exceeded)
                                            3. read parameters from the query and a form-encoded POST body (body left intact for forwarding)
-                                           4. /rest/*: capture u+p or u+t+s, validate async in bounded worker pool
+                                           4. /rest/*: capture u+p or u+t+s, validate async in bounded worker pool (skipped if recently validated or pool full)
                                            5. run hooks for the path; a hook returning true has sent the response
                                            6. otherwise forward via httputil.ReverseProxy
 ```
@@ -42,7 +42,7 @@ A **hook** is `func(w http.ResponseWriter, r *http.Request, endpoint string) boo
 ## Background work and shutdown
 
 - **Hourly sync ticker**: re-syncs every user with known credentials (see [How it works](how-it-works.md#library-sync)).
-- **Immediate sync**: started from the credential worker when credentials are new.
+- **Immediate sync**: syncs only the new user, started once their credentials are first validated. At most one sync runs per user at a time.
 - **DB health check**: runs every 30s when `-db-health-check` is on.
 
 `Shutdown(ctx)` closes the shutdown channel (which stops the sync loop), shuts down the HTTP server (letting in-flight requests finish), waits for in-flight credential validations, and then closes the database (which stops the health-check goroutine).
