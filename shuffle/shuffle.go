@@ -309,10 +309,19 @@ func (s *Service) getEmpiricalArtistPriors(userID string) (alpha, beta float64) 
 // ProcessScrobble processes a scrobble event with simplified skip detection
 // Returns true if a play event should be recorded, false if it's a duplicate submission
 func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// recordSkipFunc runs after s.mu is released: it writes to the database and may call
+	// back into the service (e.g. InvalidateEmpiricalPriors), which takes s.mu itself.
+	skippedSong, shouldRecord := s.updateScrobbleState(userID, songID, isSubmission)
+	if skippedSong != nil {
+		recordSkipFunc(userID, skippedSong)
+	}
+	return shouldRecord
+}
 
-	// Fetch current song details to get duration
+// updateScrobbleState updates the user's last scrobble under s.mu. It returns the previous
+// song if it should be recorded as skipped, and whether a play event should be recorded.
+func (s *Service) updateScrobbleState(userID, songID string, isSubmission bool) (*models.Song, bool) {
+	// Fetch current song details to get duration (before locking, as it queries the database)
 	currentSongs, err := s.db.GetSongsByIDs(userID, []string{songID})
 	var currentSong *models.Song
 	if err == nil && len(currentSongs) > 0 {
@@ -326,6 +335,9 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 		currentSong = &models.Song{ID: songID}
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Check if there was a previous scrobble
 	lastScrobble, hadPreviousScrobble := s.lastScrobble[userID]
 
@@ -337,8 +349,10 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 			"song_id": songID,
 			"reason":  "duplicate_submission",
 		}).Debug("Ignoring duplicate submission for same song")
-		return false // Don't record another play event
+		return nil, false // Don't record another play event
 	}
+
+	var skippedSong *models.Song
 
 	// If there was a previous scrobble that wasn't a definitive play, mark it as skipped
 	// BUT only if it's a different song (same song being scrobbled again should just update status)
@@ -365,7 +379,7 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 		}
 
 		if shouldMarkAsSkipped {
-			recordSkipFunc(userID, lastScrobble.Song)
+			skippedSong = lastScrobble.Song
 			s.logger.WithFields(logrus.Fields{
 				"user_id":              userID,
 				"song_id":              lastScrobble.Song.ID,
@@ -402,7 +416,7 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 		"submission": isSubmission,
 	}).Debug("Processed scrobble")
 
-	return true // OK to record play event
+	return skippedSong, true // OK to record play event
 }
 
 // GetWeightedShuffledSongs returns a shuffled list of songs based on user listening history

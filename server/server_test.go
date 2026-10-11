@@ -388,6 +388,57 @@ func TestRecordPlayEvent(t *testing.T) {
 	})
 }
 
+// A skip is recorded through the server's real callback, which calls back into the
+// shuffle service. This used to deadlock because the shuffle lock was still held.
+func TestProcessScrobbleRecordsSkipWithoutDeadlock(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test_scrobble_skip.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_scrobble_skip.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	testSongs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
+		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
+	}
+	if err := server.db.StoreSongs("testuser", testSongs); err != nil {
+		t.Fatalf("Failed to store test songs: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.ProcessScrobble("testuser", "1", false) // now playing song 1
+		server.ProcessScrobble("testuser", "2", false) // song 1 skipped
+		server.ProcessScrobble("testuser", "1", false) // song 2 skipped
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ProcessScrobble deadlocked while recording a skip")
+	}
+
+	all, err := server.db.GetAllSongs("testuser")
+	if err != nil {
+		t.Fatalf("Failed to load songs: %v", err)
+	}
+	for _, song := range all {
+		if song.SkipCount != 1 {
+			t.Errorf("Song %s: expected 1 skip, got %d", song.ID, song.SkipCount)
+		}
+	}
+}
+
 func TestSetLastPlayed(t *testing.T) {
 	cfg := &config.Config{
 		ProxyPort:    "8080",
