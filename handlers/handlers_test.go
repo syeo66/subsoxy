@@ -1042,3 +1042,47 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleDebugEscapesOutputAndOmitsPassword(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	songs := []models.Song{
+		{ID: `1"><b>id</b>`, Title: "<script>alert(1)</script>", Artist: "<img src=x onerror=alert(2)>", Album: "A & B", Duration: 180},
+	}
+	if err := db.StoreSongs("testuser", songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	req := httptest.NewRequest("GET", "/debug?u=testuser&p=hunter2", nil)
+	w := httptest.NewRecorder()
+	if !handler.HandleDebug(w, req, "/debug") {
+		t.Fatal("HandleDebug should handle the request")
+	}
+
+	body := w.Body.String()
+	for _, raw := range []string{"<script>", "<img", "<b>id</b>"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("debug page contains unescaped %q", raw)
+		}
+	}
+	for _, escaped := range []string{"&lt;script&gt;alert(1)&lt;/script&gt;", "&lt;img src=x onerror=alert(2)&gt;", "A &amp; B"} {
+		if !strings.Contains(body, escaped) {
+			t.Errorf("debug page missing escaped %q", escaped)
+		}
+	}
+	if strings.Contains(body, "hunter2") {
+		t.Error("debug page must not echo the password")
+	}
+}

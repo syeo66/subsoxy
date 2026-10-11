@@ -421,7 +421,7 @@ func TestCalculateSongWeight(t *testing.T) {
 				tt.setupFunc()
 			}
 
-			weight := service.calculateSongWeight("testuser", tt.song, nil)
+			weight := service.calculateSongWeight("testuser", tt.song, service.LoadArtistStats("testuser"), nil)
 
 			if weight < tt.expectedWeight-tt.tolerance || weight > tt.expectedWeight+tt.tolerance {
 				t.Errorf("%s: expected weight %.3f ± %.3f, got %.3f",
@@ -500,7 +500,7 @@ func TestCalculateSongWeightBoundaryConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateSongWeight("testuser", tt.song, nil)
+			weight := service.calculateSongWeight("testuser", tt.song, service.LoadArtistStats("testuser"), nil)
 
 			// Verify weight is finite and positive
 			if weight <= 0 || !isFinite(weight) {
@@ -890,7 +890,7 @@ func TestCalculateArtistWeight(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			weight := service.calculateArtistWeight(userID, tt.artist)
+			weight := service.calculateArtistWeight(userID, tt.artist, service.LoadArtistStats(userID))
 			// Use approximate comparison for floating point values
 			if math.Abs(weight-tt.expected) > 0.001 {
 				t.Errorf("%s: expected weight %.3f, got %.3f",
@@ -939,7 +939,7 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 	// alpha = 20.0/1 = 20.0, beta = max(0/1, 1.0) = 1.0 (minimum prior strength)
 	// Bayesian ratio: (20+20)/(20+0+20+1) = 40/41 ≈ 0.976
 	// Weight: 0.5 + 0.976*1.0 ≈ 1.476
-	weight := service.calculateArtistWeight(userID, "Popular Artist")
+	weight := service.calculateArtistWeight(userID, "Popular Artist", service.LoadArtistStats(userID))
 	expectedWeight := 1.476
 	if math.Abs(weight-expectedWeight) > 0.01 {
 		t.Errorf("Expected weight close to %.3f for artist with 100 plays (with decay, converges to ~1.476), got %.3f", expectedWeight, weight)

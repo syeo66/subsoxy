@@ -92,7 +92,7 @@ CREATE INDEX idx_artist_stats_user_id  ON artist_stats(user_id);
 CREATE INDEX idx_artist_stats_artist   ON artist_stats(artist);
 ```
 
-The shuffle's artist factor doesn't read `artist_stats`. It sums `adjusted_plays`/`adjusted_skips` from `songs` (`GetArtistAdjustedStats`). `artist_stats` holds raw counts.
+The shuffle's artist factor doesn't read `artist_stats`. It sums `adjusted_plays`/`adjusted_skips` from `songs` (`GetAllArtistAdjustedStats`, one grouped query per shuffle). `artist_stats` holds raw counts.
 
 ### Migrations
 

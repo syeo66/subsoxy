@@ -49,11 +49,10 @@ const (
 	SimilarityChainStep = 5
 )
 
-// SimilarSongsFetcher fetches acoustically similar songs for a user and song.
-// password is used directly when non-empty; otherwise the implementation falls
-// back to its credential store (normal shuffle path passes "").
+// SimilarSongsFetcher fetches acoustically similar songs for a user and song,
+// authenticating upstream with the user's stored credentials.
 // Returns a map of song ID → similarity score (0.0–1.0), or nil when unavailable.
-type SimilarSongsFetcher func(userID, songID, password string) (map[string]float64, error)
+type SimilarSongsFetcher func(userID, songID string) (map[string]float64, error)
 
 type similarSongsEntry struct {
 	scores    map[string]float64
@@ -109,9 +108,8 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 
 // getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
 // acoustically similar to songID, using a short-lived in-memory cache.
-// password is forwarded to the fetcher; pass "" for the normal shuffle path.
 // Concurrent calls for the same key share a single in-flight HTTP request via singleflight.
-func (s *Service) getSimilarSongsForUser(userID, songID, password string) map[string]float64 {
+func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float64 {
 	cacheKey := userID + ":" + songID
 
 	s.mu.RLock()
@@ -128,7 +126,7 @@ func (s *Service) getSimilarSongsForUser(userID, songID, password string) map[st
 	}
 
 	v, _, _ := s.inflight.Do(cacheKey, func() (interface{}, error) {
-		scores, err := fetcher(userID, songID, password)
+		scores, err := fetcher(userID, songID)
 		if err != nil {
 			s.logger.WithError(err).WithFields(logrus.Fields{
 				"userID": userID,
@@ -455,9 +453,10 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 
 	// Precompute stable base weights (time × play/skip × artist).
 	// Similarity is intentionally excluded here — it updates after each pick.
+	artistStats := s.LoadArtistStats(userID)
 	baseWeights := make(map[string]float64, len(eligibleSongs))
 	for _, song := range eligibleSongs {
-		baseWeights[song.ID] = s.calculateSongWeight(userID, song, nil)
+		baseWeights[song.ID] = s.calculateSongWeight(userID, song, artistStats, nil)
 	}
 
 	// Start similarity chain from the last-played track.
@@ -472,7 +471,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	// Pre-warm similarity cache in background so the HTTP call overlaps
 	// with the base-weight computation loop below.
 	if referenceID != "" {
-		go s.getSimilarSongsForUser(userID, referenceID, "")
+		go s.getSimilarSongsForUser(userID, referenceID)
 	}
 
 	// Pick songs one at a time, refreshing the similarity reference every
@@ -490,7 +489,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	for len(result) < count && len(used) < len(eligibleSongs) {
 		var similarSongs map[string]float64
 		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID, "")
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
 		}
 
 		// Build candidate pool: base weight × current similarity factor
@@ -518,7 +517,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 				pickCount++
 				if pickCount%SimilarityChainStep == 0 {
 					referenceID = c.song.ID
-					go s.getSimilarSongsForUser(userID, referenceID, "")
+					go s.getSimilarSongsForUser(userID, referenceID)
 				}
 				break
 			}
@@ -604,11 +603,12 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 
 	// Precompute stable base weights.
 	// Similarity is excluded — it updates after each pick during selection.
+	artistStats := s.LoadArtistStats(userID)
 	baseWeights := make(map[string]float64, len(reservoir))
 	for _, song := range reservoir {
 		timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 		playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
-		artistWeight := s.calculateArtistWeight(userID, song.Artist)
+		artistWeight := s.calculateArtistWeight(userID, song.Artist, artistStats)
 		baseWeights[song.ID] = timeWeight * playSkipWeight * artistWeight
 	}
 
@@ -625,7 +625,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	// base-weight computation above provide overlap time for the HTTP call
 	// to complete before the first pick iteration needs the result.
 	if referenceID != "" {
-		go s.getSimilarSongsForUser(userID, referenceID, "")
+		go s.getSimilarSongsForUser(userID, referenceID)
 	}
 
 	// Pick songs one at a time, refreshing the similarity reference every
@@ -640,7 +640,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	for len(result) < count && len(used) < len(reservoir) {
 		var similarSongs map[string]float64
 		if referenceID != "" {
-			similarSongs = s.getSimilarSongsForUser(userID, referenceID, "")
+			similarSongs = s.getSimilarSongsForUser(userID, referenceID)
 		}
 
 		pool := make([]candidate, 0, len(reservoir)-len(used))
@@ -667,7 +667,7 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 				pickCount++
 				if pickCount%SimilarityChainStep == 0 {
 					referenceID = c.song.ID
-					go s.getSimilarSongsForUser(userID, referenceID, "")
+					go s.getSimilarSongsForUser(userID, referenceID)
 				}
 				break
 			}
@@ -692,12 +692,12 @@ func (s *Service) getWeightedShuffledSongsOptimized(userID string, count int, to
 	return result, nil
 }
 
-func (s *Service) calculateSongWeight(userID string, song models.Song, similarSongs map[string]float64) float64 {
+func (s *Service) calculateSongWeight(userID string, song models.Song, artistStats ArtistStats, similarSongs map[string]float64) float64 {
 	baseWeight := 1.0
 
 	timeWeight := s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight := s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
-	artistWeight := s.calculateArtistWeight(userID, song.Artist)
+	artistWeight := s.calculateArtistWeight(userID, song.Artist, artistStats)
 	similarityWeight := s.calculateSimilarityWeight(song.ID, similarSongs)
 
 	finalWeight := baseWeight * timeWeight * playSkipWeight * artistWeight * similarityWeight
@@ -783,16 +783,10 @@ func (s *Service) calculatePlaySkipWeight(userID string, adjustedPlays, adjusted
 // - Artists with many observations converge to their true play ratio
 // - Prevents extreme weights from small sample sizes (e.g., 1 play, 0 skips for a new artist)
 // - Recent plays/skips have more influence due to exponential decay (0.95 factor per event)
-func (s *Service) calculateArtistWeight(userID, artist string) float64 {
-	// Get adjusted stats by summing from songs table (song-level decay applied)
-	adjustedPlays, adjustedSkips, err := s.db.GetArtistAdjustedStats(userID, artist)
-	if err != nil {
-		s.logger.WithError(err).WithFields(logrus.Fields{
-			"user_id": userID,
-			"artist":  artist,
-		}).Debug("Failed to get artist adjusted stats, using default weight")
-		return 1.0
-	}
+func (s *Service) calculateArtistWeight(userID, artist string, artistStats ArtistStats) float64 {
+	// Adjusted stats are summed from the songs table (song-level decay applied)
+	stats := artistStats[artist]
+	adjustedPlays, adjustedSkips := stats.Plays, stats.Skips
 
 	// If the artist has no play/skip history, use neutral weight
 	if adjustedPlays == 0.0 && adjustedSkips == 0.0 {
@@ -829,6 +823,20 @@ func (s *Service) calculateArtistWeight(userID, artist string) float64 {
 	return artistWeight
 }
 
+// ArtistStats maps artist name to the artist's adjusted play/skip totals.
+type ArtistStats map[string]database.AdjustedStats
+
+// LoadArtistStats fetches the adjusted play/skip totals of all of the user's artists in
+// one query. On error it returns nil, which gives every artist the neutral weight.
+func (s *Service) LoadArtistStats(userID string) ArtistStats {
+	stats, err := s.db.GetAllArtistAdjustedStats(userID)
+	if err != nil {
+		s.logger.WithError(err).WithField("user_id", userID).Debug("Failed to get artist adjusted stats, using default weights")
+		return nil
+	}
+	return stats
+}
+
 // GetAllSongsWithWeights returns all songs for a user with their calculated weights
 // This is primarily used for debugging purposes to visualize weight calculations
 func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, error) {
@@ -837,9 +845,10 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 		return nil, err
 	}
 
+	artistStats := s.LoadArtistStats(userID)
 	weightedSongs := make([]models.WeightedSong, 0, len(songs))
 	for _, song := range songs {
-		weight := s.calculateSongWeight(userID, song, nil)
+		weight := s.calculateSongWeight(userID, song, artistStats, nil)
 		weightedSongs = append(weightedSongs, models.WeightedSong{
 			Song:   song,
 			Weight: weight,
@@ -855,11 +864,12 @@ func (s *Service) GetAllSongsWithWeights(userID string) ([]models.WeightedSong, 
 }
 
 // GetWeightComponents returns individual weight components for debugging.
-// similarSongs may be nil when no last-played context is available.
-func (s *Service) GetWeightComponents(userID string, song models.Song, similarSongs map[string]float64) (timeWeight, playSkipWeight, artistWeight, similarityWeight float64) {
+// artistStats comes from LoadArtistStats; similarSongs may be nil when no last-played
+// context is available.
+func (s *Service) GetWeightComponents(userID string, song models.Song, artistStats ArtistStats, similarSongs map[string]float64) (timeWeight, playSkipWeight, artistWeight, similarityWeight float64) {
 	timeWeight = s.calculateTimeDecayWeight(song.LastPlayed, song.LastSkipped)
 	playSkipWeight = s.calculatePlaySkipWeight(userID, song.AdjustedPlays, song.AdjustedSkips)
-	artistWeight = s.calculateArtistWeight(userID, song.Artist)
+	artistWeight = s.calculateArtistWeight(userID, song.Artist, artistStats)
 	similarityWeight = s.calculateSimilarityWeight(song.ID, similarSongs)
 	return
 }
@@ -872,7 +882,6 @@ func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 }
 
 // GetSimilarSongsForDebug fetches similar songs for the debug view (song ID → score).
-// password is passed through to the fetcher so the debug URL can supply credentials directly.
-func (s *Service) GetSimilarSongsForDebug(userID, songID, password string) map[string]float64 {
-	return s.getSimilarSongsForUser(userID, songID, password)
+func (s *Service) GetSimilarSongsForDebug(userID, songID string) map[string]float64 {
+	return s.getSimilarSongsForUser(userID, songID)
 }

@@ -1753,3 +1753,89 @@ func TestSyncSongsForUserKeepsSongsOnPartialFailure(t *testing.T) {
 		t.Error("song1 should still exist")
 	}
 }
+
+func TestRecordPlayEventRefreshesPriors(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	testSongs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist A", Album: "Album", Duration: 300},
+		{ID: "2", Title: "Song 2", Artist: "Artist B", Album: "Album", Duration: 250},
+		{ID: "3", Title: "Song 3", Artist: "Artist C", Album: "Album", Duration: 250},
+	}
+	if err := server.db.StoreSongs("testuser", testSongs); err != nil {
+		t.Fatalf("Failed to store test songs: %v", err)
+	}
+
+	playSkipWeight := func() float64 {
+		songs, err := server.db.GetAllSongs("testuser")
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+		for _, song := range songs {
+			if song.ID == "1" {
+				_, w, _, _ := server.shuffle.GetWeightComponents("testuser", song, nil, nil)
+				return w
+			}
+		}
+		t.Fatal("song 1 not found")
+		return 0
+	}
+
+	server.RecordPlayEvent("testuser", "1", "play", nil)
+	before := playSkipWeight() // computes and caches the priors
+
+	// Skips on other songs raise the user's skip prior, which changes song 1's weight
+	for i := 0; i < 10; i++ {
+		server.RecordPlayEvent("testuser", "2", "skip", nil)
+		server.RecordPlayEvent("testuser", "3", "skip", nil)
+	}
+	after := playSkipWeight()
+
+	if before == after {
+		t.Errorf("play/skip weight stayed %.4f after new events; cached priors were not refreshed", before)
+	}
+}
+
+func TestDebugAuthErrorRequestsBasicAuth(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	server.AddAuthenticatedHook("/debug", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		return true
+	})
+
+	w := httptest.NewRecorder()
+	server.proxyHandler(w, httptest.NewRequest("GET", "/debug?id=1", nil))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); !strings.HasPrefix(got, "Basic ") {
+		t.Errorf("WWW-Authenticate = %q, want a Basic challenge", got)
+	}
+}

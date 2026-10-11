@@ -41,7 +41,7 @@ Dev mode is used when `-security-dev-mode` is set **or** the request comes from 
 
 ## Debug endpoint
 
-`/debug` (enabled with `-debug-mode`) doesn't check the caller against the upstream server. Anyone who can reach it can see any user's library and weights by passing `u=<user>`. The optional `p` is only used for similarity lookups. Leave debug mode off on any instance that's reachable from outside.
+`/debug` (enabled with `-debug-mode`) verifies the caller's credentials against the upstream server and only shows the authenticated user's library. A request without credentials gets HTTP 401 with a Basic auth challenge, so browsers prompt for the username and password instead of putting them in the URL. All song metadata is HTML-escaped. The page still exposes the full library and its weights, so leave debug mode off on any instance that's reachable from outside.
 
 ## Recommendations
 

@@ -1521,3 +1521,66 @@ func TestSQLInjectionResistance(t *testing.T) {
 		t.Error("Songs table should still exist after injection attempts")
 	}
 }
+
+func TestGetAllArtistAdjustedStats(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist A", Album: "Album", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Artist A", Album: "Album", Duration: 180},
+		{ID: "3", Title: "Song 3", Artist: "Artist B", Album: "Album", Duration: 180},
+	}
+	if err := db.StoreSongs("user1", songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	if err := db.StoreSongs("user2", songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	for _, ev := range []struct{ user, song, event string }{
+		{"user1", "1", "play"},
+		{"user1", "2", "play"},
+		{"user1", "3", "skip"},
+		{"user2", "1", "skip"},
+	} {
+		if err := db.RecordPlayEvent(ev.user, ev.song, ev.event, nil); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+	}
+
+	stats, err := db.GetAllArtistAdjustedStats("user1")
+	if err != nil {
+		t.Fatalf("GetAllArtistAdjustedStats failed: %v", err)
+	}
+
+	want := map[string]AdjustedStats{
+		"Artist A": {Plays: 2.0, Skips: 0.0},
+		"Artist B": {Plays: 0.0, Skips: 1.0},
+	}
+	if len(stats) != len(want) {
+		t.Fatalf("got %d artists, want %d: %v", len(stats), len(want), stats)
+	}
+	for artist, w := range want {
+		if stats[artist] != w {
+			t.Errorf("stats[%q] = %+v, want %+v", artist, stats[artist], w)
+		}
+	}
+
+	empty, err := db.GetAllArtistAdjustedStats("nobody")
+	if err != nil {
+		t.Fatalf("GetAllArtistAdjustedStats failed for unknown user: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected no stats for unknown user, got %v", empty)
+	}
+}

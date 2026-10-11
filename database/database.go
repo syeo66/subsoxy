@@ -1128,26 +1128,49 @@ func (db *DB) GetArtistStats(userID, artist string) (*models.ArtistStats, error)
 	return &stats, nil
 }
 
-// GetArtistAdjustedStats calculates artist statistics from song-level adjusted values
-func (db *DB) GetArtistAdjustedStats(userID, artist string) (adjustedPlays, adjustedSkips float64, err error) {
+// AdjustedStats holds decayed play and skip totals.
+type AdjustedStats struct {
+	Plays float64
+	Skips float64
+}
+
+// GetAllArtistAdjustedStats returns the adjusted play/skip totals of every artist in the
+// user's library in a single query, keyed by artist name.
+func (db *DB) GetAllArtistAdjustedStats(userID string) (map[string]AdjustedStats, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	err = db.conn.QueryRow(`
+	rows, err := db.conn.Query(`
 		SELECT
+			artist,
 			COALESCE(SUM(adjusted_plays), 0.0) as total_adjusted_plays,
 			COALESCE(SUM(adjusted_skips), 0.0) as total_adjusted_skips
 		FROM songs
-		WHERE user_id = ? AND artist = ?
-	`, userID, artist).Scan(&adjustedPlays, &adjustedSkips)
-
+		WHERE user_id = ?
+		GROUP BY artist
+	`, userID)
 	if err != nil {
-		return 0.0, 0.0, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist adjusted stats").
-			WithContext("user_id", userID).
-			WithContext("artist", artist)
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to get artist adjusted stats").
+			WithContext("user_id", userID)
+	}
+	defer rows.Close()
+
+	stats := make(map[string]AdjustedStats)
+	for rows.Next() {
+		var artist string
+		var s AdjustedStats
+		if err := rows.Scan(&artist, &s.Plays, &s.Skips); err != nil {
+			return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to scan artist adjusted stats").
+				WithContext("user_id", userID)
+		}
+		stats[artist] = s
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to iterate artist adjusted stats").
+			WithContext("user_id", userID)
 	}
 
-	return adjustedPlays, adjustedSkips, nil
+	return stats, nil
 }
 
 // GetUserTotalAdjustedPlaySkips returns the sum of adjusted plays and skips across all songs for a user

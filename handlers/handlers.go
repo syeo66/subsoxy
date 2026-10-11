@@ -3,7 +3,9 @@ package handlers
 import (
 	"encoding/json"
 	"encoding/xml"
+	"html"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -275,7 +277,6 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 
 	// Get optional reference song ID for similarity weight calculation
 	referenceSongID := r.URL.Query().Get("id")
-	password := r.URL.Query().Get("p")
 
 	songs, err := h.shuffle.GetAllSongsWithWeights(userID)
 	if err != nil {
@@ -296,7 +297,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 	var similarSongs map[string]float64
 	if similarityBaseSongID != "" {
-		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID, password)
+		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID)
 	}
 
 	// Build reference song info for display
@@ -304,17 +305,20 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	if referenceSongID != "" {
 		for _, sw := range songs {
 			if sw.Song.ID == referenceSongID {
-				referenceSongInfo = sw.Song.Title + " - " + sw.Song.Artist
+				referenceSongInfo = html.EscapeString(sw.Song.Title + " - " + sw.Song.Artist)
 				break
 			}
 		}
 	}
 
-	html := `<!DOCTYPE html>
+	escapedUserID := html.EscapeString(SanitizeForLogging(userID))
+
+	var page strings.Builder
+	page.WriteString(`<!DOCTYPE html>
 <html>
 <head>
 	<meta charset="UTF-8">
-	<title>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</title>
+	<title>Subsoxy Debug - User: ` + escapedUserID + `</title>
 	<style>
 		body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
 		h1 { color: #333; }
@@ -336,7 +340,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	</style>
 </head>
 <body>
-	<h1>Subsoxy Debug - User: ` + SanitizeForLogging(userID) + `</h1>
+	<h1>Subsoxy Debug - User: ` + escapedUserID + `</h1>
 	<div class="info">
 		<strong>Total Songs:</strong> ` + strconv.Itoa(len(songs)) + `<br>
 		<strong>Reference Track:</strong> ` + referenceSongInfo + `<br>
@@ -376,8 +380,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 			</tr>
 		</thead>
 		<tbody>
-`
+`)
 
+	artistStats := h.shuffle.LoadArtistStats(userID)
 	for _, songWeight := range songs {
 		song := songWeight.Song
 
@@ -393,7 +398,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		}
 
 		// Calculate individual weight components
-		timeWeight, playSkipWeight, artistWeight, similarityWeight := h.shuffle.GetWeightComponents(userID, song, similarSongs)
+		timeWeight, playSkipWeight, artistWeight, similarityWeight := h.shuffle.GetWeightComponents(userID, song, artistStats, similarSongs)
 
 		// Recalculate final weight with all components
 		finalWeight := 1.0 * timeWeight * playSkipWeight * artistWeight * similarityWeight
@@ -412,18 +417,16 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 			rowClass = " class=\"low-weight\""
 		}
 
-		// Build clickable song ID link
-		songIDLink := `<a class="song-id-link" href="?u=` + userID
-		if password != "" {
-			songIDLink += `&p=` + password
-		}
-		songIDLink += `&id=` + song.ID + `">` + song.ID + `</a>`
+		// Build clickable song ID link. Credentials are deliberately left out of the URL;
+		// the browser resends Basic auth credentials on its own.
+		linkQuery := url.Values{"u": {userID}, "id": {song.ID}}
+		songIDLink := `<a class="song-id-link" href="?` + html.EscapeString(linkQuery.Encode()) + `">` + html.EscapeString(song.ID) + `</a>`
 
-		html += `<tr` + rowClass + `>
+		page.WriteString(`<tr` + rowClass + `>
 				<td>` + songIDLink + `</td>
-				<td>` + song.Title + `</td>
-				<td>` + song.Artist + `</td>
-				<td>` + song.Album + `</td>
+				<td>` + html.EscapeString(song.Title) + `</td>
+				<td>` + html.EscapeString(song.Artist) + `</td>
+				<td>` + html.EscapeString(song.Album) + `</td>
 				<td class="num">` + strconv.Itoa(song.Duration) + `</td>
 				<td class="num">` + strconv.Itoa(song.PlayCount) + `</td>
 				<td class="num">` + strconv.FormatFloat(song.AdjustedPlays, 'f', 3, 64) + `</td>
@@ -437,15 +440,15 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 				<td class="num">` + strconv.FormatFloat(similarityWeight, 'f', 4, 64) + `</td>
 				<td class="num">` + strconv.FormatFloat(finalWeight, 'f', 4, 64) + `</td>
 			</tr>
-`
+`)
 	}
 
-	html += `		</tbody>
+	page.WriteString(`		</tbody>
 	</table>
 </body>
-</html>`
+</html>`)
 
-	w.Write([]byte(html))
+	w.Write([]byte(page.String()))
 
 	h.logger.WithFields(logrus.Fields{
 		"userID":          SanitizeForLogging(userID),

@@ -412,6 +412,9 @@ func (ps *ProxyServer) authenticateRequest(w http.ResponseWriter, r *http.Reques
 // writeAuthError writes a Subsonic API error response, or a plain 401 for non-API endpoints.
 func (ps *ProxyServer) writeAuthError(w http.ResponseWriter, r *http.Request, code int, message string) {
 	if !strings.HasPrefix(r.URL.Path, "/rest/") {
+		// Lets browsers prompt for Basic auth, so pages like /debug never need the
+		// password in the URL.
+		w.Header().Set("WWW-Authenticate", `Basic realm="subsoxy", charset="UTF-8"`)
 		http.Error(w, message, http.StatusUnauthorized)
 		return
 	}
@@ -773,6 +776,9 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		"unchanged": len(existingSongsToCheck) - actuallyUpdatedCount,
 	}).Info("Successfully completed differential sync for user")
 
+	// Priors average over the user's songs and artists, which may have just changed
+	ps.shuffle.InvalidateEmpiricalPriors(username)
+
 	// Calculate artist statistics after sync completes
 	if err := ps.db.CalculateInitialArtistStats(username); err != nil {
 		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Warn("Failed to calculate artist statistics")
@@ -994,6 +1000,7 @@ func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previou
 		ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record play event")
 		return
 	}
+	ps.shuffle.InvalidateEmpiricalPriors(userID)
 
 	// Sanitize inputs for logging
 	sanitizedUserID := sanitizeUsername(userID)
@@ -1036,7 +1043,9 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 				"user_id": userID,
 				"song_id": song.ID,
 			}).Error("Failed to record skip event from pending song processing")
+			return
 		}
+		ps.shuffle.InvalidateEmpiricalPriors(userID)
 	}
 	return ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
 }
@@ -1045,14 +1054,10 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 // AudioMuse-AI-NV-plugin (Navidrome v0.62+ OpenSubsonic sonicSimilarity extension).
 // Returns nil without error when the plugin is not available so the caller gracefully
 // skips the similarity weight.
-func (ps *ProxyServer) fetchSimilarSongs(userID, songID, password string) (map[string]float64, error) {
-	if password == "" {
-		creds := ps.credentials.GetAllValid()
-		var ok bool
-		password, ok = creds[userID]
-		if !ok {
-			return nil, nil
-		}
+func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
+	password, ok := ps.credentials.GetAllValid()[userID]
+	if !ok {
+		return nil, nil
 	}
 
 	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getSonicSimilarTracks")

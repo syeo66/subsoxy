@@ -58,10 +58,12 @@ curl -i -X OPTIONS -H "Origin: http://localhost:3000" -H "Access-Control-Request
 Start with `-debug-mode` (or `DEBUG=1`) and open:
 
 ```
-http://localhost:8080/debug?u=USER&p=PASSWORD[&id=SONG_ID]
+http://localhost:8080/debug[?id=SONG_ID]
 ```
 
-The page lists every song with its final weight and each factor (time, play/skip, artist, similarity), color-coded high/medium/low. It also shows raw and adjusted play/skip counts and the last played/skipped times. Similarity is measured against `id`, or against the last played track if `id` is missing. Click a song ID to make it the reference, and the password is carried over in the link. See [Security](security.md#debug-endpoint) before turning this on anywhere public.
+The browser asks for your Subsonic username and password (HTTP Basic auth) and resends them with every link on the page. `?u=USER&p=PASSWORD` in the URL still works for the first visit, but the links never carry the password.
+
+The page lists every song with its final weight and each factor (time, play/skip, artist, similarity), color-coded high/medium/low. It also shows raw and adjusted play/skip counts and the last played/skipped times. Similarity is measured against `id`, or against the last played track if `id` is missing. Click a song ID to make it the reference. See [Security](security.md#debug-endpoint) before turning this on anywhere public.
 
 ## Adding a hook
 
