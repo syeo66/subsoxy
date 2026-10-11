@@ -77,7 +77,7 @@ func ValidateSongID(songID string) error {
 
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 	// Extract user ID from request
-	userID := r.URL.Query().Get("u")
+	userID := r.FormValue("u")
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
 			Warn("Shuffle request missing user ID")
@@ -85,7 +85,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		return true
 	}
 
-	sizeStr := r.URL.Query().Get("size")
+	sizeStr := r.FormValue("size")
 	size := DefaultShuffleSize
 	if sizeStr != "" {
 		if parsedSize, err := strconv.Atoi(sizeStr); err == nil {
@@ -117,7 +117,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	}
 
 	// Check format parameter (defaults to json if not specified)
-	format := r.URL.Query().Get("f")
+	format := r.FormValue("f")
 	if format == "" {
 		format = "json"
 	}
@@ -187,8 +187,8 @@ func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpo
 }
 
 func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	userID := r.URL.Query().Get("u")
-	songID := r.URL.Query().Get("id")
+	userID := r.FormValue("u")
+	songID := r.FormValue("id")
 
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
@@ -214,9 +214,9 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 }
 
 func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool) bool) bool {
-	userID := r.URL.Query().Get("u")
-	songID := r.URL.Query().Get("id")
-	submission := r.URL.Query().Get("submission")
+	userID := r.FormValue("u")
+	songID := r.FormValue("id")
+	submission := r.FormValue("submission")
 
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
@@ -267,7 +267,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 }
 
 func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	userID := r.URL.Query().Get("u")
+	userID := r.FormValue("u")
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
 			Warn("Debug request missing user ID")
@@ -276,7 +276,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 
 	// Get optional reference song ID for similarity weight calculation
-	referenceSongID := r.URL.Query().Get("id")
+	referenceSongID := r.FormValue("id")
 
 	songs, err := h.shuffle.GetAllSongsWithWeights(userID)
 	if err != nil {

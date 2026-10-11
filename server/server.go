@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -29,6 +32,8 @@ const (
 	MaxEndpointLength   = 1000
 	MaxUsernameLength   = 100
 	MaxRemoteAddrLength = 100
+	// Largest form-encoded POST body parsed for credentials, the same limit net/http uses
+	MaxFormBodySize = 10 << 20
 )
 
 // Server operation constants
@@ -228,8 +233,8 @@ func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password strin
 		return false
 	}
 
-	// Hooks identify the user by the "u" query parameter
-	if r.URL.Query().Get("u") != username {
+	// Hooks identify the user by the "u" parameter
+	if r.FormValue("u") != username {
 		ps.logger.WithFields(logrus.Fields{
 			"username": sanitizeUsername(username),
 			"endpoint": sanitizeForLogging(r.URL.Path),
@@ -325,6 +330,9 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Hooks read parameters with r.FormValue, which must not consume the forwarded body
+	ps.parseForm(r)
 
 	needsAuth := ps.authRequired[endpoint]
 	authenticated := false
@@ -894,44 +902,28 @@ func getSortedUsernames(credentials map[string]string) []string {
 
 // extractCredentials extracts username and password from various sources in the request
 func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password string) {
-	// First try URL query parameters (most common)
-	username = r.URL.Query().Get("u")
-	password = r.URL.Query().Get("p")
+	if r.Form == nil {
+		ps.parseForm(r)
+	}
+
+	// Query parameters or form-encoded POST body (most common)
+	username = r.Form.Get("u")
+	password = r.Form.Get("p")
 
 	if username != "" && password != "" {
-		ps.logger.Debug("Credentials extracted from URL query parameters (password-based)")
+		ps.logger.Debug("Credentials extracted from request parameters (password-based)")
 		return username, password
 	}
 
 	// Try token-based authentication (t + s parameters)
-	token := r.URL.Query().Get("t")
-	salt := r.URL.Query().Get("s")
+	token := r.Form.Get("t")
+	salt := r.Form.Get("s")
 
 	if username != "" && token != "" && salt != "" {
 		ps.logger.Debug("Token-based authentication detected - will validate with upstream")
 		// For token-based auth, we return a special marker to indicate token validation needed
 		// The validation will be done directly against the upstream server
 		return username, "TOKEN:" + token + ":" + salt
-	}
-
-	// Try form-encoded POST data
-	if r.Method == "POST" {
-		if err := r.ParseForm(); err == nil {
-			formUsername := r.PostForm.Get("u")
-			formPassword := r.PostForm.Get("p")
-			if formUsername != "" && formPassword != "" {
-				ps.logger.Debug("Credentials extracted from POST form data (password-based)")
-				return formUsername, formPassword
-			}
-
-			// Try token-based form auth
-			formToken := r.PostForm.Get("t")
-			formSalt := r.PostForm.Get("s")
-			if formUsername != "" && formToken != "" && formSalt != "" {
-				ps.logger.Debug("Token-based authentication detected in POST form")
-				return formUsername, "TOKEN:" + formToken + ":" + formSalt
-			}
-		}
 	}
 
 	// Try Authorization header (Basic Auth format)
@@ -955,6 +947,60 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 
 	ps.logger.Debug("No credentials found in request")
 	return "", ""
+}
+
+// parseForm fills r.Form and r.PostForm from the query and a form-encoded POST body
+// (OpenSubsonic formPost extension), like r.ParseForm but without consuming the body,
+// so hooks can read parameters with r.FormValue and the request can still be forwarded.
+func (ps *ProxyServer) parseForm(r *http.Request) {
+	postForm := url.Values{}
+	if r.Method == http.MethodPost {
+		parsed, err := readPostForm(r)
+		if err != nil {
+			ps.logger.WithError(err).WithField("endpoint", sanitizeForLogging(r.URL.Path)).Warn("Failed to parse POST form, using query parameters only")
+		} else {
+			postForm = parsed
+		}
+	}
+
+	// Body values come first, as with r.ParseForm
+	form := url.Values{}
+	for key, values := range postForm {
+		form[key] = append(form[key], values...)
+	}
+	for key, values := range r.URL.Query() {
+		form[key] = append(form[key], values...)
+	}
+
+	r.PostForm = postForm
+	r.Form = form
+}
+
+// readPostForm parses a form-encoded POST body without consuming it, so the request can
+// still be forwarded upstream with its body intact.
+func readPostForm(r *http.Request) (url.Values, error) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return url.Values{}, nil
+	}
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaType != "application/x-www-form-urlencoded" {
+		return url.Values{}, nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxFormBodySize+1))
+	// Put back what was read in front of whatever is left, so upstream gets the full body
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(body), r.Body), r.Body}
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > MaxFormBodySize {
+		return nil, errors.ErrInvalidInput.WithContext("reason", "form body too large")
+	}
+
+	return url.ParseQuery(string(body))
 }
 
 func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {

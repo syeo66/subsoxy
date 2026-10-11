@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1726,13 +1727,17 @@ func TestAuthenticatedHooks(t *testing.T) {
 		query     string
 		basicAuth []string
 		wantLocal bool
+		post      bool // Send the query as a form-encoded POST body instead
 	}{
-		{"valid password", "u=alice&p=secret", nil, true},
-		{"valid token", "u=alice&t=goodtoken&s=salt", nil, true},
-		{"no credentials", "u=alice", nil, false},
-		{"wrong password", "u=alice&p=wrong", nil, false},
-		{"wrong token", "u=alice&t=badtoken&s=salt", nil, false},
-		{"credentials for another user", "u=bob", []string{"alice", "secret"}, false},
+		{"valid password", "u=alice&p=secret", nil, true, false},
+		{"valid token", "u=alice&t=goodtoken&s=salt", nil, true, false},
+		{"no credentials", "u=alice", nil, false, false},
+		{"wrong password", "u=alice&p=wrong", nil, false, false},
+		{"wrong token", "u=alice&t=badtoken&s=salt", nil, false, false},
+		{"credentials for another user", "u=bob", []string{"alice", "secret"}, false, false},
+		{"valid password in POST body", "u=alice&p=secret", nil, true, true},
+		{"valid token in POST body", "u=alice&t=goodtoken&s=salt", nil, true, true},
+		{"wrong password in POST body", "u=alice&p=wrong", nil, false, true},
 	}
 
 	for _, tt := range tests {
@@ -1743,6 +1748,10 @@ func TestAuthenticatedHooks(t *testing.T) {
 			mu.Unlock()
 
 			req := httptest.NewRequest("GET", "/rest/getRandomSongs?"+tt.query, nil)
+			if tt.post {
+				req = httptest.NewRequest("POST", "/rest/getRandomSongs", strings.NewReader(tt.query))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
 			if tt.basicAuth != nil {
 				req.SetBasicAuth(tt.basicAuth[0], tt.basicAuth[1])
 			}
@@ -1805,6 +1814,121 @@ func TestAuthenticatedHookCapturesCredentials(t *testing.T) {
 
 	if _, ok := server.credentials.GetAllValid()["alice"]; !ok {
 		t.Error("verified credentials should be stored for background sync")
+	}
+}
+
+func TestProxyForwardsPostFormBody(t *testing.T) {
+	var mu sync.Mutex
+	var forwardedBody string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/getSong" {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			forwardedBody = string(body)
+			mu.Unlock()
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_post_form.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_post_form.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	form := "u=alice&p=secret&id=song1"
+	req := httptest.NewRequest("POST", "/rest/getSong", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	server.proxyHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if forwardedBody != form {
+		t.Errorf("upstream received body %q, want %q", forwardedBody, form)
+	}
+}
+
+func TestPostScrobbleRecordsPlay(t *testing.T) {
+	var mu sync.Mutex
+	var forwardedBody string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/scrobble" {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			forwardedBody = string(body)
+			mu.Unlock()
+		}
+		status := "failed"
+		if r.URL.Path == "/rest/ping" || r.URL.Path == "/rest/scrobble" {
+			status = "ok"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": status, "version": "1.15.0"},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_post_scrobble.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_post_scrobble.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if err := server.db.StoreSongs("alice", []models.Song{{ID: "song1", Title: "Song", Artist: "Artist", Album: "Album", Duration: 180}}); err != nil {
+		t.Fatalf("Failed to store song: %v", err)
+	}
+
+	handlers := server.GetHandlers()
+	server.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEvent, server.SetLastPlayed, server.ProcessScrobble)
+	})
+
+	form := "u=alice&p=secret&id=song1&submission=true"
+	req := httptest.NewRequest("POST", "/rest/scrobble", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	server.proxyHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	mu.Lock()
+	if forwardedBody != form {
+		t.Errorf("upstream received body %q, want %q", forwardedBody, form)
+	}
+	mu.Unlock()
+
+	songs, err := server.db.GetAllSongs("alice")
+	if err != nil {
+		t.Fatalf("Failed to get songs: %v", err)
+	}
+	if len(songs) != 1 || songs[0].PlayCount != 1 {
+		t.Errorf("songs = %+v, want song1 with play count 1", songs)
 	}
 }
 

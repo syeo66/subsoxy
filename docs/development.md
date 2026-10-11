@@ -74,6 +74,8 @@ proxyServer.AddHook("/rest/getArtists", func(w http.ResponseWriter, r *http.Requ
 })
 ```
 
+Read request parameters with `r.FormValue`, not `r.URL.Query()`, so the hook works for both GET and form-encoded POST requests. The proxy has already parsed the form without consuming the body, so the request can still be forwarded.
+
 Put the logic in a `handlers` method, register it in `main.go`, validate inputs with `handlers.ValidateSongID` and similar helpers, and pass anything user-supplied through `SanitizeForLogging` before logging it.
 
 ## Conventions
