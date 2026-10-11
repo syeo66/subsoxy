@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -213,10 +214,27 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 	return false
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(string, string, string, *string), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool) bool) bool {
-	userID := r.FormValue("u")
-	songID := r.FormValue("id")
-	submission := r.FormValue("submission")
+// scrobbleTime returns when a scrobbled song was played: the optional "time" parameter
+// (milliseconds since the epoch) at the same position as its id, or now. Times in the
+// future are clamped to now.
+func scrobbleTime(times []string, i int, now time.Time) time.Time {
+	if i >= len(times) {
+		return now
+	}
+	ms, err := strconv.ParseInt(times[i], 10, 64)
+	if err != nil || ms <= 0 {
+		return now
+	}
+	if t := time.UnixMilli(ms); t.Before(now) {
+		return t
+	}
+	return now
+}
+
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(userID, songID, eventType string, at time.Time), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool) bool) bool {
+	userID := r.FormValue("u") // Also parses the form if that hasn't happened yet
+	songIDs := r.Form["id"]
+	times := r.Form["time"]
 
 	if userID == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
@@ -224,43 +242,47 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 		return false
 	}
 
-	if songID == "" {
+	if len(songIDs) == 0 || songIDs[0] == "" {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
 			Warn("Scrobble request missing song ID")
 		return false
 	}
 
-	if err := ValidateSongID(songID); err != nil {
-		h.logger.WithError(err).Warn("Invalid song ID in scrobble request")
-		return false
-	}
-
-	sanitizedSongID := SanitizeForLogging(songID)
+	// The Subsonic API treats a scrobble without "submission" as a submission
+	isSubmission := r.FormValue("submission") != "false"
 	sanitizedUserID := SanitizeForLogging(userID)
+	now := time.Now()
 
-	isSubmission := submission == "true"
+	// A client may send several songs at once, e.g. plays it queued while offline
+	for i, songID := range songIDs {
+		if err := ValidateSongID(songID); err != nil {
+			h.logger.WithError(err).Warn("Invalid song ID in scrobble request")
+			continue
+		}
+		sanitizedSongID := SanitizeForLogging(songID)
 
-	// Process pending songs first (may mark earlier songs as skipped)
-	// Returns true if this is a new play event, false if it's a duplicate
-	shouldRecord := processScrobbleFunc(userID, songID, isSubmission)
+		// Process pending songs first (may mark earlier songs as skipped)
+		// Returns true if this is a new play event, false if it's a duplicate
+		shouldRecord := processScrobbleFunc(userID, songID, isSubmission)
 
-	if isSubmission && shouldRecord {
-		recordFunc(userID, songID, "play", nil)
-		setLastPlayed(userID, songID)
-		h.logger.WithFields(logrus.Fields{
-			"song_id": sanitizedSongID,
-			"user_id": sanitizedUserID,
-		}).Debug("Recorded play event and processed pending songs")
-	} else if isSubmission && !shouldRecord {
-		h.logger.WithFields(logrus.Fields{
-			"song_id": sanitizedSongID,
-			"user_id": sanitizedUserID,
-		}).Debug("Skipped duplicate play event for same song")
-	} else {
-		h.logger.WithFields(logrus.Fields{
-			"song_id": sanitizedSongID,
-			"user_id": sanitizedUserID,
-		}).Debug("Processed scrobble without submission and handled pending songs")
+		if isSubmission && shouldRecord {
+			recordFunc(userID, songID, "play", scrobbleTime(times, i, now))
+			setLastPlayed(userID, songID)
+			h.logger.WithFields(logrus.Fields{
+				"song_id": sanitizedSongID,
+				"user_id": sanitizedUserID,
+			}).Debug("Recorded play event and processed pending songs")
+		} else if isSubmission {
+			h.logger.WithFields(logrus.Fields{
+				"song_id": sanitizedSongID,
+				"user_id": sanitizedUserID,
+			}).Debug("Skipped duplicate play event for same song")
+		} else {
+			h.logger.WithFields(logrus.Fields{
+				"song_id": sanitizedSongID,
+				"user_id": sanitizedUserID,
+			}).Debug("Processed scrobble without submission and handled pending songs")
+		}
 	}
 
 	return false

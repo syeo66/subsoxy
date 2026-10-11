@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,9 +49,11 @@ const (
 	UpstreamRequestTimeout = 30 * time.Second
 	// Similarity lookups run while a client waits for getRandomSongs, so they give up sooner.
 	SimilarSongsTimeout = 5 * time.Second
-	ReadHeaderTimeout   = 10 * time.Second
-	SubsonicAPIVersion  = "1.15.0"
-	ClientName          = "subsoxy"
+	// Songs requested per search3 page during library sync
+	LibraryPageSize    = 500
+	ReadHeaderTimeout  = 10 * time.Second
+	SubsonicAPIVersion = "1.15.0"
+	ClientName         = "subsoxy"
 )
 
 // ASCII control character constants
@@ -598,95 +601,13 @@ func (ps *ProxyServer) syncUserWithPassword(username, password string) {
 	}
 }
 
-// syncSongsForUser handles song synchronization for a single user using directory traversal
+// syncSongsForUser fetches a user's library from upstream and applies the differences locally
 func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	ps.logger.WithField("user", sanitizeUsername(username)).Info("Syncing songs for user")
 
-	// First, get all music folders
-	musicFolders, err := ps.getMusicFolders(username, password)
+	allSongs, incomplete, err := ps.fetchLibrary(username, password)
 	if err != nil {
-		return errors.Wrap(err, errors.CategoryNetwork, "MUSIC_FOLDERS_FAILED", "failed to get music folders").
-			WithContext("username", username)
-	}
-
-	var allSongs []models.Song
-
-	// Set when any part of the library could not be fetched. The song list is then
-	// partial, so songs missing from it must not be treated as removed upstream.
-	incomplete := false
-
-	// Traverse each music folder
-	for _, folder := range musicFolders {
-		// Convert folder ID to string
-		folderID := fmt.Sprintf("%v", folder.ID)
-
-		ps.logger.WithFields(logrus.Fields{
-			"user":        sanitizeUsername(username),
-			"folder_id":   folderID,
-			"folder_name": folder.Name,
-		}).Debug("Processing music folder")
-
-		// Get indexes for this folder to get artists
-		indexes, err := ps.getIndexes(username, password, folderID)
-		if err != nil {
-			ps.logger.WithError(err).WithFields(logrus.Fields{
-				"user":      sanitizeUsername(username),
-				"folder_id": folderID,
-			}).Warn("Failed to get indexes for folder, skipping")
-			incomplete = true
-			continue
-		}
-
-		// Process each artist
-		for _, index := range indexes {
-			for _, artist := range index.Artists {
-				ps.logger.WithFields(logrus.Fields{
-					"user":        sanitizeUsername(username),
-					"artist_id":   artist.ID,
-					"artist_name": artist.Name,
-				}).Debug("Processing artist")
-
-				// Get albums for this artist
-				albums, err := ps.getMusicDirectory(username, password, artist.ID)
-				if err != nil {
-					ps.logger.WithError(err).WithFields(logrus.Fields{
-						"user":      sanitizeUsername(username),
-						"artist_id": artist.ID,
-					}).Warn("Failed to get albums for artist, skipping")
-					incomplete = true
-					continue
-				}
-
-				// Process each album
-				for _, album := range albums {
-					if album.IsDir {
-						ps.logger.WithFields(logrus.Fields{
-							"user":        sanitizeUsername(username),
-							"album_id":    album.ID,
-							"album_title": album.Title,
-						}).Debug("Processing album")
-
-						// Get songs for this album
-						songs, err := ps.getMusicDirectory(username, password, album.ID)
-						if err != nil {
-							ps.logger.WithError(err).WithFields(logrus.Fields{
-								"user":     sanitizeUsername(username),
-								"album_id": album.ID,
-							}).Warn("Failed to get songs for album, skipping")
-							incomplete = true
-							continue
-						}
-
-						// Add songs (filter out directories)
-						for _, song := range songs {
-							if !song.IsDir {
-								allSongs = append(allSongs, song)
-							}
-						}
-					}
-				}
-			}
-		}
+		return err
 	}
 
 	// Implement differential sync - get existing songs to determine what to add/update/delete
@@ -789,103 +710,217 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	return nil
 }
 
-// getMusicFolders fetches all music folders for a user
-func (ps *ProxyServer) getMusicFolders(username, password string) ([]models.MusicFolder, error) {
-	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getMusicFolders")
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
+// fetchLibrary returns every song in the user's library. It pages through search3 with an
+// empty query, which takes a few dozen requests even for a large library, and falls back to
+// walking the folder tree (a request per artist and album) when the server doesn't answer
+// that search. incomplete is set when part of the library could not be fetched: the list is
+// then partial, so songs missing from it must not be treated as removed upstream.
+func (ps *ProxyServer) fetchLibrary(username, password string) (songs []models.Song, incomplete bool, err error) {
+	songs, err = ps.fetchLibraryBySearch(username, password)
+	if err == nil && len(songs) > 0 {
+		return songs, false, nil
 	}
 
-	params := ps.buildAuthParams(username, password)
+	// No songs could also mean the server doesn't treat an empty query as "everything",
+	// so an empty library is only believed once the folder walk agrees
+	ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).
+		Info("Library search returned no songs, syncing by walking the music folders")
+	return ps.fetchLibraryByDirectories(username, password)
+}
+
+// fetchLibraryBySearch pages through all songs with search3 and an empty query
+func (ps *ProxyServer) fetchLibraryBySearch(username, password string) ([]models.Song, error) {
+	var songs []models.Song
+	seen := make(map[string]bool)
+
+	for offset := 0; ; offset += LibraryPageSize {
+		params := ps.buildAuthParams(username, password)
+		params.Set("query", "")
+		params.Set("artistCount", "0")
+		params.Set("albumCount", "0")
+		params.Set("songCount", strconv.Itoa(LibraryPageSize))
+		params.Set("songOffset", strconv.Itoa(offset))
+
+		var response models.SearchResult3Response
+		if err := ps.getSubsonic("search3", params, &response); err != nil {
+			return nil, err
+		}
+
+		page := response.SubsonicResponse.SearchResult3.Song
+		added := 0
+		for _, song := range page {
+			// Pages can overlap when the library changes during the sync
+			if !song.IsDir && !seen[song.ID] {
+				seen[song.ID] = true
+				songs = append(songs, song)
+				added++
+			}
+		}
+
+		if len(page) < LibraryPageSize {
+			return songs, nil
+		}
+		// A full page of songs already seen means the server ignores songOffset
+		if added == 0 {
+			return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "search3 paging returned no new songs")
+		}
+	}
+}
+
+// fetchLibraryByDirectories walks music folders, artists and albums to collect all songs
+func (ps *ProxyServer) fetchLibraryByDirectories(username, password string) ([]models.Song, bool, error) {
+	// First, get all music folders
+	musicFolders, err := ps.getMusicFolders(username, password)
+	if err != nil {
+		return nil, false, errors.Wrap(err, errors.CategoryNetwork, "MUSIC_FOLDERS_FAILED", "failed to get music folders").
+			WithContext("username", username)
+	}
+
+	var allSongs []models.Song
+	incomplete := false
+
+	// Traverse each music folder
+	for _, folder := range musicFolders {
+		// Convert folder ID to string
+		folderID := fmt.Sprintf("%v", folder.ID)
+
+		ps.logger.WithFields(logrus.Fields{
+			"user":        sanitizeUsername(username),
+			"folder_id":   folderID,
+			"folder_name": folder.Name,
+		}).Debug("Processing music folder")
+
+		// Get indexes for this folder to get artists
+		indexes, err := ps.getIndexes(username, password, folderID)
+		if err != nil {
+			ps.logger.WithError(err).WithFields(logrus.Fields{
+				"user":      sanitizeUsername(username),
+				"folder_id": folderID,
+			}).Warn("Failed to get indexes for folder, skipping")
+			incomplete = true
+			continue
+		}
+
+		// Process each artist
+		for _, index := range indexes {
+			for _, artist := range index.Artists {
+				ps.logger.WithFields(logrus.Fields{
+					"user":        sanitizeUsername(username),
+					"artist_id":   artist.ID,
+					"artist_name": artist.Name,
+				}).Debug("Processing artist")
+
+				// Get albums for this artist
+				albums, err := ps.getMusicDirectory(username, password, artist.ID)
+				if err != nil {
+					ps.logger.WithError(err).WithFields(logrus.Fields{
+						"user":      sanitizeUsername(username),
+						"artist_id": artist.ID,
+					}).Warn("Failed to get albums for artist, skipping")
+					incomplete = true
+					continue
+				}
+
+				// Process each album
+				for _, album := range albums {
+					if album.IsDir {
+						ps.logger.WithFields(logrus.Fields{
+							"user":        sanitizeUsername(username),
+							"album_id":    album.ID,
+							"album_title": album.Title,
+						}).Debug("Processing album")
+
+						// Get songs for this album
+						songs, err := ps.getMusicDirectory(username, password, album.ID)
+						if err != nil {
+							ps.logger.WithError(err).WithFields(logrus.Fields{
+								"user":     sanitizeUsername(username),
+								"album_id": album.ID,
+							}).Warn("Failed to get songs for album, skipping")
+							incomplete = true
+							continue
+						}
+
+						// Add songs (filter out directories)
+						for _, song := range songs {
+							if !song.IsDir {
+								allSongs = append(allSongs, song)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return allSongs, incomplete, nil
+}
+
+// subsonicResponse is a decoded Subsonic response that reports its status
+type subsonicResponse interface {
+	ResponseStatus() string
+}
+
+// getSubsonic calls a Subsonic endpoint upstream and decodes its JSON response into
+// response, failing unless the response status is "ok"
+func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response subsonicResponse) error {
+	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/" + endpoint)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
+	}
 	baseURL.RawQuery = params.Encode()
 
 	resp, err := ps.upstreamClient.Get(baseURL.String())
 	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music folders")
+		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch "+endpoint)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
+		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
 
+	if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
+		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
+	}
+
+	if response.ResponseStatus() != "ok" {
+		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
+	}
+
+	return nil
+}
+
+// getMusicFolders fetches all music folders for a user
+func (ps *ProxyServer) getMusicFolders(username, password string) ([]models.MusicFolder, error) {
 	var response models.SubsonicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
+	if err := ps.getSubsonic("getMusicFolders", ps.buildAuthParams(username, password), &response); err != nil {
+		return nil, err
 	}
-
-	if response.SubsonicResponse.Status != "ok" {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
-	}
-
 	return response.SubsonicResponse.MusicFolders.MusicFolder, nil
 }
 
 // getIndexes fetches artist indexes for a music folder
 func (ps *ProxyServer) getIndexes(username, password, musicFolderId string) ([]models.Index, error) {
-	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getIndexes")
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
-	}
-
 	params := ps.buildAuthParams(username, password)
 	if musicFolderId != "" {
 		params.Add("musicFolderId", musicFolderId)
 	}
-	baseURL.RawQuery = params.Encode()
-
-	resp, err := ps.upstreamClient.Get(baseURL.String())
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch indexes")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
-	}
-
 	var response models.SubsonicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
+	if err := ps.getSubsonic("getIndexes", params, &response); err != nil {
+		return nil, err
 	}
-
-	if response.SubsonicResponse.Status != "ok" {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
-	}
-
 	return response.SubsonicResponse.Indexes.Index, nil
 }
 
 // getMusicDirectory fetches directory contents (albums or songs)
 func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]models.Song, error) {
-	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/getMusicDirectory")
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "URL_PARSE_FAILED", "failed to parse upstream URL")
-	}
-
 	params := ps.buildAuthParams(username, password)
 	params.Add("id", id)
-	baseURL.RawQuery = params.Encode()
-
-	resp, err := ps.upstreamClient.Get(baseURL.String())
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch music directory")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
-	}
-
 	var response models.SubsonicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
+	if err := ps.getSubsonic("getMusicDirectory", params, &response); err != nil {
+		return nil, err
 	}
-
-	if response.SubsonicResponse.Status != "ok" {
-		return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
-	}
-
 	return response.SubsonicResponse.Directory.Child, nil
 }
 
@@ -1035,7 +1070,16 @@ func readPostForm(r *http.Request) (url.Values, error) {
 }
 
 func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {
-	if err := ps.db.RecordPlayEvent(userID, songID, eventType, previousSong); err != nil {
+	ps.recordPlayEvent(userID, songID, eventType, previousSong, time.Now())
+}
+
+// RecordPlayEventAt records a play or skip that happened at the given time
+func (ps *ProxyServer) RecordPlayEventAt(userID, songID, eventType string, at time.Time) {
+	ps.recordPlayEvent(userID, songID, eventType, nil, at)
+}
+
+func (ps *ProxyServer) recordPlayEvent(userID, songID, eventType string, previousSong *string, at time.Time) {
+	if err := ps.db.RecordPlayEventAt(userID, songID, eventType, previousSong, at); err != nil {
 		ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record play event")
 		return
 	}

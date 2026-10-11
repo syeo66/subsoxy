@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/syeo66/subsoxy/database"
@@ -412,13 +414,13 @@ func TestHandleScrobble(t *testing.T) {
 
 		var recordedSongID string
 		var recordedEventType string
-		var recordedPreviousSong *string
+		var recordedAt time.Time
 		var lastPlayedSongID string
 
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
 			recordedSongID = songID
 			recordedEventType = eventType
-			recordedPreviousSong = previousSong
+			recordedAt = at
 		}
 
 		setLastPlayedFunc := func(userID, songID string) {
@@ -444,8 +446,8 @@ func TestHandleScrobble(t *testing.T) {
 			t.Errorf("Expected recorded event type 'play', got '%s'", recordedEventType)
 		}
 
-		if recordedPreviousSong != nil {
-			t.Errorf("Expected no previous song, got %v", recordedPreviousSong)
+		if time.Since(recordedAt) > time.Minute {
+			t.Errorf("Expected the play to be recorded now without a time parameter, got %v", recordedAt)
 		}
 
 		if lastPlayedSongID != "123" {
@@ -460,7 +462,7 @@ func TestHandleScrobble(t *testing.T) {
 		var recordCalled bool
 		var lastPlayedCalled bool
 
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
 			recordCalled = true
 		}
 
@@ -495,7 +497,7 @@ func TestHandleScrobble(t *testing.T) {
 		var recordCalled bool
 		var lastPlayedCalled bool
 
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
 			recordCalled = true
 		}
 
@@ -530,7 +532,7 @@ func TestHandleScrobble(t *testing.T) {
 		var recordCalled bool
 		var lastPlayedCalled bool
 
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
 			recordCalled = true
 		}
 
@@ -565,7 +567,7 @@ func TestHandleScrobble(t *testing.T) {
 		var recordCalled bool
 		var lastPlayedCalled bool
 
-		recordFunc := func(userID, songID, eventType string, previousSong *string) {
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
 			recordCalled = true
 		}
 
@@ -584,12 +586,45 @@ func TestHandleScrobble(t *testing.T) {
 			t.Error("HandleScrobble should return false (not handled)")
 		}
 
-		if recordCalled {
-			t.Error("Record function should not be called without submission parameter (song ended but didn't meet play threshold)")
+		if !recordCalled {
+			t.Error("Record function should be called without submission parameter, which defaults to true")
 		}
 
-		if lastPlayedCalled {
-			t.Error("SetLastPlayed should not be called without submission parameter")
+		if !lastPlayedCalled {
+			t.Error("SetLastPlayed should be called without submission parameter, which defaults to true")
+		}
+	})
+
+	t.Run("Several songs with play times", func(t *testing.T) {
+		first := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
+		future := time.Now().Add(time.Hour)
+		req := httptest.NewRequest("POST", "/rest/scrobble", strings.NewReader(url.Values{
+			"u":          {"testuser"},
+			"id":         {"a", "b", "c"},
+			"time":       {strconv.FormatInt(first.UnixMilli(), 10), strconv.FormatInt(future.UnixMilli(), 10)},
+			"submission": {"true"},
+		}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+
+		recorded := map[string]time.Time{}
+		recordFunc := func(userID, songID, eventType string, at time.Time) {
+			recorded[songID] = at
+		}
+
+		handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, func(string, string) {}, func(string, string, bool) bool { return true })
+
+		if len(recorded) != 3 {
+			t.Fatalf("Expected 3 recorded plays, got %d", len(recorded))
+		}
+		if !recorded["a"].Equal(first) {
+			t.Errorf("Expected song a to be recorded at %v, got %v", first, recorded["a"])
+		}
+		// A time in the future is clamped to now, a missing one defaults to now
+		for _, id := range []string{"b", "c"} {
+			if recorded[id].After(time.Now()) || time.Since(recorded[id]) > time.Minute {
+				t.Errorf("Expected song %s to be recorded now, got %v", id, recorded[id])
+			}
 		}
 	})
 }

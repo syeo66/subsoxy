@@ -46,7 +46,7 @@ func main() {
 	})
 
 	proxyServer.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleScrobble(w, r, endpoint, proxyServer.RecordPlayEvent, proxyServer.SetLastPlayed, proxyServer.ProcessScrobble)
+		return handlers.HandleScrobble(w, r, endpoint, proxyServer.RecordPlayEventAt, proxyServer.SetLastPlayed, proxyServer.ProcessScrobble)
 	})
 
 	proxyServer.AddAuthenticatedHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {

@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -1606,9 +1607,11 @@ func TestGetAllArtistAdjustedStats(t *testing.T) {
 	if len(stats) != len(want) {
 		t.Fatalf("got %d artists, want %d: %v", len(stats), len(want), stats)
 	}
+	// The counters decay over time, so allow for the moments that pass during the test
 	for artist, w := range want {
-		if stats[artist] != w {
-			t.Errorf("stats[%q] = %+v, want %+v", artist, stats[artist], w)
+		got := stats[artist]
+		if math.Abs(got.Plays-w.Plays) > 1e-6 || math.Abs(got.Skips-w.Skips) > 1e-6 {
+			t.Errorf("stats[%q] = %+v, want %+v", artist, got, w)
 		}
 	}
 
@@ -1618,5 +1621,136 @@ func TestGetAllArtistAdjustedStats(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Errorf("expected no stats for unknown user, got %v", empty)
+	}
+}
+
+func TestAdjustedCountersDecayOverTime(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_decay.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.StoreSongs("user1", []models.Song{{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	now := time.Now()
+	oneHalfLifeAgo := now.Add(-AdjustedHalfLife)
+	twoHalfLivesAgo := now.Add(-2 * AdjustedHalfLife)
+
+	getSong := func() models.Song {
+		t.Helper()
+		songs, err := db.GetAllSongs("user1")
+		if err != nil || len(songs) != 1 {
+			t.Fatalf("GetAllSongs failed: %v (%d songs)", err, len(songs))
+		}
+		return songs[0]
+	}
+
+	// A play one half-life ago is worth half a play now
+	if err := db.RecordPlayEventAt("user1", "1", "play", nil, oneHalfLifeAgo); err != nil {
+		t.Fatalf("Failed to record play: %v", err)
+	}
+	if got := getSong().AdjustedPlays; math.Abs(got-0.5) > 1e-3 {
+		t.Errorf("AdjustedPlays after a play one half-life ago = %.4f, want 0.5", got)
+	}
+
+	// A skip now counts fully
+	if err := db.RecordPlayEventAt("user1", "1", "skip", nil, now); err != nil {
+		t.Fatalf("Failed to record skip: %v", err)
+	}
+	song := getSong()
+	if math.Abs(song.AdjustedPlays-0.5) > 1e-3 || math.Abs(song.AdjustedSkips-1) > 1e-3 {
+		t.Errorf("Adjusted counters = %.4f plays, %.4f skips, want 0.5 and 1", song.AdjustedPlays, song.AdjustedSkips)
+	}
+
+	// A play delivered late counts for what it's worth today, and doesn't move last_played back
+	if err := db.RecordPlayEventAt("user1", "1", "play", nil, twoHalfLivesAgo); err != nil {
+		t.Fatalf("Failed to record late play: %v", err)
+	}
+	song = getSong()
+	if math.Abs(song.AdjustedPlays-0.75) > 1e-3 {
+		t.Errorf("AdjustedPlays after a late play = %.4f, want 0.75", song.AdjustedPlays)
+	}
+	if song.PlayCount != 2 {
+		t.Errorf("PlayCount = %d, want 2", song.PlayCount)
+	}
+	if song.LastPlayed.Sub(oneHalfLifeAgo).Abs() > time.Second {
+		t.Errorf("LastPlayed = %v, want %v", song.LastPlayed, oneHalfLifeAgo)
+	}
+
+	// A sync keeps the history
+	if err := db.StoreSongs("user1", []models.Song{{ID: "1", Title: "Renamed", Artist: "Artist", Album: "Album", Duration: 180}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	song = getSong()
+	if song.Title != "Renamed" || math.Abs(song.AdjustedPlays-0.75) > 1e-3 || song.PlayCount != 2 {
+		t.Errorf("After sync: title %q, %.4f adjusted plays, %d plays; want Renamed, 0.75, 2", song.Title, song.AdjustedPlays, song.PlayCount)
+	}
+
+	totals, err := db.GetAdjustedTotals("user1")
+	if err != nil {
+		t.Fatalf("GetAdjustedTotals failed: %v", err)
+	}
+	if totals.HeardSongs != 1 || totals.HeardArtists != 1 || math.Abs(totals.Plays-0.75) > 1e-3 || math.Abs(totals.Skips-1) > 1e-3 {
+		t.Errorf("GetAdjustedTotals = %+v, want 0.75 plays, 1 skip, 1 song, 1 artist", totals)
+	}
+}
+
+func TestAdjustedAtMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_adjusted_at.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	if err := db.StoreSongs("user1", []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 180},
+	}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Recreate a database from before adjusted_at: counters last updated one half-life ago
+	lastEvent := time.Now().UTC().Add(-AdjustedHalfLife).Format("2006-01-02 15:04:05")
+	for _, q := range []string{
+		`ALTER TABLE songs DROP COLUMN adjusted_at`,
+		`UPDATE songs SET adjusted_plays = 2, last_played = '` + lastEvent + `' WHERE id = '1'`,
+	} {
+		if _, err := db.conn.Exec(q); err != nil {
+			t.Fatalf("Failed to set up old schema: %v", err)
+		}
+	}
+	db.Close()
+
+	db, err = New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to reopen database: %v", err)
+	}
+	defer db.Close()
+
+	all, err := db.GetAllSongs("user1")
+	if err != nil {
+		t.Fatalf("GetAllSongs failed: %v", err)
+	}
+	for _, song := range all {
+		want := 0.0
+		if song.ID == "1" {
+			want = 1.0
+		}
+		if math.Abs(song.AdjustedPlays-want) > 1e-3 {
+			t.Errorf("Song %s AdjustedPlays after migration = %.4f, want %.1f", song.ID, song.AdjustedPlays, want)
+		}
 	}
 }

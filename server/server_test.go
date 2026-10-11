@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1905,7 +1906,7 @@ func TestPostScrobbleRecordsPlay(t *testing.T) {
 
 	handlers := server.GetHandlers()
 	server.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEvent, server.SetLastPlayed, server.ProcessScrobble)
+		return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEventAt, server.SetLastPlayed, server.ProcessScrobble)
 	})
 
 	form := "u=alice&p=secret&id=song1&submission=true"
@@ -2295,5 +2296,123 @@ func TestSyncSkippedWhileUserSyncRunning(t *testing.T) {
 	}
 	if _, running := server.syncingUsers.Load("alice"); running {
 		t.Error("Sync should be marked finished")
+	}
+}
+
+func TestSyncSongsForUserUsesSearch3(t *testing.T) {
+	const librarySize = 2*LibraryPageSize + 3
+
+	library := make([]models.Song, librarySize)
+	for i := range library {
+		library[i] = models.Song{ID: fmt.Sprintf("song%d", i), Title: "Song", Artist: "Artist", Album: "Album", Duration: 180}
+	}
+
+	var mu sync.Mutex
+	var ignoreOffset, emptySearch bool
+	calls := map[string]int{}
+
+	subsonicOK := func(w http.ResponseWriter, key string, value interface{}) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0", key: value},
+		})
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls[r.URL.Path]++
+		q := r.URL.Query()
+
+		switch r.URL.Path {
+		case "/rest/search3":
+			if !q.Has("query") || q.Get("query") != "" {
+				t.Errorf("search3 should be called with an empty query, got %q", q.Get("query"))
+			}
+			count, _ := strconv.Atoi(q.Get("songCount"))
+			offset, _ := strconv.Atoi(q.Get("songOffset"))
+			if ignoreOffset {
+				offset = 0
+			}
+			var page []models.Song
+			if !emptySearch && offset < len(library) {
+				page = library[offset:min(offset+count, len(library))]
+			}
+			subsonicOK(w, "searchResult3", map[string]interface{}{"song": page})
+		case "/rest/getMusicFolders":
+			subsonicOK(w, "musicFolders", map[string]interface{}{
+				"musicFolder": []models.MusicFolder{{ID: "1", Name: "Music"}},
+			})
+		case "/rest/getIndexes":
+			subsonicOK(w, "indexes", map[string]interface{}{
+				"index": []models.Index{{Name: "A", Artists: []models.Artist{{ID: "artist1", Name: "Artist"}}}},
+			})
+		case "/rest/getMusicDirectory":
+			var children []models.Song
+			switch q.Get("id") {
+			case "artist1":
+				children = []models.Song{{ID: "album1", IsDir: true}}
+			case "album1":
+				children = library[:2]
+			}
+			subsonicOK(w, "directory", map[string]interface{}{"child": children})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_search3.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	sync := func(name string) (songCount int, searchCalls int, folderCalls int) {
+		t.Helper()
+		mu.Lock()
+		clear(calls)
+		mu.Unlock()
+		if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+			t.Fatalf("%s: sync failed: %v", name, err)
+		}
+		count, err := server.db.GetSongCount("user1")
+		if err != nil {
+			t.Fatalf("%s: failed to count songs: %v", name, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return count, calls["/rest/search3"], calls["/rest/getMusicFolders"]
+	}
+
+	// The whole library comes from three search3 pages, without walking folders
+	if count, searches, folders := sync("search3"); count != librarySize || searches != 3 || folders != 0 {
+		t.Errorf("search3 sync: %d songs, %d search3 calls, %d folder walks; want %d, 3, 0", count, searches, folders, librarySize)
+	}
+
+	// A server that ignores the offset would page forever; the folder walk takes over instead
+	mu.Lock()
+	ignoreOffset = true
+	mu.Unlock()
+	if count, searches, folders := sync("ignored offset"); count != 2 || searches != 2 || folders != 1 {
+		t.Errorf("ignored offset: %d songs, %d search3 calls, %d folder walks; want 2, 2, 1", count, searches, folders)
+	}
+
+	// An empty search result isn't trusted to mean an empty library
+	mu.Lock()
+	ignoreOffset = false
+	emptySearch = true
+	mu.Unlock()
+	if count, searches, folders := sync("empty search"); count != 2 || searches != 1 || folders != 1 {
+		t.Errorf("empty search: %d songs, %d search3 calls, %d folder walks; want 2, 1, 1", count, searches, folders)
 	}
 }

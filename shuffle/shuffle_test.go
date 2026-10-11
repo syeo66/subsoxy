@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -850,13 +851,10 @@ func TestCalculateArtistWeight(t *testing.T) {
 		}
 	}
 
-	// With empirical Bayesian approach using adjusted (decayed) values:
-	// After 10 consecutive events, adjusted value ≈ 6.513 (geometric series: 1 + 0.95 + 0.95² + ... + 0.95⁹)
-	// After 5 consecutive events, adjusted value ≈ 4.108
-	// Total adjusted plays ≈ 10.621 (Great: 6.513, Poor: 0, Average: 4.108)
-	// Total adjusted skips ≈ 10.621 (Great: 0, Poor: 6.513, Average: 4.108)
-	// Artist count = 3
-	// alpha ≈ 10.621/3 = 3.540, beta ≈ 10.621/3 = 3.540
+	// Adjusted values decay with time, which is negligible within the test, so they equal the counts.
+	// Total adjusted plays = 15 (Great: 10, Average: 5), total adjusted skips = 15 (Poor: 10, Average: 5)
+	// Heard artists = 3, so the prior's strength is 30/3 = 10 and its mean (15+2)/(30+4) = 0.5
+	// alpha = 5, beta = 5
 	tests := []struct {
 		name        string
 		artist      string
@@ -866,13 +864,13 @@ func TestCalculateArtistWeight(t *testing.T) {
 		{
 			name:        "Great artist (all plays)",
 			artist:      "Great Artist",
-			expected:    1.239, // Bayesian: (6.513+3.540)/(6.513+0+3.540+3.540) = 10.053/13.593 = 0.739 → 0.5 + 0.739*1.0 = 1.239
+			expected:    1.25, // Bayesian: (10+5)/(10+0+5+5) = 0.75 → 0.5 + 0.75*1.0 = 1.25
 			description: "Artist with all plays gets regularized weight (Bayesian prevents extreme 1.5x)",
 		},
 		{
 			name:        "Poor artist (all skips)",
 			artist:      "Poor Artist",
-			expected:    0.739, // Bayesian: (0+3.540)/(0+6.513+3.540+3.540) = 3.540/13.593 = 0.260 → 0.5 + 0.260*1.0 = 0.760
+			expected:    0.75, // Bayesian: (0+5)/(0+10+5+5) = 0.25 → 0.5 + 0.25*1.0 = 0.75
 			description: "Artist with all skips gets regularized weight (Bayesian prevents extreme 0.5x)",
 		},
 		{
@@ -884,8 +882,8 @@ func TestCalculateArtistWeight(t *testing.T) {
 		{
 			name:        "Average artist (50% play ratio)",
 			artist:      "Average Artist",
-			expected:    0.957, // Bayesian: (4.108+3.540)/(4.108+4.108+3.540+3.540) = 7.648/15.296 = 0.500 → 0.5 + 0.457*1.0 ≈ 0.957
-			description: "Artist with 50% play ratio should get ~1.0x weight (slightly lower due to decay reducing sample size)",
+			expected:    1.0, // Bayesian: (5+5)/(5+5+5+5) = 0.5 → 0.5 + 0.5*1.0 = 1.0
+			description: "Artist with 50% play ratio should get 1.0x weight",
 		},
 	}
 
@@ -934,16 +932,14 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 		}
 	}
 
-	// With empirical Bayesian approach and decay:
-	// After 100 plays, adjusted_plays converges to ~20.0 (geometric series limit: 1/(1-0.95))
-	// Total adjusted_plays ≈ 20.0, Total adjusted_skips ≈ 0.0, Artist count = 1
-	// alpha = 20.0/1 = 20.0, beta = max(0/1, 1.0) = 1.0 (minimum prior strength)
-	// Bayesian ratio: (20+20)/(20+0+20+1) = 40/41 ≈ 0.976
-	// Weight: 0.5 + 0.976*1.0 ≈ 1.476
+	// Adjusted plays = 100 (no time passes), adjusted skips = 0, heard artists = 1
+	// Prior mean: (100+2)/(100+4) ≈ 0.981, strength: min(100/1, 10) = 10 → alpha ≈ 9.808, beta ≈ 0.192
+	// Bayesian ratio: (100+9.808)/(100+0+10) ≈ 0.998
+	// Weight: 0.5 + 0.998*1.0 ≈ 1.498
 	weight := service.calculateArtistWeight(userID, "Popular Artist", service.LoadArtistStats(userID))
-	expectedWeight := 1.476
-	if math.Abs(weight-expectedWeight) > 0.01 {
-		t.Errorf("Expected weight close to %.3f for artist with 100 plays (with decay, converges to ~1.476), got %.3f", expectedWeight, weight)
+	expectedWeight := 1.498
+	if math.Abs(weight-expectedWeight) > 0.001 {
+		t.Errorf("Expected weight close to %.3f for artist with 100 plays, got %.3f", expectedWeight, weight)
 	}
 
 	// Verify weight is finite and positive
@@ -1491,5 +1487,81 @@ func TestGetWeightedShuffledSongsReturnsEveryEligibleSong(t *testing.T) {
 			t.Fatalf("Song %s picked twice", song.ID)
 		}
 		picked[song.ID] = true
+	}
+}
+
+func TestPriorsFromTotals(t *testing.T) {
+	tests := []struct {
+		name         string
+		plays, skips float64
+		n            int
+		wantRatio    float64
+		wantStrength float64
+	}{
+		{"no history uses defaults", 0, 0, 0, 0.5, BayesianPriorAlpha + BayesianPriorBeta},
+		{"mostly skips keeps the user's ratio", 2, 8, 5, (2 + 2.0) / (10 + 4.0), MinPriorStrength},
+		{"mostly plays keeps the user's ratio", 30, 10, 8, (30 + 2.0) / (40 + 4.0), 5},
+		{"strength is capped", 300, 100, 4, (300 + 2.0) / (400 + 4.0), MaxPriorStrength},
+		{"no skips yet still leaves room for skips", 20, 0, 4, (20 + 2.0) / (20 + 4.0), 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := priorsFromTotals(tt.plays, tt.skips, tt.n)
+			strength := p.Alpha + p.Beta
+			if math.Abs(strength-tt.wantStrength) > 1e-9 {
+				t.Errorf("strength = %.4f, want %.4f", strength, tt.wantStrength)
+			}
+			if math.Abs(p.Alpha/strength-tt.wantRatio) > 1e-9 {
+				t.Errorf("ratio = %.4f, want %.4f", p.Alpha/strength, tt.wantRatio)
+			}
+			if p.Beta <= 0 {
+				t.Errorf("beta = %.4f, want > 0", p.Beta)
+			}
+		})
+	}
+}
+
+// Unheard songs must not dilute the priors: a large library with a few heard songs gets
+// the same priors as a small one.
+func TestPriorsIgnoreUnheardSongs(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_priors.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+	service := New(db, logger)
+
+	songs := make([]models.Song, 1000)
+	for i := range songs {
+		songs[i] = models.Song{ID: strconv.Itoa(i), Title: "Song", Artist: "Artist " + strconv.Itoa(i%100), Album: "Album", Duration: 180}
+	}
+	if err := db.StoreSongs("user1", songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// The user skips most of what they hear: 4 songs, each skipped 3 times and played once
+	for i := 0; i < 4; i++ {
+		id := strconv.Itoa(i)
+		for _, event := range []string{"skip", "skip", "skip", "play"} {
+			if err := db.RecordPlayEvent("user1", id, event, nil); err != nil {
+				t.Fatalf("Failed to record event: %v", err)
+			}
+		}
+	}
+
+	priors := service.getPriors("user1").song
+	wantRatio := (4 + 2.0) / (16 + 4.0)
+	if ratio := priors.Alpha / (priors.Alpha + priors.Beta); math.Abs(ratio-wantRatio) > 1e-3 {
+		t.Errorf("prior play ratio = %.4f, want %.4f (the user's own ratio)", ratio, wantRatio)
+	}
+	if strength := priors.Alpha + priors.Beta; math.Abs(strength-4) > 1e-3 {
+		t.Errorf("prior strength = %.4f, want 4 (events per heard song)", strength)
 	}
 }

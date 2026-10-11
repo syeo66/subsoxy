@@ -65,6 +65,7 @@ CREATE TABLE songs (
     skip_count     INTEGER DEFAULT 0,      -- raw
     adjusted_plays REAL DEFAULT 0.0,       -- decayed, see how-it-works.md
     adjusted_skips REAL DEFAULT 0.0,
+    adjusted_at    INTEGER,                -- Unix time the adjusted counters were last updated
     cover_art      TEXT,
     PRIMARY KEY (id, user_id)
 );

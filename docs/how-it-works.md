@@ -16,7 +16,7 @@ For each user, Subsoxy remembers the last scrobble it saw. When a new scrobble a
 
 | Situation | Result |
 |-----------|--------|
-| `submission=true` | Recorded as a **play**. The song becomes the user's "last played" track |
+| `submission=true` (or no `submission` parameter, which the Subsonic API treats as `true`) | Recorded as a **play**, at the time given by the `time` parameter if the client sent one. The song becomes the user's "last played" track |
 | `submission=true` again for the same song | Ignored, so client retries don't count twice |
 | Previous scrobble was `submission=false`, the new one is a different song, and less than 2× the previous song's duration has passed | Previous song recorded as a **skip** |
 | Same as above, but more than 2× the duration has passed | No skip. The user probably paused or stopped |
@@ -25,24 +25,26 @@ For each user, Subsoxy remembers the last scrobble it saw. When a new scrobble a
 
 **Client requirements:** this works because the client sends a "now playing" scrobble (`submission=false`) when a track starts, and a `submission=true` scrobble once its play threshold is reached. [Voidweaver](https://github.com/syeo66/voidweaver) does both for every track, and queues and retries scrobbles while offline. With a client that only sends `submission=true`, plays are still counted but skips are never detected. When a skip is detected also depends on the client's scrobble threshold. In Voidweaver that's configurable: a minimum play time or percentage, whichever comes first.
 
-Recording an event updates the song's `play_count`/`skip_count`, its `last_played`/`last_skipped` timestamp, and its decayed counters.
+A scrobble can name several songs (repeated `id`, each with an optional matching `time`), for example plays a client queued while offline. Each one is handled in turn. A `time` in the future is treated as now.
+
+Recording an event updates the song's `play_count`/`skip_count`, its `last_played`/`last_skipped` timestamp (which only moves forward, even for an event delivered late), and its decayed counters.
 
 ### Decayed counters
 
-Raw counts treat a play from three years ago the same as one from yesterday. So each song also stores `adjusted_plays` and `adjusted_skips`, which are updated on every event with a decay factor of 0.95:
+Raw counts treat a play from three years ago the same as one from yesterday. So each song also stores `adjusted_plays` and `adjusted_skips`, which lose half their value every 180 days (`AdjustedHalfLife`), plus `adjusted_at`, the time they were last brought up to date:
 
 ```
-on play:  adjusted_plays = 1 + 0.95 × adjusted_plays;  adjusted_skips = 0.95 × adjusted_skips
-on skip:  adjusted_skips = 1 + 0.95 × adjusted_skips;  adjusted_plays = 0.95 × adjusted_plays
+value now = stored value × 0.5^((now − adjusted_at) / 180 days)
 ```
 
-The newest event counts fully, and each older event counts 5% less. A counter can never go above 1/(1−0.95) = 20.
+On each event the stored counters are decayed to the event's time and the event adds 1. An event delivered late (an offline play) is decayed by its own age instead, so it counts for what it would have been worth had it arrived on time. Decay depends only on time, so a song skipped years ago and not heard since recovers on its own.
 
-| Consecutive plays | Raw | Adjusted |
-|-------------------|-----|----------|
-| 1 | 1 | 1.0 |
-| 5 | 5 | 4.11 |
-| 10 | 10 | 6.51 |
+| Age of an event | Counts as |
+|-----------------|-----------|
+| today | 1.0 |
+| 6 months | 0.5 |
+| 1 year | 0.25 |
+| 2 years | 0.06 |
 | 100 | 100 | ≈20.0 |
 
 The shuffle uses these adjusted values, not the raw counts.
@@ -79,7 +81,12 @@ ratio  = (adjusted_plays + α) / (adjusted_plays + adjusted_skips + α + β)
 weight = min + ratio × (max − min)
 ```
 
-The priors α and β are **empirical**: they're the user's average adjusted plays and skips per song (or per artist, for the artist factor), with a floor of 1.0. If the user has no history yet they default to α = β = 2.0. A user who skips a lot therefore gets a stronger skip prior. Priors are cached per user.
+The priors α and β are **empirical**, computed from the songs (or artists, for the artist factor) the user has played or skipped. Songs never heard are left out, since in a large library they would dilute the averages until every user got the same flat prior:
+
+- **Mean** α / (α + β): the user's overall play ratio, (plays + 2) / (plays + skips + 4). The +2/+4 nudges it toward 0.5, so a user with no skips yet still leaves room for skips.
+- **Strength** α + β: the average number of adjusted events per heard song (or artist), kept between 2 and 10 (`MinPriorStrength`, `MaxPriorStrength`). The prior then carries about as much evidence as a typical song, and a song's own history soon outweighs it.
+
+A user who skips 80% of what they hear therefore starts every song at a ratio near 0.2. With no history yet the priors default to α = β = 2.0. Priors are cached per user.
 
 ### Selection and acoustic chaining
 
@@ -114,7 +121,7 @@ Subsoxy doesn't need any upstream credentials of its own. It learns them from cl
 2. If the user is **new**, a sync of that user's library starts right away.
 3. After that, every known user is re-synced **hourly**, one after another with a 2s pause between users so the upstream server isn't overloaded. A user whose sync is still running is skipped.
 
-A sync walks the library through the standard Subsonic API: `getMusicFolders` → `getIndexes` → `getMusicDirectory` (artist) → `getMusicDirectory` (album). The result is then diffed against the local copy:
+A sync pages through all songs with `search3` and an empty query, 500 songs per request. For a library of about 4,000 songs on Navidrome that's 9 requests instead of about 600. If the server returns no songs that way, or ignores `songOffset`, the sync falls back to walking the library: `getMusicFolders` → `getIndexes` → `getMusicDirectory` (artist) → `getMusicDirectory` (album). An empty search result is never taken to mean an empty library. The result is then diffed against the local copy:
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.

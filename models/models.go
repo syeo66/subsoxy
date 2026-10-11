@@ -78,6 +78,22 @@ type SubsonicResponse struct {
 	} `json:"subsonic-response"`
 }
 
+// ResponseStatus returns the response's status, "ok" on success
+func (r *SubsonicResponse) ResponseStatus() string { return r.SubsonicResponse.Status }
+
+// SearchResult3Response is the response to search3, of which library sync only reads songs
+type SearchResult3Response struct {
+	SubsonicResponse struct {
+		Status        string `json:"status"`
+		SearchResult3 struct {
+			Song []Song `json:"song"`
+		} `json:"searchResult3"`
+	} `json:"subsonic-response"`
+}
+
+// ResponseStatus returns the response's status, "ok" on success
+func (r *SearchResult3Response) ResponseStatus() string { return r.SubsonicResponse.Status }
+
 type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
 
 // SonicSimilarityResponse is the OpenSubsonic response for getSonicSimilarTracks / findSonicPath.
