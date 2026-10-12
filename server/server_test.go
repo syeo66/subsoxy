@@ -1785,6 +1785,121 @@ func TestAuthenticatedHooks(t *testing.T) {
 	}
 }
 
+func TestViewSuffixRunsHooks(t *testing.T) {
+	var mu sync.Mutex
+	var forwardedPaths []string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/rest/ping") {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+			})
+			return
+		}
+		mu.Lock()
+		forwardedPaths = append(forwardedPaths, r.URL.Path)
+		mu.Unlock()
+		w.Write([]byte("upstream"))
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_view_suffix.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_view_suffix.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	var hookEndpoint string
+	server.AddAuthenticatedHook("/rest/getRandomSongs", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		hookEndpoint = endpoint
+		w.Write([]byte("local"))
+		return true
+	})
+
+	w := httptest.NewRecorder()
+	server.proxyHandler(w, httptest.NewRequest("GET", "/rest/getRandomSongs.view?u=alice&p=secret", nil))
+	if w.Body.String() != "local" {
+		t.Errorf("body = %q, want the hook to answer a .view request", w.Body.String())
+	}
+	if hookEndpoint != "/rest/getRandomSongs" {
+		t.Errorf("hook endpoint = %q, want it without the .view suffix", hookEndpoint)
+	}
+
+	// Requests without a hook are forwarded with the path the client sent
+	w = httptest.NewRecorder()
+	server.proxyHandler(w, httptest.NewRequest("GET", "/rest/getAlbumList2.view?u=alice&p=secret", nil))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(forwardedPaths) != 1 || forwardedPaths[0] != "/rest/getAlbumList2.view" {
+		t.Errorf("forwarded paths = %v, want [/rest/getAlbumList2.view]", forwardedPaths)
+	}
+}
+
+func TestShutdownAbortsRunningSync(t *testing.T) {
+	syncStarted := make(chan struct{})
+	var once sync.Once
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/ping" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0"},
+			})
+			return
+		}
+		if r.URL.Path == "/rest/search3" {
+			// Hang like a slow upstream until the proxy gives up on the request
+			once.Do(func() { close(syncStarted) })
+			<-r.Context().Done()
+			return
+		}
+		w.Write([]byte("upstream"))
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_shutdown_sync.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_shutdown_sync.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	// New credentials start a library sync in the background
+	server.proxyHandler(httptest.NewRecorder(), httptest.NewRequest("GET", "/rest/getAlbumList2?u=alice&p=secret", nil))
+
+	select {
+	case <-syncStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("library sync did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("Shutdown took %v, want the running sync to be aborted", elapsed)
+	}
+	if ctx.Err() != nil {
+		t.Error("Shutdown hit its timeout instead of waiting for the sync to finish")
+	}
+}
+
 func TestAuthenticatedHookCapturesCredentials(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{

@@ -63,23 +63,24 @@ const (
 )
 
 type ProxyServer struct {
-	config            *config.Config
-	logger            *logrus.Logger
-	proxy             *httputil.ReverseProxy
-	hooks             map[string][]models.Hook
-	authRequired      map[string]bool // Endpoints whose hooks act on the user's data and need verified credentials
-	db                *database.DB
-	credentials       *credentials.Manager
-	handlers          *handlers.Handler
-	shuffle           *shuffle.Service
-	upstreamClient    *http.Client
-	server            *http.Server
-	syncTicker        *time.Ticker
-	syncMutex         sync.RWMutex
-	shutdownChan      chan struct{}
+	config         *config.Config
+	logger         *logrus.Logger
+	proxy          *httputil.ReverseProxy
+	hooks          map[string][]models.Hook
+	authRequired   map[string]bool // Endpoints whose hooks act on the user's data and need verified credentials
+	db             *database.DB
+	credentials    *credentials.Manager
+	handlers       *handlers.Handler
+	shuffle        *shuffle.Service
+	upstreamClient *http.Client
+	server         *http.Server
+	// Cancelled on shutdown, which stops the sync loop and aborts its upstream requests
+	ctx               context.Context
+	cancel            context.CancelFunc
 	rateLimiter       *rate.Limiter
 	credentialWorkers chan struct{}  // Semaphore for limiting concurrent credential validations
 	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations and the syncs they start
+	syncWg            sync.WaitGroup // Tracks the periodic sync loop
 	syncingUsers      sync.Map       // Usernames with a library sync in progress
 }
 
@@ -152,6 +153,8 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		"max_workers": cfg.CredentialWorkers,
 	}).Info("Credential validation worker pool configured")
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	server := &ProxyServer{
 		config:            cfg,
 		logger:            logger,
@@ -163,14 +166,15 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		handlers:          handlersService,
 		shuffle:           shuffleService,
 		upstreamClient:    &http.Client{Timeout: UpstreamRequestTimeout},
-		shutdownChan:      make(chan struct{}),
+		ctx:               ctx,
+		cancel:            cancel,
 		rateLimiter:       rateLimiter,
 		credentialWorkers: credentialWorkers,
 	}
 
 	server.shuffle.SetSimilarSongsFetcher(server.fetchSimilarSongs)
 
-	go server.syncSongs()
+	server.syncWg.Go(server.syncSongs)
 
 	return server, nil
 }
@@ -341,7 +345,14 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Hooks read parameters with r.FormValue, which must not consume the forwarded body
 	ps.parseForm(r)
 
-	needsAuth := ps.authRequired[endpoint]
+	// Subsonic clients may call any endpoint with a ".view" suffix, which upstream accepts
+	// too, so hooks are looked up without it. The request is still forwarded as sent.
+	hookEndpoint := endpoint
+	if strings.HasPrefix(endpoint, "/rest/") {
+		hookEndpoint = strings.TrimSuffix(endpoint, ".view")
+	}
+
+	needsAuth := ps.authRequired[hookEndpoint]
 	authenticated := false
 
 	if strings.HasPrefix(endpoint, "/rest/") || needsAuth {
@@ -377,9 +388,9 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if hooks, exists := ps.hooks[endpoint]; exists && (!needsAuth || authenticated) {
+	if hooks, exists := ps.hooks[hookEndpoint]; exists && (!needsAuth || authenticated) {
 		for _, hook := range hooks {
-			if hook(w, r, endpoint) {
+			if hook(w, r, hookEndpoint) {
 				return
 			}
 		}
@@ -464,14 +475,8 @@ func (ps *ProxyServer) Start() error {
 func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 	ps.logger.Info("Shutting down proxy server...")
 
-	close(ps.shutdownChan)
-
-	// Safely stop the ticker
-	ps.syncMutex.RLock()
-	if ps.syncTicker != nil {
-		ps.syncTicker.Stop()
-	}
-	ps.syncMutex.RUnlock()
+	// Stop syncing: the sync loop exits and running syncs give up on their upstream requests
+	ps.cancel()
 
 	// Stop accepting requests and let in-flight handlers finish while the database is still open
 	var shutdownErr error
@@ -482,17 +487,18 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Wait for in-flight credential validations to complete
-	ps.logger.Info("Waiting for credential validation workers to finish...")
+	// Wait for credential validations and syncs, which use the database, before closing it
+	ps.logger.Info("Waiting for credential validation workers and syncs to finish...")
 	done := make(chan struct{})
 	go func() {
 		ps.credentialWg.Wait()
+		ps.syncWg.Wait()
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		ps.logger.Info("All credential validation workers finished")
+		ps.logger.Info("All credential validation workers and syncs finished")
 	case <-ctx.Done():
 		ps.logger.Warn("Shutdown timeout reached, forcing shutdown")
 	}
@@ -512,35 +518,17 @@ func (ps *ProxyServer) Shutdown(ctx context.Context) error {
 }
 
 func (ps *ProxyServer) syncSongs() {
-	// Safely create and store the ticker
-	ps.syncMutex.Lock()
-	ps.syncTicker = time.NewTicker(SongSyncInterval)
-	ps.syncMutex.Unlock()
-
-	defer func() {
-		ps.syncMutex.Lock()
-		if ps.syncTicker != nil {
-			ps.syncTicker.Stop()
-		}
-		ps.syncMutex.Unlock()
-	}()
+	ticker := time.NewTicker(SongSyncInterval)
+	defer ticker.Stop()
 
 	// Skip initial sync - wait for credentials to be captured from client requests
 	ps.logger.Info("Song sync routine started - waiting for valid credentials from client requests")
 
 	for {
-		ps.syncMutex.RLock()
-		ticker := ps.syncTicker
-		ps.syncMutex.RUnlock()
-
-		if ticker == nil {
-			return
-		}
-
 		select {
 		case <-ticker.C:
 			ps.fetchAndStoreSongs()
-		case <-ps.shutdownChan:
+		case <-ps.ctx.Done():
 			ps.logger.Info("Stopping song sync goroutine")
 			return
 		}
@@ -564,7 +552,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 		if i > 0 {
 			select {
 			case <-time.After(UserSyncStaggerDelay):
-			case <-ps.shutdownChan:
+			case <-ps.ctx.Done():
 				ps.logger.Info("Shutdown requested, stopping multi-user song sync")
 				return
 			}
@@ -605,6 +593,10 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 
 	allSongs, incomplete, err := ps.fetchLibrary(username, password)
 	if err != nil {
+		return err
+	}
+	// A folder walk cut short by shutdown returns what it got so far; don't store that
+	if err := ps.ctx.Err(); err != nil {
 		return err
 	}
 
@@ -855,7 +847,12 @@ func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response 
 	}
 	baseURL.RawQuery = params.Encode()
 
-	resp, err := ps.upstreamClient.Get(baseURL.String())
+	req, err := http.NewRequestWithContext(ps.ctx, http.MethodGet, baseURL.String(), nil)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryNetwork, "REQUEST_FAILED", "failed to create request for "+endpoint)
+	}
+
+	resp, err := ps.upstreamClient.Do(req)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to fetch "+endpoint)
 	}
