@@ -1795,6 +1795,11 @@ func TestViewSuffixRunsHooks(t *testing.T) {
 			})
 			return
 		}
+		// Valid credentials start a background library sync; keep its calls out of the forwarded paths
+		if r.URL.Path == "/rest/search3" || r.URL.Path == "/rest/getMusicFolders" {
+			w.Write([]byte("upstream"))
+			return
+		}
 		mu.Lock()
 		forwardedPaths = append(forwardedPaths, r.URL.Path)
 		mu.Unlock()
