@@ -34,10 +34,10 @@ Set by `middleware/security.go` on every response when `-security-headers-enable
 |-|------------|----------|
 | `Content-Security-Policy` | `default-src 'self'; script-src 'self'; object-src 'none';` | `default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss:; img-src 'self' data: blob:;` |
 | `X-Frame-Options` | `DENY` | `SAMEORIGIN` |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains`, only over HTTPS | not sent |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains`, only over HTTPS (a TLS connection or `X-Forwarded-Proto: https` from the reverse proxy) | not sent |
 | `X-Content-Type-Options`, `X-XSS-Protection`, `Referrer-Policy` | sent | sent |
 
-Dev mode is used when `-security-dev-mode` is set **or** the request comes from localhost (`localhost`, `127.0.0.1`, `::1`, including IPv6 forms with brackets and ports).
+Dev mode is used only when `-security-dev-mode` is set. It isn't inferred from the port or the request's host: behind a reverse proxy every request comes from the proxy's address, and clients choose the `Host` header themselves.
 
 ## Debug endpoint
 

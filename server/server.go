@@ -608,11 +608,16 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		return err
 	}
 
-	// Implement differential sync - get existing songs to determine what to add/update/delete
-	existingSongIDs, err := ps.db.GetExistingSongIDs(username)
+	// Differential sync: compare upstream with the stored songs to find what to add, update
+	// and delete, so only those are written
+	storedSongs, err := ps.db.GetAllSongs(username)
 	if err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "EXISTING_SONGS_FAILED", "failed to get existing song IDs").
+		return errors.Wrap(err, errors.CategoryDatabase, "EXISTING_SONGS_FAILED", "failed to get existing songs").
 			WithContext("username", username)
+	}
+	existingSongs := make(map[string]models.Song, len(storedSongs))
+	for _, song := range storedSongs {
+		existingSongs[song.ID] = song
 	}
 
 	// Create a map of current upstream songs for efficient lookup
@@ -623,7 +628,7 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 
 	// Determine songs to delete (exist locally but not upstream)
 	var songsToDelete []string
-	for existingSongID := range existingSongIDs {
+	for existingSongID := range existingSongs {
 		if !upstreamSongIDs[existingSongID] {
 			songsToDelete = append(songsToDelete, existingSongID)
 		}
@@ -651,49 +656,37 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		}).Info("Removed songs no longer in upstream library")
 	}
 
-	// Calculate actually new songs (not just updated ones)
-	var newSongs []models.Song
-	var existingSongsToCheck []string
+	// Only new songs and songs whose metadata changed need writing
+	var songsToStore []models.Song
+	addedCount, updatedCount := 0, 0
 	for _, song := range allSongs {
-		if !existingSongIDs[song.ID] {
-			newSongs = append(newSongs, song)
-		} else {
-			existingSongsToCheck = append(existingSongsToCheck, song.ID)
+		existingSong, exists := existingSongs[song.ID]
+		switch {
+		case !exists:
+			addedCount++
+		case songHasChanged(existingSong, song):
+			updatedCount++
+		default:
+			continue
 		}
+		songsToStore = append(songsToStore, song)
 	}
 
-	// Fetch existing songs to compare for actual changes
-	var actuallyUpdatedCount int
-	if len(existingSongsToCheck) > 0 {
-		existingSongs, err := ps.db.GetSongsByIDs(username, existingSongsToCheck)
-		if err != nil {
-			ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Warn("Failed to fetch existing songs for comparison, counting all as updated")
-			actuallyUpdatedCount = len(existingSongsToCheck)
-		} else {
-			// Compare each existing song with its new version to detect actual changes
-			for _, song := range allSongs {
-				if existingSong, exists := existingSongs[song.ID]; exists {
-					if songHasChanged(existingSong, song) {
-						actuallyUpdatedCount++
-					}
-				}
-			}
+	// Store/update the changed songs (preserves existing play counts)
+	if len(songsToStore) > 0 {
+		if err := ps.db.StoreSongs(username, songsToStore); err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
+				WithContext("username", username)
 		}
-	}
-
-	// Store/update current upstream songs (preserves existing play counts)
-	if err := ps.db.StoreSongs(username, allSongs); err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "STORAGE_FAILED", "failed to store songs for user").
-			WithContext("username", username)
 	}
 
 	ps.logger.WithFields(logrus.Fields{
 		"user":      sanitizeUsername(username),
 		"total":     len(allSongs),
 		"deleted":   len(songsToDelete),
-		"added":     len(newSongs),
-		"updated":   actuallyUpdatedCount,
-		"unchanged": len(existingSongsToCheck) - actuallyUpdatedCount,
+		"added":     addedCount,
+		"updated":   updatedCount,
+		"unchanged": len(allSongs) - addedCount - updatedCount,
 	}).Info("Successfully completed differential sync for user")
 
 	// Priors average over the user's songs and artists, which may have just changed

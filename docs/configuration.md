@@ -48,7 +48,7 @@ Every option can be set with a command-line flag or an environment variable. Fla
 | Flag | Env | Default |
 |------|-----|---------|
 | `-security-headers-enabled` | `SECURITY_HEADERS_ENABLED` | `true` |
-| `-security-dev-mode` | `SECURITY_DEV_MODE` | `false` (localhost is detected automatically, see [Security](security.md#security-headers)) |
+| `-security-dev-mode` | `SECURITY_DEV_MODE` | `false` (relaxed headers for local development, see [Security](security.md#security-headers)) |
 | `-x-content-type-options` | `X_CONTENT_TYPE_OPTIONS` | `nosniff` |
 | `-x-frame-options` | `X_FRAME_OPTIONS` | `DENY` |
 | `-x-xss-protection` | `X_XSS_PROTECTION` | `1; mode=block` |

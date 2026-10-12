@@ -622,7 +622,7 @@ func TestIsDevMode(t *testing.T) {
 			name:            "Default port 8080",
 			securityDevMode: false,
 			proxyPort:       "8080",
-			expected:        true,
+			expected:        false,
 		},
 		{
 			name:            "Non-default port",

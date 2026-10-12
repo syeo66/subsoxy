@@ -38,57 +38,16 @@ func (s *SecurityHeaders) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check if we're in development mode
-		isDevMode := s.isDevModeRequest(r)
-
-		if isDevMode {
+		if s.config.IsDevMode() {
 			s.logger.Debug("Applying development mode security headers")
 			s.addDevelopmentHeaders(w)
 		} else {
 			s.logger.Debug("Applying production security headers")
-			s.addProductionHeaders(w)
+			s.addProductionHeaders(w, r)
 		}
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// isDevModeRequest determines if this is a development mode request
-func (s *SecurityHeaders) isDevModeRequest(r *http.Request) bool {
-	// If development mode is explicitly enabled in config
-	if s.config.IsDevMode() {
-		return true
-	}
-
-	// Check if request is coming from localhost
-	host := r.Host
-	remoteAddr := r.RemoteAddr
-
-	// Extract just the host part (remove port if present)
-	// Handle IPv6 addresses in brackets like [::1]:8080
-	if strings.HasPrefix(host, "[") {
-		if closeBracket := strings.Index(host, "]"); closeBracket != -1 {
-			host = host[1:closeBracket]
-		}
-	} else if colonIndex := strings.LastIndex(host, ":"); colonIndex != -1 {
-		host = host[:colonIndex]
-	}
-
-	// Check for localhost patterns
-	localhostPatterns := []string{
-		"localhost",
-		"127.0.0.1",
-		"::1",
-		"0.0.0.0",
-	}
-
-	for _, pattern := range localhostPatterns {
-		if host == pattern || strings.HasPrefix(remoteAddr, pattern) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // addDevelopmentHeaders adds relaxed security headers for development
@@ -125,7 +84,7 @@ func (s *SecurityHeaders) addDevelopmentHeaders(w http.ResponseWriter) {
 }
 
 // addProductionHeaders adds full security headers for production
-func (s *SecurityHeaders) addProductionHeaders(w http.ResponseWriter) {
+func (s *SecurityHeaders) addProductionHeaders(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
 
 	// X-Content-Type-Options
@@ -144,7 +103,7 @@ func (s *SecurityHeaders) addProductionHeaders(w http.ResponseWriter) {
 	}
 
 	// Strict-Transport-Security (only for HTTPS)
-	if s.config.StrictTransportSecurity != "" && s.isHTTPS() {
+	if s.config.StrictTransportSecurity != "" && isHTTPS(r) {
 		header.Set("Strict-Transport-Security", s.config.StrictTransportSecurity)
 	}
 
@@ -159,10 +118,9 @@ func (s *SecurityHeaders) addProductionHeaders(w http.ResponseWriter) {
 	}
 }
 
-// isHTTPS checks if the application is configured for HTTPS
-func (s *SecurityHeaders) isHTTPS() bool {
-	// Simple heuristic: check if we're running on standard HTTPS port
-	// In a production environment, this could be enhanced with TLS detection
-	return strings.Contains(s.config.ProxyPort, "443") ||
-		strings.Contains(s.config.UpstreamURL, "https://")
+// isHTTPS reports whether the client reached us over HTTPS, either directly or through a
+// TLS-terminating reverse proxy. A spoofed X-Forwarded-Proto is harmless here, since browsers
+// ignore HSTS received over plain HTTP.
+func isHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

@@ -11,7 +11,7 @@ make clean          # rm subsoxy
 ./start_server.sh   # build to a temp file and run with dotenvx (.env)
 ```
 
-`.air.toml` is included for live reload with [air](https://github.com/air-verse/air). The `Dockerfile` builds a static binary, runs the tests in a separate stage, and produces an Alpine image. `make deploy` merges `main` into `stage` and pushes it.
+`.air.toml` is included for live reload with [air](https://github.com/air-verse/air). The `Dockerfile` builds a static binary, runs the tests, and only produces the Alpine image once they pass. `make deploy` merges `main` into `stage` and pushes it.
 
 CI (`.github/workflows/go.yml`) builds and tests on every push and pull request to `main`.
 

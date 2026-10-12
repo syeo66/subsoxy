@@ -2,24 +2,29 @@ FROM golang:1.26 AS build-stage
 
 WORKDIR /app
 
-COPY . ./
+# Download modules in their own layer, so source changes don't throw away the module cache
+COPY go.mod go.sum ./
 RUN go mod download
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o /server -a -ldflags '-linkmode external -extldflags "-static"' .
+COPY . ./
+
+# cgo is needed for sqlite. netgo and osusergo use Go's own DNS and user lookups, which glibc
+# can't provide in a statically linked binary.
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -tags netgo,osusergo -o /server -ldflags '-linkmode external -extldflags "-static"' .
 
 # Run the tests in the container
 FROM build-stage AS run-test-stage
-RUN go test -v ./...
+RUN go test ./...
 
 # Deploy the application binary into a lean image
-FROM alpine AS build-release-stage
+FROM alpine:3.22 AS build-release-stage
 
 WORKDIR /
 
-RUN apk --no-cache add --no-check-certificate ca-certificates \
-  && update-ca-certificates
+RUN apk --no-cache add ca-certificates
 
-COPY --from=build-stage /server /server
+# Copied from the test stage, so the image is only built once the tests pass
+COPY --from=run-test-stage /server /server
 
 EXPOSE 8080
 

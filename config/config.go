@@ -488,19 +488,9 @@ func (c *Config) validateCredentialWorkers() error {
 	return nil
 }
 
-// IsDevMode checks if the server is running in development mode
-// Development mode is enabled when:
-// 1. SecurityDevMode is explicitly set to true, OR
-// 2. The proxy is running on default port (8080) suggesting local development
+// IsDevMode reports whether relaxed development security headers are enabled. Only the
+// explicit setting counts: the port or the request's host can't tell a local run apart from
+// a deployment behind a reverse proxy.
 func (c *Config) IsDevMode() bool {
-	if c.SecurityDevMode {
-		return true
-	}
-
-	// Check if running on default development port
-	if c.ProxyPort == DefaultProxyPort {
-		return true
-	}
-
-	return false
+	return c.SecurityDevMode
 }

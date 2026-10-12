@@ -1672,3 +1672,33 @@ func TestDropArtistStatsMigration(t *testing.T) {
 		t.Errorf("Expected artist_stats and its index to be dropped, found %d objects", count)
 	}
 }
+
+func TestStoreSongsFailsOnInsertError(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.conn.Exec(`CREATE TRIGGER reject_bad_song BEFORE INSERT ON songs
+		WHEN NEW.id = 'bad' BEGIN SELECT RAISE(ABORT, 'rejected'); END`); err != nil {
+		t.Fatalf("Failed to create trigger: %v", err)
+	}
+
+	songs := []models.Song{
+		{ID: "good", Title: "Good", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "bad", Title: "Bad", Artist: "Artist", Album: "Album", Duration: 180},
+	}
+	if err := db.StoreSongs("testuser", songs); err == nil {
+		t.Fatal("Expected an error when a song can't be stored")
+	}
+
+	// The batch is rolled back, so a failed sync leaves nothing half-written
+	ids, err := db.GetExistingSongIDs("testuser")
+	if err != nil {
+		t.Fatalf("Failed to get song IDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("Expected no songs stored after a failed batch, got %d", len(ids))
+	}
+}

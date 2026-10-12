@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2415,5 +2417,101 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 	mu.Unlock()
 	if count, searches, folders := sync("empty search"); count != 2 || searches != 1 || folders != 1 {
 		t.Errorf("empty search: %d songs, %d search3 calls, %d folder walks; want 2, 1, 1", count, searches, folders)
+	}
+}
+
+func TestSyncSongsForUserWritesOnlyChangedSongs(t *testing.T) {
+	var mu sync.Mutex
+	library := []models.Song{
+		{ID: "song1", Title: "One", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "song2", Title: "Two", Artist: "Artist", Album: "Album", Duration: 200},
+		{ID: "song3", Title: "Three", Artist: "Artist", Album: "Album", Duration: 220},
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/search3" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		var page []models.Song
+		if r.URL.Query().Get("songOffset") == "0" {
+			page = library
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status": "ok", "version": "1.15.0", "searchResult3": map[string]interface{}{"song": page},
+			},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_changed_only.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		t.Fatalf("Initial sync failed: %v", err)
+	}
+
+	// Count every row the next sync writes, through a second connection to the same file
+	conn, err := sql.Open("sqlite3", cfg.DatabasePath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer conn.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE song_writes (id TEXT)`,
+		`CREATE TRIGGER count_song_inserts AFTER INSERT ON songs BEGIN INSERT INTO song_writes VALUES (NEW.id); END`,
+		`CREATE TRIGGER count_song_updates AFTER UPDATE ON songs BEGIN INSERT INTO song_writes VALUES (NEW.id); END`,
+	} {
+		if _, err := conn.Exec(stmt); err != nil {
+			t.Fatalf("Failed to set up write counting: %v", err)
+		}
+	}
+
+	mu.Lock()
+	library[1].Title = "Two (Remastered)"
+	library = append(library, models.Song{ID: "song4", Title: "Four", Artist: "Artist", Album: "Album", Duration: 240})
+	mu.Unlock()
+
+	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		t.Fatalf("Second sync failed: %v", err)
+	}
+
+	rows, err := conn.Query(`SELECT id FROM song_writes ORDER BY id`)
+	if err != nil {
+		t.Fatalf("Failed to read writes: %v", err)
+	}
+	defer rows.Close()
+	var written []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		written = append(written, id)
+	}
+	if want := []string{"song2", "song4"}; !slices.Equal(written, want) {
+		t.Errorf("Sync wrote %v, want only the changed and new songs %v", written, want)
+	}
+
+	songs, err := server.db.GetSongsByIDs("user1", []string{"song2"})
+	if err != nil {
+		t.Fatalf("Failed to get song: %v", err)
+	}
+	if songs["song2"].Title != "Two (Remastered)" {
+		t.Errorf("Expected the changed title to be stored, got %q", songs["song2"].Title)
 	}
 }

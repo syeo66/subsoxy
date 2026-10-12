@@ -549,22 +549,17 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	}
 	defer stmt.Close()
 
-	var failedSongs []string
+	// One failed write fails the whole batch, rather than reporting success for a partial store
 	for _, song := range songs {
-		_, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt)
-		if err != nil {
-			db.logger.WithError(err).WithFields(logrus.Fields{
-				"songId": song.ID,
-				"userID": userID,
-			}).Error("Failed to insert song")
-			failedSongs = append(failedSongs, song.ID)
-			continue
+		if _, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt); err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to store song").
+				WithContext("songId", song.ID).
+				WithContext("userID", userID)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction").
-			WithContext("failed_songs", failedSongs).
 			WithContext("userID", userID)
 	}
 

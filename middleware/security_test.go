@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -135,25 +136,25 @@ func TestSecurityHeadersDevelopmentMode(t *testing.T) {
 		expectDevMode bool
 	}{
 		{
-			name:          "Localhost host",
+			name:          "Localhost host without dev mode",
 			host:          "localhost:8080",
 			remoteAddr:    "127.0.0.1:12345",
 			devModeConfig: false,
-			expectDevMode: true,
+			expectDevMode: false,
 		},
 		{
-			name:          "127.0.0.1 host",
+			name:          "127.0.0.1 host without dev mode",
 			host:          "127.0.0.1:8080",
 			remoteAddr:    "127.0.0.1:12345",
 			devModeConfig: false,
-			expectDevMode: true,
+			expectDevMode: false,
 		},
 		{
-			name:          "::1 host",
+			name:          "::1 host without dev mode",
 			host:          "[::1]:8080",
 			remoteAddr:    "[::1]:12345",
 			devModeConfig: false,
-			expectDevMode: true,
+			expectDevMode: false,
 		},
 		{
 			name:          "Config dev mode enabled",
@@ -173,17 +174,10 @@ func TestSecurityHeadersDevelopmentMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use port 8080 for tests that should detect dev mode via default port,
-			// and port 9090 for tests that should not
-			testPort := "9090"
-			if tt.expectDevMode && !tt.devModeConfig {
-				testPort = "8080" // Use default port for localhost/default port detection
-			}
-
 			cfg := &config.Config{
 				SecurityHeadersEnabled: true,
 				SecurityDevMode:        tt.devModeConfig,
-				ProxyPort:              testPort,
+				ProxyPort:              "8080",
 				XContentTypeOptions:    "nosniff",
 				XFrameOptions:          "DENY",
 				XXSSProtection:         "1; mode=block",
@@ -247,8 +241,7 @@ func TestSecurityHeadersHTTPS(t *testing.T) {
 	cfg := &config.Config{
 		SecurityHeadersEnabled:  true,
 		SecurityDevMode:         false,
-		ProxyPort:               "443", // HTTPS port
-		UpstreamURL:             "https://example.com",
+		ProxyPort:               "8080",
 		StrictTransportSecurity: "max-age=31536000; includeSubDomains",
 		XContentTypeOptions:     "nosniff",
 	}
@@ -263,7 +256,8 @@ func TestSecurityHeadersHTTPS(t *testing.T) {
 	wrappedHandler := middleware.Handler(testHandler)
 
 	req := httptest.NewRequest("GET", "/test", nil)
-	req.Host = "example.com:443"
+	req.Host = "example.com"
+	req.Header.Set("X-Forwarded-Proto", "https") // TLS terminated by a reverse proxy
 	rec := httptest.NewRecorder()
 
 	wrappedHandler.ServeHTTP(rec, req)
@@ -329,89 +323,32 @@ func TestSecurityHeadersEmptyValues(t *testing.T) {
 	}
 }
 
-func TestIsDevModeRequest(t *testing.T) {
+func TestIsHTTPS(t *testing.T) {
 	tests := []struct {
-		name       string
-		host       string
-		remoteAddr string
-		configDev  bool
-		expected   bool
+		name           string
+		forwardedProto string
+		tls            bool
+		expected       bool
 	}{
-		{
-			name:       "localhost host",
-			host:       "localhost:8080",
-			remoteAddr: "127.0.0.1:12345",
-			configDev:  false,
-			expected:   true,
-		},
-		{
-			name:       "127.0.0.1 host",
-			host:       "127.0.0.1:8080",
-			remoteAddr: "127.0.0.1:12345",
-			configDev:  false,
-			expected:   true,
-		},
-		{
-			name:       "::1 IPv6 localhost",
-			host:       "[::1]:8080",
-			remoteAddr: "[::1]:12345",
-			configDev:  false,
-			expected:   true,
-		},
-		{
-			name:       "0.0.0.0 host",
-			host:       "0.0.0.0:8080",
-			remoteAddr: "192.168.1.1:12345",
-			configDev:  false,
-			expected:   true,
-		},
-		{
-			name:       "config dev mode enabled",
-			host:       "example.com:9090",
-			remoteAddr: "192.168.1.1:12345",
-			configDev:  true,
-			expected:   true,
-		},
-		{
-			name:       "production host and config",
-			host:       "example.com:9090",
-			remoteAddr: "192.168.1.1:12345",
-			configDev:  false,
-			expected:   false,
-		},
-		{
-			name:       "remote addr localhost",
-			host:       "example.com:9090",
-			remoteAddr: "127.0.0.1:12345",
-			configDev:  false,
-			expected:   true,
-		},
+		{name: "plain HTTP", expected: false},
+		{name: "direct TLS", tls: true, expected: true},
+		{name: "forwarded HTTPS", forwardedProto: "https", expected: true},
+		{name: "forwarded HTTPS uppercase", forwardedProto: "HTTPS", expected: true},
+		{name: "forwarded HTTP", forwardedProto: "http", expected: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Use port 8080 for tests that should detect dev mode via localhost,
-			// and port 9090 for tests that should not
-			testPort := "9090"
-			if tt.expected && !tt.configDev {
-				testPort = "8080" // Use default port for localhost detection
-			}
-
-			cfg := &config.Config{
-				SecurityDevMode: tt.configDev,
-				ProxyPort:       testPort,
-			}
-			logger := logrus.New()
-
-			middleware := NewSecurityHeaders(cfg, logger)
-
 			req := httptest.NewRequest("GET", "/test", nil)
-			req.Host = tt.host
-			req.RemoteAddr = tt.remoteAddr
+			if tt.forwardedProto != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwardedProto)
+			}
+			if tt.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
 
-			result := middleware.isDevModeRequest(req)
-			if result != tt.expected {
-				t.Errorf("Expected isDevModeRequest to return %v, got %v", tt.expected, result)
+			if result := isHTTPS(req); result != tt.expected {
+				t.Errorf("Expected isHTTPS to return %v, got %v", tt.expected, result)
 			}
 		})
 	}
