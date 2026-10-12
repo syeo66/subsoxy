@@ -13,6 +13,7 @@ Start with `-log-level debug`. Errors look like `[category:CODE] message`, and t
 | `[config:INVALID_RATE_LIMIT_RPS]` / burst | RPS ≥ 1 and burst ≥ RPS |
 | `[config:INVALID_DB_MAX_IDLE_CONNS]` | Idle connections must be ≤ max open connections |
 | `[config:INVALID_CREDENTIAL_WORKERS]` | Must be ≥ 1 |
+| `[config:INVALID_TRUSTED_PROXY]` | Each `TRUSTED_PROXIES` entry must be an IP address or CIDR range, such as `10.0.0.2` or `172.16.0.0/12`. Hostnames aren't accepted |
 
 ## No songs / shuffle returns nothing
 

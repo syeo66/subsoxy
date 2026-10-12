@@ -12,7 +12,7 @@ Every option can be set with a command-line flag or an environment variable. Fla
 | `-upstream` | `UPSTREAM_URL` | `http://localhost:4533` | Must be an `http`/`https` URL with a host |
 | `-log-level` | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` (case-insensitive) |
 | `-debug-mode` | `DEBUG` | `false` | Enables the `/debug` weight inspector (see [Development](development.md#debug-ui)) |
-| `-credential-workers` | `CREDENTIAL_WORKERS` | `100` | ≥1. Max concurrent upstream credential validations |
+| `-credential-workers` | `CREDENTIAL_WORKERS` | `10` | ≥1. Max concurrent background credential validations |
 
 ### Database
 
@@ -30,8 +30,11 @@ Every option can be set with a command-line flag or an environment variable. Fla
 | Flag | Env | Default | Notes |
 |------|-----|---------|-------|
 | `-rate-limit-enabled` | `RATE_LIMIT_ENABLED` | `true` | |
-| `-rate-limit-rps` | `RATE_LIMIT_RPS` | `100` | ≥1 |
-| `-rate-limit-burst` | `RATE_LIMIT_BURST` | `200` | ≥ RPS |
+| `-rate-limit-rps` | `RATE_LIMIT_RPS` | `100` | ≥1. Per client |
+| `-rate-limit-burst` | `RATE_LIMIT_BURST` | `200` | ≥ RPS. Per client |
+| `-trusted-proxies` | `TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDR ranges of your reverse proxies. `X-Forwarded-For` is only used to identify the client on connections from these |
+
+Each client gets its own limit, identified by IP address (IPv6 clients by their /64). Behind a reverse proxy every connection comes from the proxy, so set `-trusted-proxies` to its address. Otherwise all clients share one limit.
 
 ### CORS
 
@@ -76,13 +79,16 @@ PORT=8080 ./subsoxy -port 9090
 
 # Tighter rate limit for a public instance
 ./subsoxy -rate-limit-rps 10 -rate-limit-burst 20
+
+# Behind a reverse proxy on a Docker network
+./subsoxy -trusted-proxies 172.16.0.0/12
 ```
 
 ## Tuning guidance
 
 | Setting | Low-resource | Default | High-traffic |
 |---------|--------------|---------|--------------|
-| `-credential-workers` | 25–50 | 100 | 200–500 |
+| `-credential-workers` | 5 | 10 | 25–50 |
 | `-db-max-open-conns` / `-db-max-idle-conns` | 10 / 2 | 25 / 5 | 50–100 / 10–20 |
 | `-rate-limit-rps` / `-rate-limit-burst` | 5–20 / 10–40 (public) | 100 / 200 | 200 / 400 |
 

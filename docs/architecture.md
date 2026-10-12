@@ -22,7 +22,7 @@ External dependencies: `gorilla/mux` (routing), `sirupsen/logrus` (logging), `ma
 ```
 client ─▶ security headers middleware ─▶ proxyHandler
                                            1. CORS headers (OPTIONS preflight answered here)
-                                           2. rate limiter (HTTP 429 when exceeded)
+                                           2. per-client rate limiter (HTTP 429 when exceeded)
                                            3. read parameters from the query and a form-encoded POST body (body left intact for forwarding)
                                            4. /rest/*: capture u+p or u+t+s, validate async in bounded worker pool (skipped if recently validated or pool full)
                                            5. run hooks for the path; a hook returning true has sent the response

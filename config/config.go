@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -41,7 +42,9 @@ const (
 	DefaultContentSecurityPolicy   = "default-src 'self'; script-src 'self'; object-src 'none';"
 	DefaultReferrerPolicy          = "strict-origin-when-cross-origin"
 	DefaultDebugMode               = false
-	DefaultCredentialWorkers       = 100 // Maximum concurrent credential validation workers
+	// Maximum concurrent background credential validations. Validation is best effort and
+	// skipped when every worker is busy, so a few are enough for normal use.
+	DefaultCredentialWorkers = 10
 )
 
 // Validation limits
@@ -65,6 +68,8 @@ type Config struct {
 	RateLimitRPS     int
 	RateLimitBurst   int
 	RateLimitEnabled bool
+	// Reverse proxies whose X-Forwarded-For header is believed when identifying the client
+	TrustedProxies []netip.Prefix
 	// Database connection pool settings
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
@@ -101,6 +106,7 @@ func New() (*Config, error) {
 		rateLimitRPS     = flag.Int("rate-limit-rps", getEnvIntOrDefault("RATE_LIMIT_RPS", DefaultRateLimitRPS), "Rate limit requests per second")
 		rateLimitBurst   = flag.Int("rate-limit-burst", getEnvIntOrDefault("RATE_LIMIT_BURST", DefaultRateLimitBurst), "Rate limit burst size")
 		rateLimitEnabled = flag.Bool("rate-limit-enabled", getEnvBoolOrDefault("RATE_LIMIT_ENABLED", DefaultRateLimitEnabled), "Enable rate limiting")
+		trustedProxies   = flag.String("trusted-proxies", getEnvOrDefault("TRUSTED_PROXIES", ""), "Reverse proxy IPs or CIDR ranges whose X-Forwarded-For is trusted (comma-separated)")
 		// Database connection pool flags
 		dbMaxOpenConns    = flag.Int("db-max-open-conns", getEnvIntOrDefault("DB_MAX_OPEN_CONNS", DefaultDBMaxOpenConns), "Maximum number of open database connections")
 		dbMaxIdleConns    = flag.Int("db-max-idle-conns", getEnvIntOrDefault("DB_MAX_IDLE_CONNS", DefaultDBMaxIdleConns), "Maximum number of idle database connections")
@@ -127,6 +133,11 @@ func New() (*Config, error) {
 	)
 	flag.Parse()
 
+	trustedProxyPrefixes, err := ParseTrustedProxies(*trustedProxies)
+	if err != nil {
+		return nil, err
+	}
+
 	config := &Config{
 		ProxyPort:               *port,
 		UpstreamURL:             *upstream,
@@ -135,6 +146,7 @@ func New() (*Config, error) {
 		RateLimitRPS:            *rateLimitRPS,
 		RateLimitBurst:          *rateLimitBurst,
 		RateLimitEnabled:        *rateLimitEnabled,
+		TrustedProxies:          trustedProxyPrefixes,
 		DBMaxOpenConns:          *dbMaxOpenConns,
 		DBMaxIdleConns:          *dbMaxIdleConns,
 		DBConnMaxLifetime:       *dbConnMaxLifetime,
@@ -361,6 +373,34 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 		}
 	}
 	return defaultValue
+}
+
+// ParseTrustedProxies parses a comma-separated list of IP addresses and CIDR ranges. A
+// single address is treated as a range holding only that address.
+func ParseTrustedProxies(input string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, entry := range parseCommaSeparatedString(input) {
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			prefix, err := netip.ParsePrefix(entry)
+			if err != nil {
+				return nil, errors.Wrap(err, errors.CategoryConfig, "INVALID_TRUSTED_PROXY", "trusted proxy must be an IP address or CIDR range").
+					WithContext("value", entry)
+			}
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, errors.Wrap(err, errors.CategoryConfig, "INVALID_TRUSTED_PROXY", "trusted proxy must be an IP address or CIDR range").
+				WithContext("value", entry)
+		}
+		addr = addr.Unmap()
+		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return prefixes, nil
 }
 
 func parseCommaSeparatedString(input string) []string {

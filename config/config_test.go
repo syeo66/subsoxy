@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/syeo66/subsoxy/errors"
 )
 
 func TestGetEnvOrDefault(t *testing.T) {
@@ -851,5 +853,31 @@ func TestParseCommaSeparatedString(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseTrustedProxies(t *testing.T) {
+	prefixes, err := ParseTrustedProxies("10.0.0.0/8, 172.18.0.5,::ffff:192.168.1.1, fd00::/8,")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	want := []string{"10.0.0.0/8", "172.18.0.5/32", "192.168.1.1/32", "fd00::/8"}
+	if len(prefixes) != len(want) {
+		t.Fatalf("Expected %d prefixes, got %v", len(want), prefixes)
+	}
+	for i, prefix := range prefixes {
+		if prefix.String() != want[i] {
+			t.Errorf("Prefix %d = %s, want %s", i, prefix, want[i])
+		}
+	}
+
+	if prefixes, err := ParseTrustedProxies(""); err != nil || len(prefixes) != 0 {
+		t.Errorf("Expected no prefixes for empty input, got %v (err %v)", prefixes, err)
+	}
+
+	for _, input := range []string{"proxy.local", "10.0.0.0/33", "10.0.0.1/8x"} {
+		if _, err := ParseTrustedProxies(input); !errors.IsCode(err, "INVALID_TRUSTED_PROXY") {
+			t.Errorf("Expected INVALID_TRUSTED_PROXY for %q, got %v", input, err)
+		}
 	}
 }

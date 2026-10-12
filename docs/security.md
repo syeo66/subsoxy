@@ -5,7 +5,7 @@
 Subsoxy has no credentials of its own. It picks them up from client requests and uses them for background sync and similarity lookups.
 
 - **Supported auth modes**: password (`u` + `p`) and token (`u` + `t` + `s`). Credentials are read from the query string, POST form data, or an Authorization header. Internally a token is stored as `TOKEN:<token>:<salt>` and sent upstream as `t`/`s` again.
-- **Validation**: before storing anything, Subsoxy calls upstream `/rest/ping` with the same auth mode (10s timeout). Invalid credentials are never stored. A confirmed secret (password, or token and salt) is trusted for 15 minutes without asking upstream again. Up to 16 recent secrets are remembered per user, identified by an HMAC with the per-process key.
+- **Validation**: before storing anything, Subsoxy calls upstream `/rest/ping` with the same auth mode (10s timeout). Invalid credentials are never stored. A confirmed secret (password, or token and salt) is trusted for 15 minutes without asking upstream again. Up to 16 recent secrets are remembered per user, identified by an HMAC with the per-process key. A secret upstream rejects is refused for 5 minutes without asking upstream again, so a client retrying with a wrong password doesn't cost an upstream ping per request. Up to 1,024 rejections are remembered in total. Network errors and unexpected responses aren't remembered, since they say nothing about the credentials.
 - **Locally handled endpoints**: `getRandomSongs` and `scrobble` act on a user's data before upstream sees the request, so Subsoxy first validates the request's credentials against upstream `/rest/ping` and checks that they belong to the user in `u`. If that fails, Subsoxy does nothing locally and forwards the request unchanged, so the client gets upstream's own authentication response.
 - **Encryption in memory**: stored credentials are sealed with AES-256-GCM, using a random 32-byte key per process and a fresh nonce for every value. Nothing is written to disk, and a restart throws away both the credentials and the key.
 - **Concurrency**: the store is protected by an `RWMutex`. Validation for forwarded requests runs in a bounded worker pool (`-credential-workers`) so a flood of requests can't create unlimited goroutines. When the pool is full, validation is skipped rather than holding up the request.
@@ -24,7 +24,11 @@ All SQL uses prepared statements.
 
 ## Rate limiting
 
-A global token bucket (`-rate-limit-rps`, `-rate-limit-burst`) runs before hooks and proxying. Requests over the limit get HTTP 429, and the client address and endpoint are logged.
+Each client has its own token bucket (`-rate-limit-rps`, `-rate-limit-burst`), checked before hooks and proxying, so one busy client can't use up the limit for everyone. Requests over the limit get HTTP 429, and the client, connection address and endpoint are logged.
+
+- **Client identity**: the connection's IP address, with IPv6 addresses grouped by /64.
+- **Behind a reverse proxy**: list the proxy in `-trusted-proxies`. On connections from a trusted proxy, `X-Forwarded-For` is read from the right and the first address that isn't a trusted proxy is the client. Entries further left come from the client and are ignored, so they can't be used to dodge the limit. Without `-trusted-proxies` the header is never used.
+- **Memory**: buckets idle for 10 minutes are dropped. At most 10,000 clients get their own bucket; beyond that, new clients share one bucket until idle ones are dropped.
 
 ## Security headers
 

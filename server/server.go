@@ -17,7 +17,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 
 	"github.com/syeo66/subsoxy/config"
 	"github.com/syeo66/subsoxy/credentials"
@@ -77,7 +76,7 @@ type ProxyServer struct {
 	// Cancelled on shutdown, which stops the sync loop and aborts its upstream requests
 	ctx               context.Context
 	cancel            context.CancelFunc
-	rateLimiter       *rate.Limiter
+	rateLimiter       *middleware.ClientRateLimiter
 	credentialWorkers chan struct{}  // Semaphore for limiting concurrent credential validations
 	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations and the syncs they start
 	syncWg            sync.WaitGroup // Tracks the periodic sync loop
@@ -136,13 +135,14 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	shuffleService := shuffle.New(db, logger)
 	handlersService := handlers.New(logger, shuffleService)
 
-	var rateLimiter *rate.Limiter
+	var rateLimiter *middleware.ClientRateLimiter
 	if cfg.RateLimitEnabled {
-		rateLimiter = rate.NewLimiter(rate.Limit(cfg.RateLimitRPS), cfg.RateLimitBurst)
+		rateLimiter = middleware.NewClientRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst, cfg.TrustedProxies)
 		logger.WithFields(logrus.Fields{
-			"rps":   cfg.RateLimitRPS,
-			"burst": cfg.RateLimitBurst,
-		}).Info("Rate limiting enabled")
+			"rps":             cfg.RateLimitRPS,
+			"burst":           cfg.RateLimitBurst,
+			"trusted_proxies": len(cfg.TrustedProxies),
+		}).Info("Per-client rate limiting enabled")
 	} else {
 		logger.Info("Rate limiting disabled")
 	}
@@ -331,10 +331,11 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}).Info("Incoming request")
 
 	if ps.rateLimiter != nil {
-		if !ps.rateLimiter.Allow() {
+		if client, allowed := ps.rateLimiter.Allow(r); !allowed {
 			ps.logger.WithFields(logrus.Fields{
 				"endpoint": sanitizedEndpoint,
 				"remote":   sanitizedRemoteAddr,
+				"client":   client,
 			}).Warn("Rate limit exceeded")
 
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)

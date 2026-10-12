@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -1039,6 +1040,51 @@ func TestRateLimitingWithHooks(t *testing.T) {
 	}
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("Expected status 429, got %d", w.Code)
+	}
+}
+
+func TestRateLimitingIsPerClient(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test.db",
+		RateLimitRPS:      1,
+		RateLimitBurst:    1,
+		RateLimitEnabled:  true,
+		TrustedProxies:    []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	server.AddHook("/test/hook", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
+		w.WriteHeader(http.StatusOK)
+		return true
+	})
+
+	send := func(client string) int {
+		req := httptest.NewRequest("GET", "/test/hook", nil)
+		req.RemoteAddr = "10.0.0.2:40000" // The reverse proxy
+		req.Header.Set("X-Forwarded-For", client)
+		w := httptest.NewRecorder()
+		server.proxyHandler(w, req)
+		return w.Code
+	}
+
+	if code := send("198.51.100.1"); code != http.StatusOK {
+		t.Fatalf("First client's request: expected 200, got %d", code)
+	}
+	if code := send("198.51.100.1"); code != http.StatusTooManyRequests {
+		t.Errorf("First client's second request: expected 429, got %d", code)
+	}
+	if code := send("198.51.100.2"); code != http.StatusOK {
+		t.Errorf("Second client behind the same proxy: expected 200, got %d", code)
 	}
 }
 

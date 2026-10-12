@@ -33,7 +33,7 @@ Voidweaver ──HTTPS──▶ reverse proxy ──▶ subsoxy (:8080) ──�
 
 1. **Navidrome**: run it as usual.
 2. **Subsoxy**: run it as a Docker container next to Navidrome, built from the included `Dockerfile` (a `captain-definition` for CapRover is included too). Set `UPSTREAM_URL` to Navidrome's address (e.g. `http://navidrome:4533`). Set `DB_PATH` to a file on a mounted volume so listening history survives restarts.
-3. **Reverse proxy**: Subsoxy only speaks plain HTTP and Voidweaver only connects over HTTPS, so put Caddy, nginx, Traefik or similar with a valid certificate in front of Subsoxy.
+3. **Reverse proxy**: Subsoxy only speaks plain HTTP and Voidweaver only connects over HTTPS, so put Caddy, nginx, Traefik or similar with a valid certificate in front of Subsoxy. Set `TRUSTED_PROXIES` to the proxy's address (or its Docker network range), so rate limiting can tell clients apart.
 4. **Voidweaver**: log in with the reverse proxy's HTTPS URL and your Navidrome username and password.
 
 To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin in Navidrome.

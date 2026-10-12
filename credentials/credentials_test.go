@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/syeo66/subsoxy/errors"
 )
 
 func TestNew(t *testing.T) {
@@ -813,5 +815,107 @@ func TestGetAllValidMultipleUsers(t *testing.T) {
 	all := manager.GetAllValid()
 	if len(all) != 2 || all["user1"] != "pass1" || all["user2"] != "pass2" {
 		t.Errorf("Expected user1/pass1 and user2/pass2, got %v", all)
+	}
+}
+
+// newAuthUpstream counts pings and accepts only the password "right". With serverError set,
+// it answers HTTP 500 instead.
+func newAuthUpstream(t *testing.T, serverError bool) (*httptest.Server, func() int) {
+	var mu sync.Mutex
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		if serverError {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		status := "failed"
+		if r.URL.Query().Get("p") == "right" {
+			status = "ok"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{"status": status, "version": "1.15.0"},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+}
+
+func TestValidateAndStoreRemembersRejectedSecret(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	upstream, calls := newAuthUpstream(t, false)
+	manager := New(logger, upstream.URL)
+
+	for i := 0; i < 3; i++ {
+		_, err := manager.ValidateAndStore("alice", "wrong")
+		if !errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
+			t.Fatalf("Attempt %d: expected invalid credentials error, got %v", i+1, err)
+		}
+	}
+	if got := calls(); got != 1 {
+		t.Errorf("Expected a rejected secret to be checked upstream once, got %d calls", got)
+	}
+
+	// The rejection is tied to that secret, so the right password still gets through
+	if isNew, err := manager.ValidateAndStore("alice", "right"); err != nil || !isNew {
+		t.Errorf("Expected the correct password to be accepted as new, got isNew=%v err=%v", isNew, err)
+	}
+}
+
+func TestValidateAndStoreRevalidatesExpiredRejection(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	upstream, calls := newAuthUpstream(t, false)
+	manager := New(logger, upstream.URL)
+
+	manager.ValidateAndStore("alice", "wrong")
+	manager.rejectedSecrets[manager.secretKey("alice", "wrong")] = time.Now().Add(-time.Second)
+	manager.ValidateAndStore("alice", "wrong")
+
+	if got := calls(); got != 2 {
+		t.Errorf("Expected an expired rejection to be checked upstream again, got %d calls", got)
+	}
+}
+
+func TestValidateAndStoreDoesNotRememberUpstreamFailures(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	upstream, calls := newAuthUpstream(t, true)
+	manager := New(logger, upstream.URL)
+
+	manager.ValidateAndStore("alice", "right")
+	manager.ValidateAndStore("alice", "right")
+
+	if got := calls(); got != 2 {
+		t.Errorf("Expected upstream errors not to be cached as rejections, got %d calls", got)
+	}
+	if len(manager.rejectedSecrets) != 0 {
+		t.Errorf("Expected no remembered rejections, got %d", len(manager.rejectedSecrets))
+	}
+}
+
+func TestRejectedSecretsAreBounded(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	manager := New(logger, "http://localhost:4533")
+
+	now := time.Now()
+	for i := 0; i < MaxRejectedSecrets*2; i++ {
+		manager.rememberRejected(manager.secretKey("user"+strconv.Itoa(i), "wrong"), now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	if got := len(manager.rejectedSecrets); got != MaxRejectedSecrets {
+		t.Errorf("Expected %d remembered rejections, got %d", MaxRejectedSecrets, got)
+	}
+	last := manager.secretKey("user"+strconv.Itoa(MaxRejectedSecrets*2-1), "wrong")
+	if !manager.isRejected(last) {
+		t.Error("The most recent rejection should still be remembered")
 	}
 }

@@ -31,6 +31,12 @@ const (
 	// Upper bound on remembered secrets per user. Token clients may use a new salt for
 	// every request, so this keeps the cache small no matter how many they send.
 	MaxVerifiedSecretsPerUser = 16
+	// How long a secret upstream rejected is refused without asking upstream again, so a
+	// client retrying with a wrong password doesn't cost an upstream ping per request
+	RejectedSecretTTL = 5 * time.Minute
+	// Upper bound on remembered rejections across all users. Usernames come from requests,
+	// so this keeps the cache small however many different ones are sent.
+	MaxRejectedSecrets = 1024
 )
 
 // encryptedCredential holds encrypted password data
@@ -44,6 +50,8 @@ type Manager struct {
 	validCredentials map[string]encryptedCredential
 	// Recently verified secrets per user, keyed by an HMAC of the secret, with their expiry
 	verifiedSecrets map[string]map[string]time.Time
+	// Secrets upstream recently rejected, keyed like verifiedSecrets, with their expiry
+	rejectedSecrets map[string]time.Time
 	mutex           sync.RWMutex
 	logger          *logrus.Logger
 	upstreamURL     string
@@ -57,6 +65,7 @@ func New(logger *logrus.Logger, upstreamURL string) *Manager {
 	return &Manager{
 		validCredentials: make(map[string]encryptedCredential),
 		verifiedSecrets:  make(map[string]map[string]time.Time),
+		rejectedSecrets:  make(map[string]time.Time),
 		logger:           logger,
 		upstreamURL:      upstreamURL,
 		encryptionKey:    encryptionKey,
@@ -75,7 +84,18 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 		return false, nil // Recently verified, not new
 	}
 
+	if cm.isRejected(secretKey) {
+		cm.logger.WithField("username", username).Debug("Credentials recently rejected by upstream, not validating again")
+		return false, errors.ErrInvalidCredentials.WithContext("username", username).
+			WithContext("reason", "recently rejected by upstream")
+	}
+
 	if err := cm.validate(username, password); err != nil {
+		// Only upstream's own rejection is remembered. A network failure or unexpected
+		// response says nothing about the credentials, so those are tried again next time.
+		if errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
+			cm.rememberRejected(secretKey, time.Now())
+		}
 		cm.logger.WithError(err).WithField("username", username).Warn("Invalid credentials provided")
 		return false, err
 	}
@@ -147,6 +167,38 @@ func (cm *Manager) rememberVerified(username, secretKey string, now time.Time) {
 	}
 
 	secrets[secretKey] = now.Add(VerifiedSecretTTL)
+}
+
+// isRejected reports whether upstream rejected this secret within RejectedSecretTTL
+func (cm *Manager) isRejected(secretKey string) bool {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	expiry, ok := cm.rejectedSecrets[secretKey]
+	return ok && time.Now().Before(expiry)
+}
+
+// rememberRejected records a secret upstream just rejected. When the cache is full, expired
+// entries are dropped first and then the one closest to expiring.
+func (cm *Manager) rememberRejected(secretKey string, now time.Time) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	if _, exists := cm.rejectedSecrets[secretKey]; !exists && len(cm.rejectedSecrets) >= MaxRejectedSecrets {
+		var oldestKey string
+		var oldestExpiry time.Time
+		for key, expiry := range cm.rejectedSecrets {
+			if !now.Before(expiry) {
+				delete(cm.rejectedSecrets, key)
+			} else if oldestKey == "" || expiry.Before(oldestExpiry) {
+				oldestKey, oldestExpiry = key, expiry
+			}
+		}
+		if len(cm.rejectedSecrets) >= MaxRejectedSecrets {
+			delete(cm.rejectedSecrets, oldestKey)
+		}
+	}
+
+	cm.rejectedSecrets[secretKey] = now.Add(RejectedSecretTTL)
 }
 
 // HasRecent reports whether the user's stored credential was confirmed by upstream within maxAge

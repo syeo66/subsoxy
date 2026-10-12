@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -35,8 +36,7 @@ func TestSubsoxyError(t *testing.T) {
 
 func TestSubsoxyErrorWithContext(t *testing.T) {
 	err := New(CategoryConfig, "TEST_CODE", "test message")
-	err.WithContext("key1", "value1")
-	err.WithContext("key2", 42)
+	err = err.WithContext("key1", "value1").WithContext("key2", 42)
 
 	if len(err.Context) != 2 {
 		t.Errorf("Expected 2 context items, got %d", len(err.Context))
@@ -158,7 +158,7 @@ func TestErrorIs(t *testing.T) {
 
 func TestErrorAs(t *testing.T) {
 	baseErr := New(CategoryConfig, "TEST_CODE", "test message")
-	baseErr.WithContext("key", "value")
+	baseErr = baseErr.WithContext("key", "value")
 
 	// Test As() method
 	var subsoxyErr *SubsoxyError
@@ -189,7 +189,7 @@ func TestErrorAs(t *testing.T) {
 
 func TestHelperFunctions(t *testing.T) {
 	baseErr := New(CategoryConfig, "TEST_CODE", "test message")
-	baseErr.WithContext("key", "value")
+	baseErr = baseErr.WithContext("key", "value")
 
 	// Test IsCategory
 	if !IsCategory(baseErr, CategoryConfig) {
@@ -275,5 +275,34 @@ func TestErrorChainsWithStandardErrors(t *testing.T) {
 
 	if targetErr.Code != "NETWORK_CODE" {
 		t.Errorf("Expected code NETWORK_CODE, got %s", targetErr.Code)
+	}
+}
+
+func TestWithContextLeavesReceiverUnchanged(t *testing.T) {
+	base := New(CategoryCredentials, "TEST_CODE", "test message")
+	derived := base.WithContext("key", "value")
+
+	if len(base.Context) != 0 {
+		t.Errorf("Expected receiver context to stay empty, got %v", base.Context)
+	}
+	if derived.Context["key"] != "value" {
+		t.Errorf("Expected derived context to hold key, got %v", derived.Context)
+	}
+	if !Is(derived, base) {
+		t.Error("Expected derived error to still match its base")
+	}
+}
+
+func TestWithContextOnSentinelIsConcurrencySafe(t *testing.T) {
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Go(func() {
+			_ = ErrInvalidCredentials.WithContext("username", i).WithContext("reason", "concurrent")
+		})
+	}
+	wg.Wait()
+
+	if len(ErrInvalidCredentials.Context) != 0 {
+		t.Errorf("Expected sentinel context to stay empty, got %v", ErrInvalidCredentials.Context)
 	}
 }

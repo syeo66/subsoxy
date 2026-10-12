@@ -75,12 +75,16 @@ func (e *SubsoxyError) As(target interface{}) bool {
 	return false
 }
 
+// WithContext returns a copy of the error with key set in its context. The receiver is left
+// unchanged, so the shared sentinel errors below are safe to use from concurrent requests.
 func (e *SubsoxyError) WithContext(key string, value interface{}) *SubsoxyError {
-	if e.Context == nil {
-		e.Context = make(map[string]interface{})
+	copied := *e
+	copied.Context = make(map[string]interface{}, len(e.Context)+1)
+	for k, v := range e.Context {
+		copied.Context[k] = v
 	}
-	e.Context[key] = value
-	return e
+	copied.Context[key] = value
+	return &copied
 }
 
 // New creates a new SubsoxyError
