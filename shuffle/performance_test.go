@@ -163,7 +163,7 @@ func BenchmarkDatabaseBatchQueries(b *testing.B) {
 		cutoff := time.Now().AddDate(0, 0, -TwoWeekReplayThreshold)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			songs, err := db.GetSongsBatchFiltered(userID, 1000, 0, cutoff)
+			songs, err := db.GetSongsBatchFiltered(userID, 1000, "", cutoff)
 			if err != nil {
 				b.Fatalf("Failed to get songs batch: %v", err)
 			}

@@ -89,6 +89,7 @@ type Service struct {
 	priors              map[string]*userPriors   // Map userID to calculated priors
 	similarSongsFetcher SimilarSongsFetcher
 	similarSongsCache   map[string]*similarSongsEntry
+	similarSongsSweep   time.Time          // When expired cache entries were last removed
 	inflight            singleflight.Group // Deduplicates concurrent similarity fetches for the same key
 	mu                  sync.RWMutex       // Protects all maps
 }
@@ -141,10 +142,12 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float
 			return nil, nil //nolint:nilerr
 		}
 		if scores != nil {
+			now := time.Now()
 			s.mu.Lock()
+			s.sweepSimilarSongsCache(now)
 			s.similarSongsCache[cacheKey] = &similarSongsEntry{
 				scores:    scores,
-				fetchedAt: time.Now(),
+				fetchedAt: now,
 			}
 			s.mu.Unlock()
 		}
@@ -155,6 +158,21 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float
 		return nil
 	}
 	return v.(map[string]float64)
+}
+
+// sweepSimilarSongsCache removes expired entries, which are never served again, at most once
+// per SimilarSongsCacheTTL. Without it the cache would keep an entry for every reference song
+// ever looked up. The caller holds the write lock.
+func (s *Service) sweepSimilarSongsCache(now time.Time) {
+	if now.Sub(s.similarSongsSweep) < SimilarSongsCacheTTL {
+		return
+	}
+	s.similarSongsSweep = now
+	for key, entry := range s.similarSongsCache {
+		if now.Sub(entry.fetchedAt) >= SimilarSongsCacheTTL {
+			delete(s.similarSongsCache, key)
+		}
+	}
 }
 
 // calculateSimilarityWeight returns a weight multiplier in [1.0, 1+SimilarSongMaxBoost]
@@ -444,14 +462,15 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 	// Keep the count songs whose clocks fire first at base weight
 	pool := &raceQueue{latestFirst: true}
 	eligible := 0
-	for offset := 0; ; offset += BatchSize {
-		batch, err := s.db.GetSongsBatchFiltered(userID, BatchSize, offset, cutoffTime)
+	for afterID := ""; ; {
+		batch, err := s.db.GetSongsBatchFiltered(userID, BatchSize, afterID, cutoffTime)
 		if err != nil {
 			return nil, err
 		}
 		if len(batch) == 0 {
 			break
 		}
+		afterID = batch[len(batch)-1].ID
 
 		for _, song := range batch {
 			weight := s.calculateBaseWeight(userID, song, artistStats)

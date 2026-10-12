@@ -1565,3 +1565,41 @@ func TestPriorsIgnoreUnheardSongs(t *testing.T) {
 		t.Errorf("prior strength = %.4f, want 4 (events per heard song)", strength)
 	}
 }
+
+func TestSimilarSongsCacheEvictsExpiredEntries(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		return map[string]float64{"other": 0.5}, nil
+	})
+
+	service.getSimilarSongsForUser("user", "old")
+	service.getSimilarSongsForUser("user", "recent")
+
+	// Age one entry past the TTL and allow the next insert to sweep
+	service.mu.Lock()
+	service.similarSongsCache["user:old"].fetchedAt = time.Now().Add(-2 * SimilarSongsCacheTTL)
+	service.similarSongsSweep = time.Time{}
+	service.mu.Unlock()
+
+	service.getSimilarSongsForUser("user", "new")
+
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if _, ok := service.similarSongsCache["user:old"]; ok {
+		t.Error("Expected expired entry to be evicted")
+	}
+	for _, key := range []string{"user:recent", "user:new"} {
+		if _, ok := service.similarSongsCache[key]; !ok {
+			t.Errorf("Expected fresh entry %s to be kept", key)
+		}
+	}
+}

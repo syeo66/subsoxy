@@ -238,7 +238,10 @@ func (db *DB) createTables() error {
 			FOREIGN KEY (song_id, user_id) REFERENCES songs(id, user_id),
 			FOREIGN KEY (previous_song, user_id) REFERENCES songs(id, user_id)
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_songs_user_id ON songs(user_id)`,
+		// Serves lookups by user and lets the shuffle page through a user's songs in id order
+		// without sorting them. It covers everything the older user_id-only index did.
+		`CREATE INDEX IF NOT EXISTS idx_songs_user_id_id ON songs(user_id, id)`,
+		`DROP INDEX IF EXISTS idx_songs_user_id`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_user_id ON play_events(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_song_id ON play_events(song_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_play_events_timestamp ON play_events(timestamp)`,
@@ -601,18 +604,17 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	return songs, nil
 }
 
-// GetSongsBatchFiltered returns a batch of songs filtered by last played/skipped dates.
-// Songs played or skipped after cutoffTime are excluded from results for 2-week replay prevention.
-// Uses consistent COALESCE-based filtering with single cutoff time for robust NULL handling.
-func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime time.Time) ([]models.Song, error) {
+// GetSongsBatchFiltered returns up to limit songs with an id greater than afterID, in id
+// order, leaving out songs played or skipped after cutoffTime (2-week replay prevention).
+// Pass "" for the first batch and the last song's id for each following one. Paging by id
+// rather than offset keeps each batch an index range scan, and songs added or removed by a
+// concurrent library sync can't shift the window so that a song is returned twice or missed.
+func (db *DB) GetSongsBatchFiltered(userID string, limit int, afterID string, cutoffTime time.Time) ([]models.Song, error) {
 	if userID == "" {
 		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
 	}
 	if limit <= 0 {
 		return nil, errors.ErrValidationFailed.WithContext("field", "limit")
-	}
-	if offset < 0 {
-		return nil, errors.ErrValidationFailed.WithContext("field", "offset")
 	}
 
 	// Format the cutoff time for database comparison
@@ -620,12 +622,12 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime
 
 	rows, err := db.conn.Query(`SELECT `+songColumns+`
 		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') < ?) AND (COALESCE(last_skipped, '1970-01-01') < ?)
-		ORDER BY id LIMIT ? OFFSET ?`, userID, cutoffStr, cutoffStr, limit, offset)
+		AND id > ? ORDER BY id LIMIT ?`, userID, cutoffStr, cutoffStr, afterID, limit)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query filtered songs batch").
 			WithContext("userID", userID).
 			WithContext("limit", limit).
-			WithContext("offset", offset).
+			WithContext("afterID", afterID).
 			WithContext("cutoffTime", cutoffTime.Format("2006-01-02 15:04:05"))
 	}
 	defer rows.Close()
@@ -638,7 +640,7 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime
 			db.logger.WithError(err).WithFields(logrus.Fields{
 				"userID":     userID,
 				"limit":      limit,
-				"offset":     offset,
+				"afterID":    afterID,
 				"cutoffTime": cutoffTime.Format("2006-01-02 15:04:05"),
 			}).Error("Failed to scan song in filtered batch")
 			continue
@@ -651,7 +653,7 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit, offset int, cutoffTime
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during filtered song batch iteration").
 			WithContext("userID", userID).
 			WithContext("limit", limit).
-			WithContext("offset", offset).
+			WithContext("afterID", afterID).
 			WithContext("cutoffTime", cutoffTime.Format("2006-01-02 15:04:05"))
 	}
 

@@ -759,49 +759,104 @@ func TestGetSongsBatchFiltered(t *testing.T) {
 	// None of the songs has been played, so every song is older than any cutoff
 	cutoff := time.Now()
 
-	// Test getting first batch
-	batch, err := db.GetSongsBatchFiltered(userID, 2, 0, cutoff)
-	if err != nil {
-		t.Fatalf("Failed to get songs batch: %v", err)
+	// Page through by the last id of each batch
+	var got []string
+	afterID := ""
+	for _, want := range []int{2, 2, 1, 0} {
+		batch, err := db.GetSongsBatchFiltered(userID, 2, afterID, cutoff)
+		if err != nil {
+			t.Fatalf("Failed to get songs batch: %v", err)
+		}
+		if len(batch) != want {
+			t.Fatalf("Expected %d songs in batch after %q, got %d", want, afterID, len(batch))
+		}
+		for _, song := range batch {
+			got = append(got, song.ID)
+		}
+		if len(batch) > 0 {
+			afterID = batch[len(batch)-1].ID
+		}
 	}
-	if len(batch) != 2 {
-		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
-	}
-
-	// Test getting second batch
-	batch, err = db.GetSongsBatchFiltered(userID, 2, 2, cutoff)
-	if err != nil {
-		t.Fatalf("Failed to get songs batch: %v", err)
-	}
-	if len(batch) != 2 {
-		t.Errorf("Expected 2 songs in batch, got %d", len(batch))
-	}
-
-	// Test getting last batch (partial)
-	batch, err = db.GetSongsBatchFiltered(userID, 2, 4, cutoff)
-	if err != nil {
-		t.Fatalf("Failed to get songs batch: %v", err)
-	}
-	if len(batch) != 1 {
-		t.Errorf("Expected 1 song in batch, got %d", len(batch))
+	if fmt.Sprint(got) != "[1 2 3 4 5]" {
+		t.Errorf("Expected every song once in id order, got %v", got)
 	}
 
 	// Test with empty user ID
-	_, err = db.GetSongsBatchFiltered("", 2, 0, cutoff)
+	_, err = db.GetSongsBatchFiltered("", 2, "", cutoff)
 	if err == nil {
 		t.Error("Expected error for empty user ID")
 	}
 
 	// Test with invalid limit
-	_, err = db.GetSongsBatchFiltered(userID, 0, 0, cutoff)
+	_, err = db.GetSongsBatchFiltered(userID, 0, "", cutoff)
 	if err == nil {
 		t.Error("Expected error for zero limit")
 	}
+}
 
-	// Test with invalid offset
-	_, err = db.GetSongsBatchFiltered(userID, 2, -1, cutoff)
-	if err == nil {
-		t.Error("Expected error for negative offset")
+// A song added before the current page during a sync must not shift later pages, which
+// paging by offset would do, returning a song twice
+func TestGetSongsBatchFilteredStableUnderInsert(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	songs := []models.Song{
+		{ID: "b", Title: "B", Artist: "A", Album: "A", Duration: 180},
+		{ID: "c", Title: "C", Artist: "A", Album: "A", Duration: 180},
+		{ID: "d", Title: "D", Artist: "A", Album: "A", Duration: 180},
+	}
+	if err := db.StoreSongs(userID, songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	cutoff := time.Now()
+
+	first, err := db.GetSongsBatchFiltered(userID, 2, "", cutoff)
+	if err != nil || len(first) != 2 {
+		t.Fatalf("Expected 2 songs in first batch, got %d (err %v)", len(first), err)
+	}
+
+	if err := db.StoreSongs(userID, []models.Song{{ID: "a", Title: "A", Artist: "A", Album: "A", Duration: 180}}); err != nil {
+		t.Fatalf("Failed to store song: %v", err)
+	}
+
+	second, err := db.GetSongsBatchFiltered(userID, 2, first[len(first)-1].ID, cutoff)
+	if err != nil {
+		t.Fatalf("Failed to get songs batch: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != "d" {
+		t.Errorf("Expected only song d in second batch, got %v", second)
+	}
+}
+
+func TestSongsUserIDIndexAvoidsSort(t *testing.T) {
+	db, err := New(":memory:", logrus.New())
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.conn.Query(`EXPLAIN QUERY PLAN SELECT id FROM songs WHERE user_id = ? AND id > ? ORDER BY id LIMIT 10`, "u", "")
+	if err != nil {
+		t.Fatalf("Failed to explain query: %v", err)
+	}
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("Failed to scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	joined := strings.Join(plan, "; ")
+	if !strings.Contains(joined, "idx_songs_user_id_id") || strings.Contains(joined, "TEMP B-TREE") {
+		t.Errorf("Expected an index range scan without sorting, got plan: %s", joined)
 	}
 }
 
