@@ -67,6 +67,8 @@ CREATE TABLE songs (
     adjusted_skips REAL DEFAULT 0.0,
     adjusted_at    INTEGER,                -- Unix time the adjusted counters were last updated
     cover_art      TEXT,
+    genre          TEXT,
+    year           INTEGER,
     PRIMARY KEY (id, user_id)
 );
 
@@ -90,7 +92,7 @@ There's no separate artist table. The shuffle's artist factor sums `adjusted_pla
 These run automatically at startup and are idempotent:
 
 - Single-tenant to multi-tenant schema upgrade (existing data is backed up first).
-- Add missing columns `cover_art`, `last_skipped`, `adjusted_plays`, `adjusted_skips`. The adjusted values start out equal to the raw counts.
+- Add missing columns `cover_art`, `last_skipped`, `adjusted_plays`, `adjusted_skips`, `adjusted_at`, `genre`, `year`. The adjusted values start out equal to the raw counts. Genre and year are filled in by the next library sync.
 - Drop the old `song_transitions` table (and its indexes and `song_transitions_backup`), then `VACUUM`. That table grew quadratically with library size and rarely affected the shuffle.
 - Drop the old `artist_stats` table (and its indexes). It held raw per-artist counts that the shuffle no longer read.
 

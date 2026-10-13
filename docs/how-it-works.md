@@ -53,7 +53,15 @@ The shuffle uses these adjusted values, not the raw counts.
 
 ### Eligibility
 
-A song can only be picked if it was neither played **nor** skipped in the last 14 days (`TwoWeekReplayThreshold`). There's no fallback: if fewer songs are eligible than requested, the response is shorter.
+A song can only be picked if it was neither played **nor** skipped in the last 14 days (`TwoWeekReplayThreshold`). If fewer songs are eligible than requested, the remaining places are filled with recently heard songs, least recently heard first, after all the weighted picks. The response is only shorter than requested when the library (or the filter below) has fewer songs than that.
+
+### Filters
+
+`genre`, `fromYear` and `toYear` are applied before weighting, to the shuffle and to the fallback alike:
+
+- `genre` matches the song's genre, ignoring case. Songs synced before genres were stored get theirs on the next library sync.
+- `fromYear` and `toYear` are inclusive, and either can be left out. A range given newest first (`fromYear=1989&toYear=1980`) means the same years. Songs without a year are left out whenever a year is given.
+- `musicFolderId` can't be applied locally, since songs aren't stored with their folder. Such requests are forwarded to upstream, which answers with a plain random selection.
 
 ### Weight factors
 

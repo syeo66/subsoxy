@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -538,7 +540,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	service := New(db, logger)
 
 	// Test with empty database
-	songs, err := service.GetWeightedShuffledSongs("testuser", 10)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 10, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -561,7 +563,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	}
 
 	// Test requesting more songs than available
-	songs, err = service.GetWeightedShuffledSongs("testuser", 10)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 10, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -570,7 +572,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	}
 
 	// Test requesting fewer songs than available
-	songs, err = service.GetWeightedShuffledSongs("testuser", 3)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 3, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -615,31 +617,101 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 		t.Errorf("Failed to store songs: %v", err)
 	}
 
-	// Add some play history to make weights different
-	err = db.RecordPlayEvent("testuser", "1", "play", nil)
+	// Song 2 was heard more recently than song 1, both within the 2-week replay window
+	now := time.Now()
+	err = db.RecordPlayEventAt("testuser", "1", "play", nil, now.Add(-3*24*time.Hour))
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
 	}
 
-	err = db.RecordPlayEvent("testuser", "2", "skip", nil)
+	err = db.RecordPlayEventAt("testuser", "2", "skip", nil, now.Add(-1*24*time.Hour))
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
 
-	// Test that songs are returned (we can't easily test randomness, but we can verify functionality)
-	// Note: Only 1 song should be eligible because the other 2 have recent play/skip events
-	// within the 2-week replay prevention window
-	songs, err := service.GetWeightedShuffledSongs("testuser", 2)
+	// Only song 3 is eligible, so it comes first and the least recently heard song fills the rest
+	songs, err := service.GetWeightedShuffledSongs("testuser", 2, Filter{})
 	if err != nil {
-		t.Errorf("Failed to get shuffled songs: %v", err)
+		t.Fatalf("Failed to get shuffled songs: %v", err)
 	}
-	// Should return only 1 song (song "3") because songs "1" and "2" were recently played/skipped
-	if len(songs) != 1 {
-		t.Errorf("Expected 1 song (due to 2-week replay prevention), got %d", len(songs))
+	if got := songIDs(songs); !reflect.DeepEqual(got, []string{"3", "1"}) {
+		t.Errorf("Expected songs [3 1], got %v", got)
 	}
-	// Verify it's song "3" (the only eligible one)
-	if len(songs) == 1 && songs[0].ID != "3" {
-		t.Errorf("Expected song '3', got '%s'", songs[0].ID)
+
+	// With room for every song, recently heard songs follow in the order they were heard
+	songs, err = service.GetWeightedShuffledSongs("testuser", 10, Filter{})
+	if err != nil {
+		t.Fatalf("Failed to get shuffled songs: %v", err)
+	}
+	if got := songIDs(songs); !reflect.DeepEqual(got, []string{"3", "1", "2"}) {
+		t.Errorf("Expected songs [3 1 2], got %v", got)
+	}
+}
+
+func songIDs(songs []models.Song) []string {
+	ids := make([]string, len(songs))
+	for i, song := range songs {
+		ids[i] = song.ID
+	}
+	return ids
+}
+
+func TestGetWeightedShuffledSongsFilter(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+	userID := "testuser"
+
+	err = db.StoreSongs(userID, []models.Song{
+		{ID: "rock80", Title: "a", Artist: "x", Album: "y", Genre: "Rock", Year: 1985},
+		{ID: "rock90", Title: "b", Artist: "x", Album: "y", Genre: "Rock", Year: 1995},
+		{ID: "jazz80", Title: "c", Artist: "x", Album: "y", Genre: "Jazz", Year: 1982},
+		{ID: "rockNoYear", Title: "d", Artist: "x", Album: "y", Genre: "rock"},
+		{ID: "recentRock80", Title: "e", Artist: "x", Album: "y", Genre: "Rock", Year: 1989},
+	})
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	if err := db.RecordPlayEvent(userID, "recentRock80", "play", nil); err != nil {
+		t.Fatalf("Failed to record play event: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		filter Filter
+		want   []string
+	}{
+		{"no filter", Filter{}, []string{"jazz80", "recentRock80", "rock80", "rock90", "rockNoYear"}},
+		{"genre ignores case", Filter{Genre: "ROCK"}, []string{"recentRock80", "rock80", "rock90", "rockNoYear"}},
+		{"year range", Filter{FromYear: 1980, ToYear: 1989}, []string{"jazz80", "recentRock80", "rock80"}},
+		{"from year only", Filter{FromYear: 1990}, []string{"rock90"}},
+		{"to year only", Filter{ToYear: 1984}, []string{"jazz80"}},
+		{"genre and years", Filter{Genre: "Rock", FromYear: 1980, ToYear: 1989}, []string{"recentRock80", "rock80"}},
+		{"no match", Filter{Genre: "Polka"}, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			songs, err := service.GetWeightedShuffledSongs(userID, 10, tt.filter)
+			if err != nil {
+				t.Fatalf("Failed to shuffle: %v", err)
+			}
+			// The recently played song may only come last, as the fallback
+			if len(songs) > 1 && songs[len(songs)-1].ID != "recentRock80" && slices.Contains(tt.want, "recentRock80") {
+				t.Errorf("Expected recently played song last, got %v", songIDs(songs))
+			}
+			got := songIDs(songs)
+			slices.Sort(got)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("Expected %v, got %v", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -672,7 +744,7 @@ func TestGetWeightedShuffledSongsConsistency(t *testing.T) {
 
 	// Test multiple calls return valid results
 	for i := 0; i < 10; i++ {
-		songs, err := service.GetWeightedShuffledSongs("testuser", 2)
+		songs, err := service.GetWeightedShuffledSongs("testuser", 2, Filter{})
 		if err != nil {
 			t.Errorf("Failed to get shuffled songs on iteration %d: %v", i, err)
 		}
@@ -707,7 +779,7 @@ func TestEdgeCases(t *testing.T) {
 	service := New(db, logger)
 
 	// Test requesting 0 songs
-	songs, err := service.GetWeightedShuffledSongs("testuser", 0)
+	songs, err := service.GetWeightedShuffledSongs("testuser", 0, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get 0 shuffled songs: %v", err)
 	}
@@ -716,7 +788,7 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	// Test requesting large number of songs (should not panic)
-	songs, err = service.GetWeightedShuffledSongs("testuser", 1000000)
+	songs, err = service.GetWeightedShuffledSongs("testuser", 1000000, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get large number of shuffled songs: %v", err)
 	}
@@ -785,7 +857,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	// Verify that the service is still functional after concurrent access
-	shuffledSongs, err := service.GetWeightedShuffledSongs("testuser", 3)
+	shuffledSongs, err := service.GetWeightedShuffledSongs("testuser", 3, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs after concurrent access: %v", err)
 	}
@@ -1427,7 +1499,7 @@ func TestGetWeightedShuffledSongsBoostsSimilarSongsAcrossLibrary(t *testing.T) {
 	const trials = 2000
 	similarPicks, totalPicks := 0, 0
 	for range trials {
-		result, err := service.GetWeightedShuffledSongs(userID, 5)
+		result, err := service.GetWeightedShuffledSongs(userID, 5, Filter{})
 		if err != nil {
 			t.Fatalf("Failed to shuffle: %v", err)
 		}
@@ -1473,7 +1545,7 @@ func TestGetWeightedShuffledSongsReturnsEveryEligibleSong(t *testing.T) {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
 
-	result, err := service.GetWeightedShuffledSongs(userID, len(songs)+50)
+	result, err := service.GetWeightedShuffledSongs(userID, len(songs)+50, Filter{})
 	if err != nil {
 		t.Fatalf("Failed to shuffle: %v", err)
 	}

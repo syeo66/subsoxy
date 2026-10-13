@@ -65,7 +65,9 @@ const songColumns = `id, title, artist, album, duration,
 		COALESCE(adjusted_plays, 0.0) as adjusted_plays,
 		COALESCE(adjusted_skips, 0.0) as adjusted_skips,
 		COALESCE(adjusted_at, 0) as adjusted_at,
-		COALESCE(cover_art, '') as cover_art`
+		COALESCE(cover_art, '') as cover_art,
+		COALESCE(genre, '') as genre,
+		COALESCE(year, 0) as year`
 
 // scanSong reads a row selected with songColumns, with the decayed counters as of now
 func scanSong(rows *sql.Rows, now time.Time) (models.Song, error) {
@@ -74,7 +76,7 @@ func scanSong(rows *sql.Rows, now time.Time) (models.Song, error) {
 	var adjustedAt int64
 	err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, &song.Duration,
 		&lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount,
-		&song.AdjustedPlays, &song.AdjustedSkips, &adjustedAt, &song.CoverArt)
+		&song.AdjustedPlays, &song.AdjustedSkips, &adjustedAt, &song.CoverArt, &song.Genre, &song.Year)
 	if err != nil {
 		return song, err
 	}
@@ -279,6 +281,11 @@ func (db *DB) createTables() error {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add adjusted_at column")
 	}
 
+	// Add genre and year columns if they don't exist
+	if err := db.addGenreYearColumns(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add genre and year columns")
+	}
+
 	// Drop the obsolete song_transitions table if it still exists
 	if err := db.dropSongTransitionsTable(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop song_transitions table")
@@ -469,6 +476,29 @@ func (db *DB) addAdjustedAtColumn() error {
 	return nil
 }
 
+// addGenreYearColumns adds the genre and year columns, which getRandomSongs filters on.
+// Existing songs get them on the next library sync, which sees their metadata as changed.
+func (db *DB) addGenreYearColumns() error {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='genre'`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for genre column")
+	}
+	if count > 0 {
+		return nil
+	}
+
+	if _, err := db.conn.Exec(`ALTER TABLE songs ADD COLUMN genre TEXT`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add genre column")
+	}
+	if _, err := db.conn.Exec(`ALTER TABLE songs ADD COLUMN year INTEGER`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add year column")
+	}
+
+	db.logger.Info("Added genre and year columns to songs table")
+	return nil
+}
+
 // dropSongTransitionsTable removes the song_transitions table (and its indexes), plus any backup
 // copy made by migrateExistingData, left over from databases created before transition tracking
 // was removed, then reclaims the freed disk space.
@@ -536,14 +566,16 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	defer tx.Rollback()
 
 	// Only the metadata is updated for existing songs, so play history is kept
-	stmt, err := tx.Prepare(`INSERT INTO songs (id, user_id, title, artist, album, duration, cover_art)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	stmt, err := tx.Prepare(`INSERT INTO songs (id, user_id, title, artist, album, duration, cover_art, genre, year)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, user_id) DO UPDATE SET
 			title = excluded.title,
 			artist = excluded.artist,
 			album = excluded.album,
 			duration = excluded.duration,
-			cover_art = excluded.cover_art`)
+			cover_art = excluded.cover_art,
+			genre = excluded.genre,
+			year = excluded.year`)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to prepare song insert statement")
 	}
@@ -551,7 +583,7 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 
 	// One failed write fails the whole batch, rather than reporting success for a partial store
 	for _, song := range songs {
-		if _, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt); err != nil {
+		if _, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.Genre, song.Year); err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to store song").
 				WithContext("songId", song.ID).
 				WithContext("userID", userID)
@@ -700,6 +732,45 @@ func (db *DB) GetEligibleSongsByIDs(userID string, songIDs []string, cutoffTime 
 
 	if err := rows.Err(); err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during eligible songs by IDs iteration").
+			WithContext("userID", userID)
+	}
+
+	return songs, nil
+}
+
+// GetRecentlyHeardSongs returns the user's songs played or skipped at or after cutoffTime:
+// the ones GetSongsBatchFiltered leaves out. These are at most two weeks of listening, so
+// they're returned all at once.
+func (db *DB) GetRecentlyHeardSongs(userID string, cutoffTime time.Time) ([]models.Song, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
+
+	rows, err := db.conn.Query(`SELECT `+songColumns+`
+		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') >= ? OR COALESCE(last_skipped, '1970-01-01') >= ?)`,
+		userID, cutoffStr, cutoffStr)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query recently heard songs").
+			WithContext("userID", userID)
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var songs []models.Song
+	for rows.Next() {
+		song, err := scanSong(rows, now)
+		if err != nil {
+			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan recently heard song")
+			continue
+		}
+
+		songs = append(songs, song)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during recently heard songs iteration").
 			WithContext("userID", userID)
 	}
 

@@ -21,6 +21,8 @@ type Song struct {
 	IsDir         bool      `json:"isDir" xml:"isDir,attr"`
 	Name          string    `json:"name" xml:"name,attr"`
 	CoverArt      string    `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
+	Genre         string    `json:"genre,omitempty" xml:"genre,attr,omitempty"`
+	Year          int       `json:"year,omitempty" xml:"year,attr,omitempty"`
 }
 
 type PlayEvent struct {

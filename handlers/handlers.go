@@ -162,7 +162,37 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		}
 	}
 
-	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size)
+	// Songs aren't stored with their music folder, so upstream answers folder-limited requests
+	if r.FormValue("musicFolderId") != "" {
+		h.logger.WithField("userID", SanitizeForLogging(userID)).Debug("Shuffle request limited to a music folder, forwarding to upstream")
+		return false
+	}
+
+	filter := shuffle.Filter{Genre: r.FormValue("genre")}
+	for _, param := range []struct {
+		name   string
+		target *int
+	}{{"fromYear", &filter.FromYear}, {"toYear", &filter.ToYear}} {
+		value := r.FormValue(param.name)
+		if value == "" {
+			continue
+		}
+		year, err := strconv.Atoi(value)
+		if err != nil {
+			validationErr := errors.ErrInvalidInput.WithContext("field", param.name).
+				WithContext("value", SanitizeForLogging(value))
+			h.logger.WithError(validationErr).Warn("Invalid year parameter")
+			h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Invalid "+param.name+" parameter")
+			return true
+		}
+		*param.target = year
+	}
+	// A range given newest first, as some clients do for decades, means the same years
+	if filter.FromYear != 0 && filter.ToYear != 0 && filter.FromYear > filter.ToYear {
+		filter.FromYear, filter.ToYear = filter.ToYear, filter.FromYear
+	}
+
+	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size, filter)
 	if err != nil {
 		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
 		h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Internal server error")

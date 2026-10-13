@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1191,4 +1192,91 @@ func TestHandleShuffleXMLError(t *testing.T) {
 	if xmlResponse.Error == nil || xmlResponse.Error.Code != SubsonicErrorMissingParameter {
 		t.Errorf("Expected error code %d, got %+v", SubsonicErrorMissingParameter, xmlResponse.Error)
 	}
+}
+
+func TestHandleShuffleFilters(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	err = db.StoreSongs("testuser", []models.Song{
+		{ID: "rock85", Title: "a", Artist: "x", Album: "y", Genre: "Rock", Year: 1985},
+		{ID: "rock95", Title: "b", Artist: "x", Album: "y", Genre: "Rock", Year: 1995},
+		{ID: "jazz85", Title: "c", Artist: "x", Album: "y", Genre: "Jazz", Year: 1985},
+	})
+	if err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	// shuffle returns the song IDs of a successful response, or the error message of a failed one
+	shuffle := func(t *testing.T, query string) (bool, []string, string) {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&"+query, nil)
+		w := httptest.NewRecorder()
+		if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+			return false, nil, ""
+		}
+
+		var response struct {
+			SubsonicResponse struct {
+				Status string `json:"status"`
+				Songs  struct {
+					Song []models.Song `json:"song"`
+				} `json:"songs"`
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"subsonic-response"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+		var ids []string
+		for _, song := range response.SubsonicResponse.Songs.Song {
+			ids = append(ids, song.ID)
+		}
+		slices.Sort(ids)
+		return true, ids, response.SubsonicResponse.Error.Message
+	}
+
+	tests := []struct {
+		name    string
+		query   string
+		want    []string
+		wantErr string
+	}{
+		{"genre", "genre=rock", []string{"rock85", "rock95"}, ""},
+		{"year range", "fromYear=1980&toYear=1989", []string{"jazz85", "rock85"}, ""},
+		{"reversed year range", "fromYear=1989&toYear=1980", []string{"jazz85", "rock85"}, ""},
+		{"genre and year", "genre=Rock&fromYear=1990", []string{"rock95"}, ""},
+		{"invalid fromYear", "fromYear=eighties", nil, "Invalid fromYear parameter"},
+		{"invalid toYear", "toYear=x", nil, "Invalid toYear parameter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, ids, errMsg := shuffle(t, tt.query)
+			if !handled {
+				t.Fatal("Expected the request to be handled locally")
+			}
+			if errMsg != tt.wantErr {
+				t.Errorf("Expected error %q, got %q", tt.wantErr, errMsg)
+			}
+			if !slices.Equal(ids, tt.want) {
+				t.Errorf("Expected songs %v, got %v", tt.want, ids)
+			}
+		})
+	}
+
+	t.Run("music folder is forwarded", func(t *testing.T) {
+		if handled, _, _ := shuffle(t, "musicFolderId=1"); handled {
+			t.Error("Expected a music folder request to be forwarded to upstream")
+		}
+	})
 }

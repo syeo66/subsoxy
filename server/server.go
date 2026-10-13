@@ -1096,7 +1096,9 @@ func songHasChanged(existing, new models.Song) bool {
 		existing.Artist != new.Artist ||
 		existing.Album != new.Album ||
 		existing.Duration != new.Duration ||
-		existing.CoverArt != new.CoverArt
+		existing.CoverArt != new.CoverArt ||
+		existing.Genre != new.Genre ||
+		existing.Year != new.Year
 }
 
 // ProcessScrobble processes a scrobble event and handles pending songs

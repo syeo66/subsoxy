@@ -27,7 +27,7 @@ Start with `-log-level debug`. Errors look like `[category:CODE] message`, and t
    curl "http://upstream:4533/rest/ping?u=USER&p=PASS&v=1.15.0&c=test&f=json"
    ```
    Special characters in the password need to be URL-encoded.
-3. **Everything was played recently.** Songs played or skipped in the last 14 days are excluded, and there's no fallback. A small library that you play heavily can run out of eligible songs.
+3. **The filter matches few songs.** With `genre`, `fromYear` or `toYear`, only matching songs are returned. Songs synced before genre and year were stored only get them on the next library sync (at most an hour), and songs without a year never match a year filter.
 4. **Missing `u` parameter.** That gives a Subsonic error response with code 10, `Required parameter is missing: u`.
 
 ## Upstream connectivity

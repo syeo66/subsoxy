@@ -64,7 +64,7 @@ func BenchmarkShuffleSmallDataset(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		songs, err := service.GetWeightedShuffledSongs(userID, 50)
+		songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 		if err != nil {
 			b.Fatalf("Failed to get shuffled songs: %v", err)
 		}
@@ -97,7 +97,7 @@ func BenchmarkShuffleLargeDataset(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		songs, err := service.GetWeightedShuffledSongs(userID, 50)
+		songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 		if err != nil {
 			b.Fatalf("Failed to get shuffled songs: %v", err)
 		}
@@ -130,7 +130,7 @@ func BenchmarkShuffleVeryLargeDataset(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		songs, err := service.GetWeightedShuffledSongs(userID, 50)
+		songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 		if err != nil {
 			b.Fatalf("Failed to get shuffled songs: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestMemoryUsage(t *testing.T) {
 
 			// Test shuffle performance
 			start := time.Now()
-			songs, err := service.GetWeightedShuffledSongs(userID, 50)
+			songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 			duration := time.Since(start)
 
 			if err != nil {
@@ -243,7 +243,7 @@ func TestAlgorithmSelection(t *testing.T) {
 		// Setup 1000 songs (small dataset)
 		setupLargeDataset(t, db, userID, 1000)
 
-		songs, err := service.GetWeightedShuffledSongs(userID, 50)
+		songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 		if err != nil {
 			t.Fatalf("Failed to get shuffled songs: %v", err)
 		}
@@ -270,7 +270,7 @@ func TestAlgorithmSelection(t *testing.T) {
 		// Setup 10000 songs (large dataset)
 		setupLargeDataset(t, db, userID, 10000)
 
-		songs, err := service.GetWeightedShuffledSongs(userID, 50)
+		songs, err := service.GetWeightedShuffledSongs(userID, 50, Filter{})
 		if err != nil {
 			t.Fatalf("Failed to get shuffled songs: %v", err)
 		}

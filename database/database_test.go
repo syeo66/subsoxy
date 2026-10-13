@@ -1702,3 +1702,33 @@ func TestStoreSongsFailsOnInsertError(t *testing.T) {
 		t.Errorf("Expected no songs stored after a failed batch, got %d", len(ids))
 	}
 }
+
+func TestStoreSongsGenreAndYear(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	song := models.Song{ID: "1", Title: "t", Artist: "a", Album: "b", Duration: 10, Genre: "Rock", Year: 1985}
+	if err := db.StoreSongs("user", []models.Song{song}); err != nil {
+		t.Fatalf("Failed to store song: %v", err)
+	}
+
+	// A later sync updates them like the rest of the metadata
+	song.Genre, song.Year = "Pop", 1986
+	if err := db.StoreSongs("user", []models.Song{song}); err != nil {
+		t.Fatalf("Failed to update song: %v", err)
+	}
+
+	songs, err := db.GetAllSongs("user")
+	if err != nil {
+		t.Fatalf("Failed to get songs: %v", err)
+	}
+	if len(songs) != 1 || songs[0].Genre != "Pop" || songs[0].Year != 1986 {
+		t.Errorf("Expected genre Pop and year 1986, got %+v", songs)
+	}
+}

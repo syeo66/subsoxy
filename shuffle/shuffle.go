@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -428,15 +429,42 @@ func (q *raceQueue) Pop() interface{} {
 	return r
 }
 
-// GetWeightedShuffledSongs returns up to count songs, each picked with probability
-// proportional to its weight among the songs not picked yet. Songs played or skipped within
-// the last TwoWeekReplayThreshold days are strictly excluded.
+// Filter limits a shuffle to songs matching getRandomSongs' genre, fromYear and toYear
+// parameters. The zero Filter matches every song.
+type Filter struct {
+	Genre    string // Matched case-insensitively; "" for any genre
+	FromYear int    // Earliest year, inclusive; 0 for no lower bound
+	ToYear   int    // Latest year, inclusive; 0 for no upper bound
+}
+
+// Matches reports whether a song passes the filter. Songs without a year never pass a
+// year filter, since there's no telling whether they're in range.
+func (f Filter) Matches(song models.Song) bool {
+	if f.Genre != "" && !strings.EqualFold(song.Genre, f.Genre) {
+		return false
+	}
+	if (f.FromYear != 0 || f.ToYear != 0) && song.Year == 0 {
+		return false
+	}
+	if f.FromYear != 0 && song.Year < f.FromYear {
+		return false
+	}
+	if f.ToYear != 0 && song.Year > f.ToYear {
+		return false
+	}
+	return true
+}
+
+// GetWeightedShuffledSongs returns up to count songs matching filter, each picked with
+// probability proportional to its weight among the songs not picked yet. Songs played or
+// skipped within the last TwoWeekReplayThreshold days are left out, unless there aren't
+// enough other songs: then the remaining places go to them, least recently heard first.
 //
 // The picks are run as an exponential race (see racer). That lets the library be streamed in
 // batches while keeping only count songs in memory, without losing any weighting: every
 // other song's clock fires later at its base weight, so it can only be picked if the
 // similarity boost speeds it up, and those songs are loaded when they become similar.
-func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.Song, error) {
+func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filter) ([]models.Song, error) {
 	if count <= 0 {
 		return []models.Song{}, nil
 	}
@@ -473,6 +501,9 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		afterID = batch[len(batch)-1].ID
 
 		for _, song := range batch {
+			if !filter.Matches(song) {
+				continue
+			}
 			weight := s.calculateBaseWeight(userID, song, artistStats)
 			if weight <= 0 {
 				continue
@@ -526,6 +557,9 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 				s.logger.WithError(err).WithField("userID", userID).Warn("Failed to load similar songs, continuing without them")
 			}
 			for _, song := range songs {
+				if !filter.Matches(song) {
+					continue
+				}
 				weight := s.calculateBaseWeight(userID, song, artistStats)
 				if weight <= 0 {
 					continue
@@ -568,14 +602,57 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int) ([]models.S
 		}
 	}
 
+	eligibleCount := len(result)
+	if len(result) < count {
+		result = s.appendRecentlyHeard(userID, count, filter, cutoffTime, result)
+	}
+
 	s.logger.WithFields(logrus.Fields{
 		"userID":         userID,
 		"eligibleSongs":  eligible,
 		"requestedCount": count,
 		"resultCount":    len(result),
+		"recentlyHeard":  len(result) - eligibleCount,
 	}).Debug("Completed weighted shuffle with 2-week replay prevention")
 
 	return result, nil
+}
+
+// appendRecentlyHeard fills result up to count with songs heard since cutoffTime that match
+// filter, least recently heard first, for when too few songs are eligible for the shuffle.
+// It's best effort: on a database error the result is returned as it is.
+func (s *Service) appendRecentlyHeard(userID string, count int, filter Filter, cutoffTime time.Time, result []models.Song) []models.Song {
+	recent, err := s.db.GetRecentlyHeardSongs(userID, cutoffTime)
+	if err != nil {
+		s.logger.WithError(err).WithField("userID", userID).Warn("Failed to load recently heard songs, returning a shorter shuffle")
+		return result
+	}
+
+	// A song heard while the shuffle ran could be in both sets
+	picked := make(map[string]bool, len(result))
+	for _, song := range result {
+		picked[song.ID] = true
+	}
+
+	candidates := recent[:0]
+	for _, song := range recent {
+		if filter.Matches(song) && !picked[song.ID] {
+			candidates = append(candidates, song)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return lastPresented(candidates[i]).Before(lastPresented(candidates[j]))
+	})
+
+	return append(result, candidates[:min(count-len(result), len(candidates))]...)
+}
+
+// lastPresented is when the song was last played or skipped, whichever is later
+func lastPresented(song models.Song) time.Time {
+	if song.LastSkipped.After(song.LastPlayed) {
+		return song.LastSkipped
+	}
+	return song.LastPlayed
 }
 
 // calculateBaseWeight returns a song's weight without the similarity factor, which changes

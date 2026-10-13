@@ -7,7 +7,8 @@ A Go proxy that sits between your music client and a Subsonic-compatible server 
 ## Features
 
 - **Smart shuffle**: `/rest/getRandomSongs` returns weighted picks instead of uniformly random ones. The weights favor songs you play over songs you skip, give unheard songs a boost, and learn which artists you like.
-- **Two-week replay prevention**: Songs you played or skipped in the last 14 days are left out.
+- **Two-week replay prevention**: Songs you played or skipped in the last 14 days are left out, unless there aren't enough other songs. Then the ones you heard longest ago fill the rest.
+- **Filters**: `genre`, `fromYear` and `toYear` work as in the Subsonic API.
 - **Acoustic flow**: If the upstream server provides AudioMuse-AI similarity (`getSonicSimilarTracks`), songs that sound like what you just played get a boost.
 - **Play/skip tracking**: Plays and skips are worked out from scrobbles, with checks for duplicate submissions and long pauses.
 - **Multi-user**: Every user has their own library copy, history and preferences.
@@ -42,7 +43,7 @@ To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin 
 
 | Endpoint | Behavior |
 |----------|----------|
-| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`) |
+| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`). Requests with `musicFolderId` are forwarded |
 | `/rest/scrobble` | Records plays and skips, then forwards to the upstream server |
 | `/rest/stream`, `/rest/ping`, `/rest/getLicense` | Logged, then forwarded |
 | `/debug` | HTML view of per-song weights (only with `-debug-mode`) |
