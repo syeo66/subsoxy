@@ -552,7 +552,7 @@ func TestFetchAndStoreSongs(t *testing.T) {
 		server.config.UpstreamURL = mockServer.URL
 
 		// Store valid credentials
-		_, _ = server.credentials.ValidateAndStore("testuser", "testpass")
+		_, _ = server.credentials.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 		// This would normally fetch from upstream, but we can't easily test without
 		// changing the URL or mocking the HTTP client
@@ -1237,15 +1237,15 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 	defer server.Shutdown(context.Background())
 
 	// Add multiple users with valid credentials
-	_, err = server.credentials.ValidateAndStore("user1", "pass1")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", "pass1")
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore("user2", "pass2")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", "pass2")
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore("user3", "pass3")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user3", "pass3")
 	if err != nil {
 		t.Errorf("Failed to validate user3: %v", err)
 	}
@@ -1415,11 +1415,11 @@ func TestSyncSongsForUserError(t *testing.T) {
 	defer server.Shutdown(context.Background())
 
 	// Add multiple users with valid credentials
-	_, err = server.credentials.ValidateAndStore("user1", "pass1")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", "pass1")
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore("user2", "pass2")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", "pass2")
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
@@ -2428,7 +2428,7 @@ func TestNewCredentialsSyncOnlyThatUser(t *testing.T) {
 	upstream := &upstreamRecorder{}
 	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
 
-	if _, err := server.credentials.ValidateAndStore("bob", "hunter2"); err != nil {
+	if _, err := server.credentials.ValidateAndStore(context.Background(), "bob", "hunter2"); err != nil {
 		t.Fatalf("Failed to store bob's credentials: %v", err)
 	}
 
@@ -2679,5 +2679,37 @@ func TestSyncSongsForUserWritesOnlyChangedSongs(t *testing.T) {
 	}
 	if songs["song2"].Title != "Two (Remastered)" {
 		t.Errorf("Expected the changed title to be stored, got %q", songs["song2"].Title)
+	}
+}
+
+func TestStartReportsPortInUse(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("Failed to reserve a port: %v", err)
+	}
+	defer listener.Close()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+
+	cfg := &config.Config{
+		ProxyPort:         port,
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "panic",
+		DatabasePath:      t.TempDir() + "/test.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	if err := server.Start(); err == nil {
+		t.Error("Expected Start to fail when the port is already in use")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Errorf("Failed to shut down after a failed start: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"container/heap"
+	"context"
 	"math"
 	"math/rand"
 	"sort"
@@ -117,7 +118,9 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 // getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
 // acoustically similar to songID, using a short-lived in-memory cache.
 // Concurrent calls for the same key share a single in-flight HTTP request via singleflight.
-func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float64 {
+// The request outlives a caller that gives up, so its result is still cached, but once ctx
+// is done the caller stops waiting and gets nil.
+func (s *Service) getSimilarSongsForUser(ctx context.Context, userID, songID string) map[string]float64 {
 	cacheKey := userID + ":" + songID
 
 	s.mu.RLock()
@@ -133,7 +136,7 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float
 		return entry.scores
 	}
 
-	v, _, _ := s.inflight.Do(cacheKey, func() (interface{}, error) {
+	ch := s.inflight.DoChan(cacheKey, func() (interface{}, error) {
 		scores, err := fetcher(userID, songID)
 		if err != nil {
 			s.logger.WithError(err).WithFields(logrus.Fields{
@@ -155,10 +158,15 @@ func (s *Service) getSimilarSongsForUser(userID, songID string) map[string]float
 		return scores, nil
 	})
 
-	if v == nil {
+	select {
+	case res := <-ch:
+		if res.Val == nil {
+			return nil
+		}
+		return res.Val.(map[string]float64)
+	case <-ctx.Done():
 		return nil
 	}
-	return v.(map[string]float64)
 }
 
 // sweepSimilarSongsCache removes expired entries, which are never served again, at most once
@@ -464,7 +472,8 @@ func (f Filter) Matches(song models.Song) bool {
 // batches while keeping only count songs in memory, without losing any weighting: every
 // other song's clock fires later at its base weight, so it can only be picked if the
 // similarity boost speeds it up, and those songs are loaded when they become similar.
-func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filter) ([]models.Song, error) {
+// When ctx is done, e.g. because the client went away, it stops and returns ctx's error.
+func (s *Service) GetWeightedShuffledSongs(ctx context.Context, userID string, count int, filter Filter) ([]models.Song, error) {
 	if count <= 0 {
 		return []models.Song{}, nil
 	}
@@ -482,7 +491,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filt
 		referenceID = lastPlayed.ID
 	}
 	if referenceID != "" {
-		go s.getSimilarSongsForUser(userID, referenceID)
+		go s.getSimilarSongsForUser(ctx, userID, referenceID)
 	}
 
 	artistStats := s.LoadArtistStats(userID)
@@ -491,6 +500,9 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filt
 	pool := &raceQueue{latestFirst: true}
 	eligible := 0
 	for afterID := ""; ; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		batch, err := s.db.GetSongsBatchFiltered(userID, BatchSize, afterID, cutoffTime)
 		if err != nil {
 			return nil, err
@@ -585,7 +597,7 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filt
 	}
 
 	if referenceID != "" {
-		setSimilarSongs(s.getSimilarSongsForUser(userID, referenceID))
+		setSimilarSongs(s.getSimilarSongsForUser(ctx, userID, referenceID))
 	}
 
 	result := make([]models.Song, 0, min(count, race.Len()))
@@ -598,8 +610,13 @@ func (s *Service) GetWeightedShuffledSongs(userID string, count int, filter Filt
 		// Refresh the similarity reference every SimilarityChainStep picks instead of every
 		// pick. This reduces API calls by that factor while preserving acoustic flow.
 		if len(result)%SimilarityChainStep == 0 && len(result) < count {
-			setSimilarSongs(s.getSimilarSongsForUser(userID, r.song.ID))
+			setSimilarSongs(s.getSimilarSongsForUser(ctx, userID, r.song.ID))
 		}
+	}
+
+	// A lookup cut short by ctx leaves the rest of the race without similarity weights
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	eligibleCount := len(result)
@@ -827,6 +844,6 @@ func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 }
 
 // GetSimilarSongsForDebug fetches similar songs for the debug view (song ID → score).
-func (s *Service) GetSimilarSongsForDebug(userID, songID string) map[string]float64 {
-	return s.getSimilarSongsForUser(userID, songID)
+func (s *Service) GetSimilarSongsForDebug(ctx context.Context, userID, songID string) map[string]float64 {
+	return s.getSimilarSongsForUser(ctx, userID, songID)
 }

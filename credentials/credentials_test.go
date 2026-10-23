@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,7 @@ func TestValidateAndStoreValidCredentials(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test valid credentials
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Verify credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -86,7 +87,7 @@ func TestValidateAndStoreInvalidCredentials(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test invalid credentials
-	_, _ = manager.ValidateAndStore("wronguser", "wrongpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "wronguser", "wrongpass")
 
 	// Verify no credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -109,7 +110,7 @@ func TestValidateAndStoreServerError(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test server error
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Verify no credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -138,10 +139,10 @@ func TestValidateAndStoreAlreadyStored(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// First call should validate and store
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Second call with same credentials should not trigger validation
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Should only have made one HTTP call
 	if callCount != 1 {
@@ -162,7 +163,7 @@ func TestValidateAndStoreInvalidJSON(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test invalid JSON response
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Verify no credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -179,7 +180,7 @@ func TestValidateAndStoreUnreachableServer(t *testing.T) {
 	manager := New(logger, "http://localhost:99999")
 
 	// Test connection failure
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Verify no credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -208,7 +209,7 @@ func TestValidateURLFormat(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test URL format
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	expectedURL := "/rest/ping?c=subsoxy&f=json&p=testpass&u=testuser&v=1.15.0"
 	if capturedURL != expectedURL {
@@ -238,7 +239,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Goroutine 1: Store credentials
 	go func() {
-		_, _ = manager.ValidateAndStore("user1", "pass1")
+		_, _ = manager.ValidateAndStore(context.Background(), "user1", "pass1")
 		done <- true
 	}()
 
@@ -367,7 +368,7 @@ func TestMemorySecurityValidation(t *testing.T) {
 	password := "secret-password-123"
 
 	// Store credential
-	_, err := manager.ValidateAndStore("testuser", password)
+	_, err := manager.ValidateAndStore(context.Background(), "testuser", password)
 	if err != nil {
 		t.Errorf("Failed to store credentials: %v", err)
 	}
@@ -420,7 +421,7 @@ func TestValidateInvalidResponseFormat(t *testing.T) {
 	manager := New(logger, mockServer.URL)
 
 	// Test invalid response format
-	_, _ = manager.ValidateAndStore("testuser", "testpass")
+	_, _ = manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 
 	// Verify no credentials were stored
 	storedUser, storedPass := onlyCredential(t, manager)
@@ -453,9 +454,9 @@ func TestGetAllValid(t *testing.T) {
 	}
 
 	// Store multiple users
-	_, _ = manager.ValidateAndStore("user1", "pass1")
-	_, _ = manager.ValidateAndStore("user2", "pass2")
-	_, _ = manager.ValidateAndStore("user3", "pass3")
+	_, _ = manager.ValidateAndStore(context.Background(), "user1", "pass1")
+	_, _ = manager.ValidateAndStore(context.Background(), "user2", "pass2")
+	_, _ = manager.ValidateAndStore(context.Background(), "user3", "pass3")
 
 	// GetAllValid should return all stored credentials
 	allCreds = manager.GetAllValid()
@@ -495,7 +496,7 @@ func TestNetworkTimeout(t *testing.T) {
 	manager := New(logger, slowServer.URL)
 
 	// This should timeout and return an error (test will be fast)
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err == nil {
 		t.Error("Expected timeout or error, got nil")
 	}
@@ -517,7 +518,7 @@ func TestNetworkConnectionRefused(t *testing.T) {
 	// Use a non-existent server URL
 	manager := New(logger, "http://localhost:99999")
 
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err == nil {
 		t.Error("Expected connection refused error, got nil")
 	}
@@ -552,7 +553,7 @@ func TestNetworkSlowResponse(t *testing.T) {
 	manager := New(logger, slowServer.URL)
 
 	// Should succeed despite slow response
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err != nil {
 		t.Errorf("Expected success with slow response, got error: %v", err)
 	}
@@ -580,7 +581,7 @@ func TestNetworkInvalidHTTPResponse(t *testing.T) {
 
 	manager := New(logger, invalidServer.URL)
 
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err == nil {
 		t.Error("Expected JSON decode error, got nil")
 	}
@@ -607,7 +608,7 @@ func TestNetworkHTTPErrorStatus(t *testing.T) {
 
 	manager := New(logger, errorServer.URL)
 
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err == nil {
 		t.Error("Expected HTTP error, got nil")
 	}
@@ -635,7 +636,7 @@ func TestNetworkPartialResponse(t *testing.T) {
 
 	manager := New(logger, partialServer.URL)
 
-	result, err := manager.ValidateAndStore("testuser", "testpass")
+	result, err := manager.ValidateAndStore(context.Background(), "testuser", "testpass")
 	if err == nil {
 		t.Error("Expected JSON parse error due to incomplete response, got nil")
 	}
@@ -672,8 +673,8 @@ func TestValidateAndStoreRemembersEarlierSecrets(t *testing.T) {
 
 	// Two devices of the same user, each with its own token and salt
 	for _, secret := range []string{"TOKEN:a:salt1", "TOKEN:b:salt2", "TOKEN:a:salt1", "TOKEN:b:salt2"} {
-		if _, err := manager.ValidateAndStore("alice", secret); err != nil {
-			t.Fatalf("ValidateAndStore(%q) failed: %v", secret, err)
+		if _, err := manager.ValidateAndStore(context.Background(), "alice", secret); err != nil {
+			t.Fatalf("ValidateAndStore(context.Background(), %q) failed: %v", secret, err)
 		}
 	}
 
@@ -688,14 +689,14 @@ func TestValidateAndStoreRevalidatesExpiredSecret(t *testing.T) {
 	upstream, calls := newPingCounter(t)
 	manager := New(logger, upstream.URL)
 
-	if isNew, _ := manager.ValidateAndStore("alice", "secret"); !isNew {
+	if isNew, _ := manager.ValidateAndStore(context.Background(), "alice", "secret"); !isNew {
 		t.Fatal("First validation should report new credentials")
 	}
 
 	key := manager.secretKey("alice", "secret")
 	manager.verifiedSecrets["alice"][key] = time.Now().Add(-time.Second)
 
-	isNew, err := manager.ValidateAndStore("alice", "secret")
+	isNew, err := manager.ValidateAndStore(context.Background(), "alice", "secret")
 	if err != nil {
 		t.Fatalf("Revalidation failed: %v", err)
 	}
@@ -714,7 +715,7 @@ func TestVerifiedSecretsAreBoundedPerUser(t *testing.T) {
 	manager := New(logger, upstream.URL)
 
 	for i := 0; i < MaxVerifiedSecretsPerUser*2; i++ {
-		if _, err := manager.ValidateAndStore("alice", "TOKEN:tok:salt"+strconv.Itoa(i)); err != nil {
+		if _, err := manager.ValidateAndStore(context.Background(), "alice", "TOKEN:tok:salt"+strconv.Itoa(i)); err != nil {
 			t.Fatalf("ValidateAndStore failed: %v", err)
 		}
 	}
@@ -738,7 +739,7 @@ func TestHasRecent(t *testing.T) {
 		t.Error("Unknown user should not have recent credentials")
 	}
 
-	_, _ = manager.ValidateAndStore("alice", "secret")
+	_, _ = manager.ValidateAndStore(context.Background(), "alice", "secret")
 	if !manager.HasRecent("alice", time.Hour) {
 		t.Error("Just validated credentials should be recent")
 	}
@@ -757,8 +758,8 @@ func TestGet(t *testing.T) {
 	upstream, _ := newPingCounter(t)
 	manager := New(logger, upstream.URL)
 
-	_, _ = manager.ValidateAndStore("alice", "secret")
-	_, _ = manager.ValidateAndStore("bob", "hunter2")
+	_, _ = manager.ValidateAndStore(context.Background(), "alice", "secret")
+	_, _ = manager.ValidateAndStore(context.Background(), "bob", "hunter2")
 
 	if password, ok := manager.Get("alice"); !ok || password != "secret" {
 		t.Errorf("Get(alice) = %q, %v; want secret, true", password, ok)
@@ -809,8 +810,8 @@ func TestGetAllValidMultipleUsers(t *testing.T) {
 
 	manager := New(logger, mockServer.URL)
 
-	_, _ = manager.ValidateAndStore("user1", "pass1")
-	_, _ = manager.ValidateAndStore("user2", "pass2")
+	_, _ = manager.ValidateAndStore(context.Background(), "user1", "pass1")
+	_, _ = manager.ValidateAndStore(context.Background(), "user2", "pass2")
 
 	all := manager.GetAllValid()
 	if len(all) != 2 || all["user1"] != "pass1" || all["user2"] != "pass2" {
@@ -854,7 +855,7 @@ func TestValidateAndStoreRemembersRejectedSecret(t *testing.T) {
 	manager := New(logger, upstream.URL)
 
 	for i := 0; i < 3; i++ {
-		_, err := manager.ValidateAndStore("alice", "wrong")
+		_, err := manager.ValidateAndStore(context.Background(), "alice", "wrong")
 		if !errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
 			t.Fatalf("Attempt %d: expected invalid credentials error, got %v", i+1, err)
 		}
@@ -864,7 +865,7 @@ func TestValidateAndStoreRemembersRejectedSecret(t *testing.T) {
 	}
 
 	// The rejection is tied to that secret, so the right password still gets through
-	if isNew, err := manager.ValidateAndStore("alice", "right"); err != nil || !isNew {
+	if isNew, err := manager.ValidateAndStore(context.Background(), "alice", "right"); err != nil || !isNew {
 		t.Errorf("Expected the correct password to be accepted as new, got isNew=%v err=%v", isNew, err)
 	}
 }
@@ -875,9 +876,9 @@ func TestValidateAndStoreRevalidatesExpiredRejection(t *testing.T) {
 	upstream, calls := newAuthUpstream(t, false)
 	manager := New(logger, upstream.URL)
 
-	manager.ValidateAndStore("alice", "wrong")
+	manager.ValidateAndStore(context.Background(), "alice", "wrong")
 	manager.rejectedSecrets[manager.secretKey("alice", "wrong")] = time.Now().Add(-time.Second)
-	manager.ValidateAndStore("alice", "wrong")
+	manager.ValidateAndStore(context.Background(), "alice", "wrong")
 
 	if got := calls(); got != 2 {
 		t.Errorf("Expected an expired rejection to be checked upstream again, got %d calls", got)
@@ -890,8 +891,8 @@ func TestValidateAndStoreDoesNotRememberUpstreamFailures(t *testing.T) {
 	upstream, calls := newAuthUpstream(t, true)
 	manager := New(logger, upstream.URL)
 
-	manager.ValidateAndStore("alice", "right")
-	manager.ValidateAndStore("alice", "right")
+	manager.ValidateAndStore(context.Background(), "alice", "right")
+	manager.ValidateAndStore(context.Background(), "alice", "right")
 
 	if got := calls(); got != 2 {
 		t.Errorf("Expected upstream errors not to be cached as rejections, got %d calls", got)
@@ -917,5 +918,37 @@ func TestRejectedSecretsAreBounded(t *testing.T) {
 	last := manager.secretKey("user"+strconv.Itoa(MaxRejectedSecrets*2-1), "wrong")
 	if !manager.isRejected(last) {
 		t.Error("The most recent rejection should still be remembered")
+	}
+}
+
+func TestValidateAndStoreAbandonsCancelledValidation(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.PanicLevel)
+
+	// Upstream never answers until the test ends
+	release := make(chan struct{})
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer mockServer.Close()
+	defer close(release)
+
+	manager := New(logger, mockServer.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := manager.ValidateAndStore(ctx, "testuser", "testpass")
+	if err == nil {
+		t.Fatal("Expected an error for a cancelled validation")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Validation took %v, expected it to stop when the context ended", elapsed)
+	}
+
+	// A cancelled check says nothing about the credentials, so they aren't remembered as rejected
+	if manager.isRejected(manager.secretKey("testuser", "testpass")) {
+		t.Error("Cancelled validation should not mark the credentials as rejected")
 	}
 }

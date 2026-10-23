@@ -192,8 +192,13 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		filter.FromYear, filter.ToYear = filter.ToYear, filter.FromYear
 	}
 
-	songs, err := h.shuffle.GetWeightedShuffledSongs(userID, size, filter)
+	songs, err := h.shuffle.GetWeightedShuffledSongs(r.Context(), userID, size, filter)
 	if err != nil {
+		// Nobody is left to answer when the client gave up
+		if r.Context().Err() != nil {
+			h.logger.WithField("userID", SanitizeForLogging(userID)).Debug("Shuffle request cancelled by client")
+			return true
+		}
 		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
 		h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Internal server error")
 		return true
@@ -361,7 +366,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 	var similarSongs map[string]float64
 	if similarityBaseSongID != "" {
-		similarSongs = h.shuffle.GetSimilarSongsForDebug(userID, similarityBaseSongID)
+		similarSongs = h.shuffle.GetSimilarSongsForDebug(r.Context(), userID, similarityBaseSongID)
 	}
 
 	// Build reference song info for display

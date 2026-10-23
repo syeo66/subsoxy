@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -540,7 +541,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	service := New(db, logger)
 
 	// Test with empty database
-	songs, err := service.GetWeightedShuffledSongs("testuser", 10, Filter{})
+	songs, err := service.GetWeightedShuffledSongs(context.Background(), "testuser", 10, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -563,7 +564,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	}
 
 	// Test requesting more songs than available
-	songs, err = service.GetWeightedShuffledSongs("testuser", 10, Filter{})
+	songs, err = service.GetWeightedShuffledSongs(context.Background(), "testuser", 10, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -572,7 +573,7 @@ func TestGetWeightedShuffledSongs(t *testing.T) {
 	}
 
 	// Test requesting fewer songs than available
-	songs, err = service.GetWeightedShuffledSongs("testuser", 3, Filter{})
+	songs, err = service.GetWeightedShuffledSongs(context.Background(), "testuser", 3, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs: %v", err)
 	}
@@ -630,7 +631,7 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 	}
 
 	// Only song 3 is eligible, so it comes first and the least recently heard song fills the rest
-	songs, err := service.GetWeightedShuffledSongs("testuser", 2, Filter{})
+	songs, err := service.GetWeightedShuffledSongs(context.Background(), "testuser", 2, Filter{})
 	if err != nil {
 		t.Fatalf("Failed to get shuffled songs: %v", err)
 	}
@@ -639,7 +640,7 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 	}
 
 	// With room for every song, recently heard songs follow in the order they were heard
-	songs, err = service.GetWeightedShuffledSongs("testuser", 10, Filter{})
+	songs, err = service.GetWeightedShuffledSongs(context.Background(), "testuser", 10, Filter{})
 	if err != nil {
 		t.Fatalf("Failed to get shuffled songs: %v", err)
 	}
@@ -698,7 +699,7 @@ func TestGetWeightedShuffledSongsFilter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			songs, err := service.GetWeightedShuffledSongs(userID, 10, tt.filter)
+			songs, err := service.GetWeightedShuffledSongs(context.Background(), userID, 10, tt.filter)
 			if err != nil {
 				t.Fatalf("Failed to shuffle: %v", err)
 			}
@@ -744,7 +745,7 @@ func TestGetWeightedShuffledSongsConsistency(t *testing.T) {
 
 	// Test multiple calls return valid results
 	for i := 0; i < 10; i++ {
-		songs, err := service.GetWeightedShuffledSongs("testuser", 2, Filter{})
+		songs, err := service.GetWeightedShuffledSongs(context.Background(), "testuser", 2, Filter{})
 		if err != nil {
 			t.Errorf("Failed to get shuffled songs on iteration %d: %v", i, err)
 		}
@@ -779,7 +780,7 @@ func TestEdgeCases(t *testing.T) {
 	service := New(db, logger)
 
 	// Test requesting 0 songs
-	songs, err := service.GetWeightedShuffledSongs("testuser", 0, Filter{})
+	songs, err := service.GetWeightedShuffledSongs(context.Background(), "testuser", 0, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get 0 shuffled songs: %v", err)
 	}
@@ -788,7 +789,7 @@ func TestEdgeCases(t *testing.T) {
 	}
 
 	// Test requesting large number of songs (should not panic)
-	songs, err = service.GetWeightedShuffledSongs("testuser", 1000000, Filter{})
+	songs, err = service.GetWeightedShuffledSongs(context.Background(), "testuser", 1000000, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get large number of shuffled songs: %v", err)
 	}
@@ -857,7 +858,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	// Verify that the service is still functional after concurrent access
-	shuffledSongs, err := service.GetWeightedShuffledSongs("testuser", 3, Filter{})
+	shuffledSongs, err := service.GetWeightedShuffledSongs(context.Background(), "testuser", 3, Filter{})
 	if err != nil {
 		t.Errorf("Failed to get shuffled songs after concurrent access: %v", err)
 	}
@@ -1499,7 +1500,7 @@ func TestGetWeightedShuffledSongsBoostsSimilarSongsAcrossLibrary(t *testing.T) {
 	const trials = 2000
 	similarPicks, totalPicks := 0, 0
 	for range trials {
-		result, err := service.GetWeightedShuffledSongs(userID, 5, Filter{})
+		result, err := service.GetWeightedShuffledSongs(context.Background(), userID, 5, Filter{})
 		if err != nil {
 			t.Fatalf("Failed to shuffle: %v", err)
 		}
@@ -1545,7 +1546,7 @@ func TestGetWeightedShuffledSongsReturnsEveryEligibleSong(t *testing.T) {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
 
-	result, err := service.GetWeightedShuffledSongs(userID, len(songs)+50, Filter{})
+	result, err := service.GetWeightedShuffledSongs(context.Background(), userID, len(songs)+50, Filter{})
 	if err != nil {
 		t.Fatalf("Failed to shuffle: %v", err)
 	}
@@ -1653,8 +1654,8 @@ func TestSimilarSongsCacheEvictsExpiredEntries(t *testing.T) {
 		return map[string]float64{"other": 0.5}, nil
 	})
 
-	service.getSimilarSongsForUser("user", "old")
-	service.getSimilarSongsForUser("user", "recent")
+	service.getSimilarSongsForUser(context.Background(), "user", "old")
+	service.getSimilarSongsForUser(context.Background(), "user", "recent")
 
 	// Age one entry past the TTL and allow the next insert to sweep
 	service.mu.Lock()
@@ -1662,7 +1663,7 @@ func TestSimilarSongsCacheEvictsExpiredEntries(t *testing.T) {
 	service.similarSongsSweep = time.Time{}
 	service.mu.Unlock()
 
-	service.getSimilarSongsForUser("user", "new")
+	service.getSimilarSongsForUser(context.Background(), "user", "new")
 
 	service.mu.RLock()
 	defer service.mu.RUnlock()
@@ -1673,5 +1674,52 @@ func TestSimilarSongsCacheEvictsExpiredEntries(t *testing.T) {
 		if _, ok := service.similarSongsCache[key]; !ok {
 			t.Errorf("Expected fresh entry %s to be kept", key)
 		}
+	}
+}
+
+func TestGetWeightedShuffledSongsStopsWaitingWhenCancelled(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	service := New(db, logger)
+	userID := "testuser"
+	if err := db.StoreSongs(userID, []models.Song{{ID: "song1", Title: "Song 1", Artist: "Artist", Duration: 180}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// The similarity lookup hangs until the test ends, like an unresponsive upstream
+	release := make(chan struct{})
+	defer close(release)
+	started := make(chan struct{}, 1)
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		started <- struct{}{}
+		<-release
+		return nil, nil
+	})
+	service.SetLastPlayed(userID, &models.Song{ID: "reference"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.GetWeightedShuffledSongs(ctx, userID, 5, Filter{})
+		done <- err
+	}()
+
+	<-started
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shuffle kept waiting on the similarity lookup after cancellation")
 	}
 }

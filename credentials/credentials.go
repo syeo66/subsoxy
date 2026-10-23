@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -54,6 +55,7 @@ type Manager struct {
 	rejectedSecrets map[string]time.Time
 	mutex           sync.RWMutex
 	logger          *logrus.Logger
+	client          *http.Client
 	upstreamURL     string
 	encryptionKey   []byte
 }
@@ -67,12 +69,15 @@ func New(logger *logrus.Logger, upstreamURL string) *Manager {
 		verifiedSecrets:  make(map[string]map[string]time.Time),
 		rejectedSecrets:  make(map[string]time.Time),
 		logger:           logger,
+		client:           &http.Client{Timeout: HTTPClientTimeout},
 		upstreamURL:      upstreamURL,
 		encryptionKey:    encryptionKey,
 	}
 }
 
-func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
+// ValidateAndStore checks the credentials with upstream, unless they were checked recently,
+// and stores them for sync. Cancelling ctx abandons the upstream check.
+func (cm *Manager) ValidateAndStore(ctx context.Context, username, password string) (bool, error) {
 	if username == "" || password == "" {
 		err := errors.ErrInvalidCredentials.WithContext("reason", "empty username or password")
 		cm.logger.WithError(err).Warn("Invalid credentials provided")
@@ -90,7 +95,7 @@ func (cm *Manager) ValidateAndStore(username, password string) (bool, error) {
 			WithContext("reason", "recently rejected by upstream")
 	}
 
-	if err := cm.validate(username, password); err != nil {
+	if err := cm.validate(ctx, username, password); err != nil {
 		// Only upstream's own rejection is remembered. A network failure or unexpected
 		// response says nothing about the credentials, so those are tried again next time.
 		if errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
@@ -209,7 +214,7 @@ func (cm *Manager) HasRecent(username string, maxAge time.Duration) bool {
 	return ok && time.Since(cred.ValidatedAt) < maxAge
 }
 
-func (cm *Manager) validate(username, password string) error {
+func (cm *Manager) validate(ctx context.Context, username, password string) error {
 	// Construct URL with proper encoding to prevent credential exposure in logs
 	baseURL, err := url.Parse(cm.upstreamURL + "/rest/ping")
 	if err != nil {
@@ -247,11 +252,13 @@ func (cm *Manager) validate(username, password string) error {
 	params.Add("f", "json")
 	baseURL.RawQuery = params.Encode()
 
-	client := &http.Client{
-		Timeout: HTTPClientTimeout,
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), nil)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryCredentials, "VALIDATION_FAILED", "failed to create validation request").
+			WithContext("username", username)
 	}
 
-	resp, err := client.Get(baseURL.String())
+	resp, err := cm.client.Do(req)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryCredentials, "VALIDATION_FAILED", "failed to validate credentials").
 			WithContext("username", username).

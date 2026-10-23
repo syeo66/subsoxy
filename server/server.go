@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -254,7 +255,7 @@ func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password strin
 		return false
 	}
 
-	isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
+	isNewCredential, err := ps.credentials.ValidateAndStore(r.Context(), username, password)
 	if err != nil {
 		ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials, forwarding without local handling")
 		return false
@@ -423,7 +424,8 @@ func (ps *ProxyServer) captureCredentials(username, password string) {
 		}()
 
 		ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
-		isNewCredential, err := ps.credentials.ValidateAndStore(username, password)
+		// Not tied to the request, which may finish first, but abandoned on shutdown
+		isNewCredential, err := ps.credentials.ValidateAndStore(ps.ctx, username, password)
 		if err != nil {
 			ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
 		} else if isNewCredential {
@@ -452,8 +454,15 @@ func (ps *ProxyServer) Start() error {
 
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
+	// Listen before returning, so a port that can't be bound is reported to the caller,
+	// which can then shut down cleanly
+	listener, err := net.Listen("tcp", ":"+ps.config.ProxyPort)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryServer, "START_FAILED", "failed to listen").
+			WithContext("port", ps.config.ProxyPort)
+	}
+
 	ps.server = &http.Server{
-		Addr:              ":" + ps.config.ProxyPort,
 		Handler:           router,
 		ReadHeaderTimeout: ReadHeaderTimeout,
 	}
@@ -465,8 +474,8 @@ func (ps *ProxyServer) Start() error {
 	}).Info("Starting proxy server")
 
 	go func() {
-		if err := ps.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			ps.logger.WithError(err).Fatal("Server failed to start")
+		if err := ps.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			ps.logger.WithError(err).Error("Server stopped unexpectedly")
 		}
 	}()
 
@@ -1138,7 +1147,9 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]floa
 	params.Add("count", "50")
 	baseURL.RawQuery = params.Encode()
 
-	ctx, cancel := context.WithTimeout(context.Background(), SimilarSongsTimeout)
+	// Lookups are shared by every shuffle waiting on them, so they aren't tied to one
+	// request, but they are abandoned on shutdown
+	ctx, cancel := context.WithTimeout(ps.ctx, SimilarSongsTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), nil)
 	if err != nil {
