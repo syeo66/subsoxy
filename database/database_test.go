@@ -1732,3 +1732,60 @@ func TestStoreSongsGenreAndYear(t *testing.T) {
 		t.Errorf("Expected genre Pop and year 1986, got %+v", songs)
 	}
 }
+
+func TestClientMetadataMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_client_metadata.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	if err := db.StoreSongs("user1", []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180},
+	}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Recreate a database from before the client metadata columns
+	for _, column := range []string{"album_id", "artist_id", "track", "disc_number", "suffix", "content_type", "bit_rate", "size"} {
+		if _, err := db.conn.Exec(`ALTER TABLE songs DROP COLUMN ` + column); err != nil {
+			t.Fatalf("Failed to set up old schema: %v", err)
+		}
+	}
+	db.Close()
+
+	db, err = New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to reopen database: %v", err)
+	}
+	defer db.Close()
+
+	// Existing songs read back with empty metadata until the next sync fills it in
+	all, err := db.GetAllSongs("user1")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("GetAllSongs after migration = %v, %v; want one song", all, err)
+	}
+	if all[0].AlbumID != "" || all[0].Track != 0 {
+		t.Errorf("Expected empty metadata for a migrated song, got %+v", all[0])
+	}
+
+	song := models.Song{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180,
+		AlbumID: "al-1", ArtistID: "ar-1", Track: 2, DiscNumber: 1, Suffix: "mp3", ContentType: "audio/mpeg", BitRate: 320, Size: 4096}
+	if err := db.StoreSongs("user1", []models.Song{song}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	all, err = db.GetAllSongs("user1")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("GetAllSongs = %v, %v; want one song", all, err)
+	}
+	got := all[0]
+	if got.AlbumID != song.AlbumID || got.ArtistID != song.ArtistID || got.Track != song.Track ||
+		got.DiscNumber != song.DiscNumber || got.Suffix != song.Suffix || got.ContentType != song.ContentType ||
+		got.BitRate != song.BitRate || got.Size != song.Size {
+		t.Errorf("Stored metadata = %+v, want %+v", got, song)
+	}
+}

@@ -422,9 +422,9 @@ func TestProcessScrobbleRecordsSkipWithoutDeadlock(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		server.ProcessScrobble("testuser", "1", false) // now playing song 1
-		server.ProcessScrobble("testuser", "2", false) // song 1 skipped
-		server.ProcessScrobble("testuser", "1", false) // song 2 skipped
+		server.ProcessScrobble("testuser", "", "1", false) // now playing song 1
+		server.ProcessScrobble("testuser", "", "2", false) // song 1 skipped
+		server.ProcessScrobble("testuser", "", "1", false) // song 2 skipped
 	}()
 
 	select {
@@ -2568,6 +2568,10 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 		t.Errorf("search3 sync: %d songs, %d search3 calls, %d folder walks; want %d, 3, 0", count, searches, folders, librarySize)
 	}
 
+	// The walks below find far fewer songs than the search stored. Treat that removal as
+	// confirmed, so these syncs apply what they fetched.
+	server.pendingMassDeletions.Store("user1", time.Now().Add(-MassDeletionConfirmDelay))
+
 	// A server that ignores the offset would page forever; the folder walk takes over instead
 	mu.Lock()
 	ignoreOffset = true
@@ -2583,6 +2587,100 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 	mu.Unlock()
 	if count, searches, folders := sync("empty search"); count != 2 || searches != 1 || folders != 1 {
 		t.Errorf("empty search: %d songs, %d search3 calls, %d folder walks; want 2, 1, 1", count, searches, folders)
+	}
+}
+
+func TestSyncSongsForUserHoldsBackMassDeletion(t *testing.T) {
+	var mu sync.Mutex
+	var library []models.Song
+	for i := range 10 {
+		library = append(library, models.Song{ID: fmt.Sprintf("song%02d", i), Title: "Song", Artist: "Artist", Album: "Album", Duration: 180})
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/search3" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		var page []models.Song
+		if r.URL.Query().Get("songOffset") == "0" {
+			page = library
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"subsonic-response": map[string]interface{}{
+				"status": "ok", "version": "1.15.0", "searchResult3": map[string]interface{}{"song": page},
+			},
+		})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_mass_deletion.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	syncAndCount := func(name string) int {
+		t.Helper()
+		if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+			t.Fatalf("%s: sync failed: %v", name, err)
+		}
+		ids, err := server.db.GetExistingSongIDs("user1")
+		if err != nil {
+			t.Fatalf("%s: failed to count songs: %v", name, err)
+		}
+		return len(ids)
+	}
+
+	if count := syncAndCount("initial"); count != 10 {
+		t.Fatalf("initial: %d songs, want 10", count)
+	}
+
+	// Removing a few songs is applied right away
+	mu.Lock()
+	library = library[:8]
+	mu.Unlock()
+	if count := syncAndCount("small removal"); count != 8 {
+		t.Errorf("small removal: %d songs, want 8", count)
+	}
+
+	// Removing most of the library is held back, also by a sync soon after
+	mu.Lock()
+	library = library[:2]
+	mu.Unlock()
+	if count := syncAndCount("mass removal"); count != 8 {
+		t.Errorf("mass removal: %d songs, want all 8 kept", count)
+	}
+	if count := syncAndCount("mass removal again"); count != 8 {
+		t.Errorf("mass removal again: %d songs, want all 8 kept until the confirm delay passed", count)
+	}
+
+	// A sync after the confirm delay that still sees the removal applies it
+	server.pendingMassDeletions.Store("user1", time.Now().Add(-MassDeletionConfirmDelay))
+	if count := syncAndCount("confirmed"); count != 2 {
+		t.Errorf("confirmed: %d songs, want 2", count)
+	}
+
+	// A sync that finds the library back to normal cancels a pending removal
+	server.pendingMassDeletions.Store("user1", time.Now())
+	mu.Lock()
+	library = append(library, models.Song{ID: "new1", Title: "New", Artist: "Artist", Album: "Album", Duration: 180})
+	mu.Unlock()
+	syncAndCount("recovered")
+	if _, pending := server.pendingMassDeletions.Load("user1"); pending {
+		t.Error("recovered: a sync without a mass removal should clear the pending one")
 	}
 }
 

@@ -33,8 +33,11 @@ const (
 	PlayRatioMaxWeight     = 1.8
 	TwoWeekReplayThreshold = 14  // Minimum days before a song can be replayed (unless no alternatives)
 	MaxSkipTimeoutHours    = 1.0 // Maximum hours to wait before marking as skipped when song duration is unavailable
-	ArtistRatioMinWeight   = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
-	ArtistRatioMaxWeight   = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
+	// A second submission for the same song within half its duration is a client retry rather
+	// than the song played again (e.g. on repeat). Used when the duration is unknown.
+	DuplicateSubmissionFallback = time.Minute
+	ArtistRatioMinWeight        = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
+	ArtistRatioMaxWeight        = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
 	// Bayesian prior parameters for Beta-Binomial model
 	// These represent "pseudo-observations" that regularize estimates when sample size is small
 	BayesianPriorAlpha = 2.0 // Prior "plays" - assumes slight tendency toward playing
@@ -87,7 +90,7 @@ type Service struct {
 	db                  *database.DB
 	logger              *logrus.Logger
 	lastPlayed          map[string]*models.Song  // Map userID to last played song
-	lastScrobble        map[string]*ScrobbleInfo // Map userID to last scrobble info
+	lastScrobble        map[string]*ScrobbleInfo // Map player (see playerKey) to last scrobble info
 	priors              map[string]*userPriors   // Map userID to calculated priors
 	similarSongsFetcher SimilarSongsFetcher
 	similarSongsCache   map[string]*similarSongsEntry
@@ -266,12 +269,29 @@ func (s *Service) getPriors(userID string) *userPriors {
 	return priors
 }
 
+// playerKey identifies one of a user's players by the client name it sends, so that playback on
+// two devices at once doesn't look like each one skipping the other's songs
+func playerKey(userID, client string) string {
+	return userID + "\x00" + client
+}
+
+// duplicateSubmissionWindow is how soon after a submission another one for the same song is
+// taken as a retry. Played again, the song can't be submitted sooner than half its length
+// later, since clients submit at the earliest halfway through.
+func duplicateSubmissionWindow(song *models.Song) time.Duration {
+	if song.Duration <= 0 {
+		return DuplicateSubmissionFallback
+	}
+	return time.Duration(song.Duration) * time.Second / 2
+}
+
 // ProcessScrobble processes a scrobble event with simplified skip detection
 // Returns true if a play event should be recorded, false if it's a duplicate submission
-func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
+// client is the "c" parameter of the scrobble: skips are detected per player.
+func (s *Service) ProcessScrobble(userID, client, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
 	// recordSkipFunc runs after s.mu is released: it writes to the database and may call
 	// back into the service (e.g. InvalidateEmpiricalPriors), which takes s.mu itself.
-	skippedSong, shouldRecord := s.updateScrobbleState(userID, songID, isSubmission)
+	skippedSong, shouldRecord := s.updateScrobbleState(userID, client, songID, isSubmission)
 	if skippedSong != nil {
 		recordSkipFunc(userID, skippedSong)
 	}
@@ -280,7 +300,7 @@ func (s *Service) ProcessScrobble(userID, songID string, isSubmission bool, reco
 
 // updateScrobbleState updates the user's last scrobble under s.mu. It returns the previous
 // song if it should be recorded as skipped, and whether a play event should be recorded.
-func (s *Service) updateScrobbleState(userID, songID string, isSubmission bool) (*models.Song, bool) {
+func (s *Service) updateScrobbleState(userID, client, songID string, isSubmission bool) (*models.Song, bool) {
 	// Fetch current song details to get duration (before locking, as it queries the database)
 	currentSongs, err := s.db.GetSongsByIDs(userID, []string{songID})
 	var currentSong *models.Song
@@ -298,12 +318,14 @@ func (s *Service) updateScrobbleState(userID, songID string, isSubmission bool) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if there was a previous scrobble
-	lastScrobble, hadPreviousScrobble := s.lastScrobble[userID]
+	// Check if there was a previous scrobble from this player
+	player := playerKey(userID, client)
+	lastScrobble, hadPreviousScrobble := s.lastScrobble[player]
 
 	// Check if this is a duplicate submission for the same song
 	// This prevents double-counting when clients retry or send multiple submission=true requests
-	if hadPreviousScrobble && lastScrobble.IsSubmission && isSubmission && lastScrobble.Song.ID == songID {
+	if hadPreviousScrobble && lastScrobble.IsSubmission && isSubmission && lastScrobble.Song.ID == songID &&
+		time.Since(lastScrobble.Timestamp) < duplicateSubmissionWindow(currentSong) {
 		s.logger.WithFields(logrus.Fields{
 			"user_id": userID,
 			"song_id": songID,
@@ -364,7 +386,7 @@ func (s *Service) updateScrobbleState(userID, songID string, isSubmission bool) 
 	}
 
 	// Update the last scrobble info
-	s.lastScrobble[userID] = &ScrobbleInfo{
+	s.lastScrobble[player] = &ScrobbleInfo{
 		Song:         currentSong,
 		IsSubmission: isSubmission,
 		Timestamp:    time.Now(),

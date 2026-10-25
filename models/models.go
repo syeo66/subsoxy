@@ -23,6 +23,60 @@ type Song struct {
 	CoverArt      string    `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
 	Genre         string    `json:"genre,omitempty" xml:"genre,attr,omitempty"`
 	Year          int       `json:"year,omitempty" xml:"year,attr,omitempty"`
+	AlbumID       string    `json:"albumId,omitempty" xml:"albumId,attr,omitempty"`
+	ArtistID      string    `json:"artistId,omitempty" xml:"artistId,attr,omitempty"`
+	Track         int       `json:"track,omitempty" xml:"track,attr,omitempty"`
+	DiscNumber    int       `json:"discNumber,omitempty" xml:"discNumber,attr,omitempty"`
+	Suffix        string    `json:"suffix,omitempty" xml:"suffix,attr,omitempty"`
+	ContentType   string    `json:"contentType,omitempty" xml:"contentType,attr,omitempty"`
+	BitRate       int       `json:"bitRate,omitempty" xml:"bitRate,attr,omitempty"`
+	Size          int64     `json:"size,omitempty" xml:"size,attr,omitempty"`
+}
+
+// Child is a song as returned to Subsonic clients: the API's Child type, without the play
+// statistics Song carries for weighting
+type Child struct {
+	ID          string `json:"id" xml:"id,attr"`
+	IsDir       bool   `json:"isDir" xml:"isDir,attr"`
+	Title       string `json:"title" xml:"title,attr"`
+	Album       string `json:"album,omitempty" xml:"album,attr,omitempty"`
+	Artist      string `json:"artist,omitempty" xml:"artist,attr,omitempty"`
+	Track       int    `json:"track,omitempty" xml:"track,attr,omitempty"`
+	DiscNumber  int    `json:"discNumber,omitempty" xml:"discNumber,attr,omitempty"`
+	Year        int    `json:"year,omitempty" xml:"year,attr,omitempty"`
+	Genre       string `json:"genre,omitempty" xml:"genre,attr,omitempty"`
+	CoverArt    string `json:"coverArt,omitempty" xml:"coverArt,attr,omitempty"`
+	Size        int64  `json:"size,omitempty" xml:"size,attr,omitempty"`
+	ContentType string `json:"contentType,omitempty" xml:"contentType,attr,omitempty"`
+	Suffix      string `json:"suffix,omitempty" xml:"suffix,attr,omitempty"`
+	Duration    int    `json:"duration,omitempty" xml:"duration,attr,omitempty"`
+	BitRate     int    `json:"bitRate,omitempty" xml:"bitRate,attr,omitempty"`
+	AlbumID     string `json:"albumId,omitempty" xml:"albumId,attr,omitempty"`
+	ArtistID    string `json:"artistId,omitempty" xml:"artistId,attr,omitempty"`
+	Type        string `json:"type,omitempty" xml:"type,attr,omitempty"`
+}
+
+// NewChild returns the client-facing form of a song
+func NewChild(song Song) Child {
+	return Child{
+		ID:          song.ID,
+		Title:       song.Title,
+		Album:       song.Album,
+		Artist:      song.Artist,
+		Track:       song.Track,
+		DiscNumber:  song.DiscNumber,
+		Year:        song.Year,
+		Genre:       song.Genre,
+		CoverArt:    song.CoverArt,
+		Size:        song.Size,
+		ContentType: song.ContentType,
+		Suffix:      song.Suffix,
+		Duration:    song.Duration,
+		BitRate:     song.BitRate,
+		AlbumID:     song.AlbumID,
+		ArtistID:    song.ArtistID,
+		Type:        "music",
+	}
 }
 
 type PlayEvent struct {
@@ -121,5 +175,5 @@ type XMLError struct {
 
 type XMLSongs struct {
 	XMLName xml.Name `xml:"songs"`
-	Song    []Song   `xml:"song"`
+	Song    []Child  `xml:"song"`
 }

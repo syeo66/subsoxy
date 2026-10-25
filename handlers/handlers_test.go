@@ -457,7 +457,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedSongID = songID
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -500,7 +500,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -535,7 +535,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -570,7 +570,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -605,7 +605,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -642,7 +642,7 @@ func TestHandleScrobble(t *testing.T) {
 			recorded[songID] = at
 		}
 
-		handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, func(string, string) {}, func(string, string, bool) bool { return true })
+		handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, func(string, string) {}, func(string, string, string, bool) bool { return true })
 
 		if len(recorded) != 3 {
 			t.Fatalf("Expected 3 recorded plays, got %d", len(recorded))
@@ -1277,6 +1277,88 @@ func TestHandleShuffleFilters(t *testing.T) {
 	t.Run("music folder is forwarded", func(t *testing.T) {
 		if handled, _, _ := shuffle(t, "musicFolderId=1"); handled {
 			t.Error("Expected a music folder request to be forwarded to upstream")
+		}
+	})
+}
+
+// TestHandleShuffleResponseFields checks that songs are returned with the Subsonic Child
+// fields clients use, and without the play statistics kept for weighting
+func TestHandleShuffleResponseFields(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_response_fields.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.StoreSongs("testuser", []models.Song{{
+		ID: "1", Title: "Song 1", Artist: "Artist 1", Album: "Album 1", Duration: 300,
+		AlbumID: "al-1", ArtistID: "ar-1", Track: 3, DiscNumber: 1,
+		Suffix: "flac", ContentType: "audio/flac", BitRate: 900, Size: 12345678,
+	}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	if err := db.RecordPlayEvent("testuser", "1", "play", nil); err != nil {
+		t.Fatalf("Failed to record play: %v", err)
+	}
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	t.Run("JSON", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=json", nil)
+		w := httptest.NewRecorder()
+		handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+
+		var response struct {
+			SubsonicResponse struct {
+				Songs struct {
+					Song []map[string]any `json:"song"`
+				} `json:"songs"`
+			} `json:"subsonic-response"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+		if len(response.SubsonicResponse.Songs.Song) != 1 {
+			t.Fatalf("Expected 1 song, got %d", len(response.SubsonicResponse.Songs.Song))
+		}
+		song := response.SubsonicResponse.Songs.Song[0]
+
+		want := map[string]any{
+			"id": "1", "isDir": false, "title": "Song 1", "albumId": "al-1", "artistId": "ar-1",
+			"track": 3.0, "discNumber": 1.0, "suffix": "flac", "contentType": "audio/flac",
+			"bitRate": 900.0, "size": 12345678.0, "duration": 300.0, "type": "music",
+		}
+		for key, value := range want {
+			if song[key] != value {
+				t.Errorf("Field %s = %v, want %v", key, song[key], value)
+			}
+		}
+		for _, key := range []string{"lastPlayed", "lastSkipped", "playCount", "skipCount", "adjustedPlays", "adjustedSkips", "name"} {
+			if _, present := song[key]; present {
+				t.Errorf("Internal field %s should not be in the response", key)
+			}
+		}
+	})
+
+	t.Run("XML", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=xml", nil)
+		w := httptest.NewRecorder()
+		handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+
+		body := w.Body.String()
+		for _, attr := range []string{`albumId="al-1"`, `suffix="flac"`, `type="music"`, `isDir="false"`} {
+			if !strings.Contains(body, attr) {
+				t.Errorf("Expected %s in XML response: %s", attr, body)
+			}
+		}
+		if strings.Contains(body, "lastPlayed") || strings.Contains(body, "adjustedPlays") {
+			t.Errorf("Internal fields should not be in the XML response: %s", body)
 		}
 	})
 }

@@ -67,7 +67,15 @@ const songColumns = `id, title, artist, album, duration,
 		COALESCE(adjusted_at, 0) as adjusted_at,
 		COALESCE(cover_art, '') as cover_art,
 		COALESCE(genre, '') as genre,
-		COALESCE(year, 0) as year`
+		COALESCE(year, 0) as year,
+		COALESCE(album_id, '') as album_id,
+		COALESCE(artist_id, '') as artist_id,
+		COALESCE(track, 0) as track,
+		COALESCE(disc_number, 0) as disc_number,
+		COALESCE(suffix, '') as suffix,
+		COALESCE(content_type, '') as content_type,
+		COALESCE(bit_rate, 0) as bit_rate,
+		COALESCE(size, 0) as size`
 
 // scanSong reads a row selected with songColumns, with the decayed counters as of now
 func scanSong(rows *sql.Rows, now time.Time) (models.Song, error) {
@@ -76,7 +84,8 @@ func scanSong(rows *sql.Rows, now time.Time) (models.Song, error) {
 	var adjustedAt int64
 	err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, &song.Duration,
 		&lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount,
-		&song.AdjustedPlays, &song.AdjustedSkips, &adjustedAt, &song.CoverArt, &song.Genre, &song.Year)
+		&song.AdjustedPlays, &song.AdjustedSkips, &adjustedAt, &song.CoverArt, &song.Genre, &song.Year,
+		&song.AlbumID, &song.ArtistID, &song.Track, &song.DiscNumber, &song.Suffix, &song.ContentType, &song.BitRate, &song.Size)
 	if err != nil {
 		return song, err
 	}
@@ -284,6 +293,11 @@ func (db *DB) createTables() error {
 	// Add genre and year columns if they don't exist
 	if err := db.addGenreYearColumns(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add genre and year columns")
+	}
+
+	// Add the columns getRandomSongs returns to clients if they don't exist
+	if err := db.addClientMetadataColumns(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add client metadata columns")
 	}
 
 	// Drop the obsolete song_transitions table if it still exists
@@ -499,6 +513,33 @@ func (db *DB) addGenreYearColumns() error {
 	return nil
 }
 
+// addClientMetadataColumns adds the song fields clients expect in a getRandomSongs response
+// (album and artist ids, track, file format). Existing songs get them on the next library
+// sync, which sees their metadata as changed.
+func (db *DB) addClientMetadataColumns() error {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='album_id'`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for album_id column")
+	}
+	if count > 0 {
+		return nil
+	}
+
+	for _, column := range []string{
+		"album_id TEXT", "artist_id TEXT", "track INTEGER", "disc_number INTEGER",
+		"suffix TEXT", "content_type TEXT", "bit_rate INTEGER", "size INTEGER",
+	} {
+		if _, err := db.conn.Exec(`ALTER TABLE songs ADD COLUMN ` + column); err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add client metadata column").
+				WithContext("column", column)
+		}
+	}
+
+	db.logger.Info("Added client metadata columns to songs table")
+	return nil
+}
+
 // dropSongTransitionsTable removes the song_transitions table (and its indexes), plus any backup
 // copy made by migrateExistingData, left over from databases created before transition tracking
 // was removed, then reclaims the freed disk space.
@@ -566,8 +607,9 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 	defer tx.Rollback()
 
 	// Only the metadata is updated for existing songs, so play history is kept
-	stmt, err := tx.Prepare(`INSERT INTO songs (id, user_id, title, artist, album, duration, cover_art, genre, year)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	stmt, err := tx.Prepare(`INSERT INTO songs (id, user_id, title, artist, album, duration, cover_art, genre, year,
+			album_id, artist_id, track, disc_number, suffix, content_type, bit_rate, size)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, user_id) DO UPDATE SET
 			title = excluded.title,
 			artist = excluded.artist,
@@ -575,7 +617,15 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 			duration = excluded.duration,
 			cover_art = excluded.cover_art,
 			genre = excluded.genre,
-			year = excluded.year`)
+			year = excluded.year,
+			album_id = excluded.album_id,
+			artist_id = excluded.artist_id,
+			track = excluded.track,
+			disc_number = excluded.disc_number,
+			suffix = excluded.suffix,
+			content_type = excluded.content_type,
+			bit_rate = excluded.bit_rate,
+			size = excluded.size`)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to prepare song insert statement")
 	}
@@ -583,7 +633,8 @@ func (db *DB) StoreSongs(userID string, songs []models.Song) error {
 
 	// One failed write fails the whole batch, rather than reporting success for a partial store
 	for _, song := range songs {
-		if _, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.Genre, song.Year); err != nil {
+		if _, err := stmt.Exec(song.ID, userID, song.Title, song.Artist, song.Album, song.Duration, song.CoverArt, song.Genre, song.Year,
+			song.AlbumID, song.ArtistID, song.Track, song.DiscNumber, song.Suffix, song.ContentType, song.BitRate, song.Size); err != nil {
 			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to store song").
 				WithContext("songId", song.ID).
 				WithContext("userID", userID)

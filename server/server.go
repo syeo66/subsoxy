@@ -50,10 +50,14 @@ const (
 	// Similarity lookups run while a client waits for getRandomSongs, so they give up sooner.
 	SimilarSongsTimeout = 5 * time.Second
 	// Songs requested per search3 page during library sync
-	LibraryPageSize    = 500
-	ReadHeaderTimeout  = 10 * time.Second
-	SubsonicAPIVersion = "1.15.0"
-	ClientName         = "subsoxy"
+	LibraryPageSize = 500
+	// A sync that would remove more than this share of a user's stored songs is held back
+	// until a later sync, at least MassDeletionConfirmDelay after it, sees the same
+	MassDeletionFraction     = 0.5
+	MassDeletionConfirmDelay = 30 * time.Minute
+	ReadHeaderTimeout        = 10 * time.Second
+	SubsonicAPIVersion       = "1.15.0"
+	ClientName               = "subsoxy"
 )
 
 // ASCII control character constants
@@ -82,6 +86,8 @@ type ProxyServer struct {
 	credentialWg      sync.WaitGroup // WaitGroup for tracking in-flight credential validations and the syncs they start
 	syncWg            sync.WaitGroup // Tracks the periodic sync loop
 	syncingUsers      sync.Map       // Usernames with a library sync in progress
+	// Usernames whose last sync held back a mass deletion, with when it was first seen
+	pendingMassDeletions sync.Map
 }
 
 func New(cfg *config.Config) (*ProxyServer, error) {
@@ -636,12 +642,16 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 		}
 	}
 
-	// Deleting a song also deletes its play history, so only do it after a complete fetch
+	// Deleting a song also deletes its play statistics, so only do it after a complete fetch
 	if incomplete && len(songsToDelete) > 0 {
 		ps.logger.WithFields(logrus.Fields{
 			"user":            sanitizeUsername(username),
 			"songs_to_delete": len(songsToDelete),
 		}).Warn("Library fetch was incomplete, keeping songs missing from upstream until the next complete sync")
+		songsToDelete = nil
+	}
+
+	if !ps.confirmDeletion(username, len(songsToDelete), len(existingSongs)) {
 		songsToDelete = nil
 	}
 
@@ -695,6 +705,32 @@ func (ps *ProxyServer) syncSongsForUser(username, password string) error {
 	ps.shuffle.InvalidateEmpiricalPriors(username)
 
 	return nil
+}
+
+// confirmDeletion reports whether a sync may delete toDelete of the user's stored songs. A
+// complete fetch missing most of the library more likely means upstream answered wrongly (a
+// permission change, a misconfigured music folder) than that the music is gone, so a removal
+// that large is only applied once a sync at least MassDeletionConfirmDelay later sees it too.
+func (ps *ProxyServer) confirmDeletion(username string, toDelete, stored int) bool {
+	if toDelete == 0 || float64(toDelete) <= MassDeletionFraction*float64(stored) {
+		ps.pendingMassDeletions.Delete(username)
+		return true
+	}
+
+	fields := logrus.Fields{
+		"user":            sanitizeUsername(username),
+		"songs_to_delete": toDelete,
+		"stored_songs":    stored,
+	}
+	firstSeen, pending := ps.pendingMassDeletions.LoadOrStore(username, time.Now())
+	if pending && time.Since(firstSeen.(time.Time)) >= MassDeletionConfirmDelay {
+		ps.pendingMassDeletions.Delete(username)
+		ps.logger.WithFields(fields).Warn("Upstream library still missing most stored songs, deleting them")
+		return true
+	}
+
+	ps.logger.WithFields(fields).Warn("Upstream library is missing most stored songs, keeping them until a later sync confirms the removal")
+	return false
 }
 
 // fetchLibrary returns every song in the user's library. It pages through search3 with an
@@ -1107,12 +1143,20 @@ func songHasChanged(existing, new models.Song) bool {
 		existing.Duration != new.Duration ||
 		existing.CoverArt != new.CoverArt ||
 		existing.Genre != new.Genre ||
-		existing.Year != new.Year
+		existing.Year != new.Year ||
+		existing.AlbumID != new.AlbumID ||
+		existing.ArtistID != new.ArtistID ||
+		existing.Track != new.Track ||
+		existing.DiscNumber != new.DiscNumber ||
+		existing.Suffix != new.Suffix ||
+		existing.ContentType != new.ContentType ||
+		existing.BitRate != new.BitRate ||
+		existing.Size != new.Size
 }
 
 // ProcessScrobble processes a scrobble event and handles pending songs
 // Returns true if a play event should be recorded, false if it's a duplicate submission
-func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool) bool {
+func (ps *ProxyServer) ProcessScrobble(userID, client, songID string, isSubmission bool) bool {
 	recordSkipFunc := func(userID string, song *models.Song) {
 		err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
 		if err != nil {
@@ -1124,7 +1168,7 @@ func (ps *ProxyServer) ProcessScrobble(userID, songID string, isSubmission bool)
 		}
 		ps.shuffle.InvalidateEmpiricalPriors(userID)
 	}
-	return ps.shuffle.ProcessScrobble(userID, songID, isSubmission, recordSkipFunc)
+	return ps.shuffle.ProcessScrobble(userID, client, songID, isSubmission, recordSkipFunc)
 }
 
 // fetchSimilarSongs queries the upstream's getSonicSimilarTracks endpoint provided by the

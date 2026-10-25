@@ -12,12 +12,12 @@ All data is kept per user. Each user has their own songs, events and statistics 
 
 Only `/rest/scrobble` affects tracking. `/rest/stream` is logged but ignored, so a client that preloads tracks doesn't produce fake skips.
 
-For each user, Subsoxy remembers the last scrobble it saw. When a new scrobble arrives:
+For each of a user's players, told apart by the client name in the `c` parameter, Subsoxy remembers the last scrobble it saw, so playing on two devices at once doesn't make each look like it skips the other's songs. When a new scrobble arrives:
 
 | Situation | Result |
 |-----------|--------|
 | `submission=true` (or no `submission` parameter, which the Subsonic API treats as `true`) | Recorded as a **play**, at the time given by the `time` parameter if the client sent one. The song becomes the user's "last played" track |
-| `submission=true` again for the same song | Ignored, so client retries don't count twice |
+| `submission=true` again for the same song, within half its duration (1 minute if unknown) | Ignored, so client retries don't count twice. Later, it's the song played again (e.g. on repeat) and counts as another play |
 | Previous scrobble was `submission=false`, the new one is a different song, and less than 2× the previous song's duration has passed | Previous song recorded as a **skip** |
 | Same as above, but more than 2× the duration has passed | No skip. The user probably paused or stopped |
 | Previous song's duration is unknown | The cut-off is 1 hour (`MaxSkipTimeoutHours`) instead of 2× duration |
@@ -119,7 +119,7 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=secret&size=50&f=json"
 
 - `size`: defaults to 50, and zero or negative values also get 50. Larger values than 10,000 are served as 10,000. A value that isn't an integer returns a Subsonic error (code 0).
 - `f`: `json` (default) or `xml`.
-- Each song includes `id`, `title`, `artist`, `album`, `duration` and, when available, `coverArt`. You can pass `coverArt` straight to the upstream `/rest/getCoverArt`.
+- Each song is a Subsonic `Child` with `id`, `isDir`, `title`, `type` (`music`) and, when known, `artist`, `album`, `duration`, `track`, `discNumber`, `year`, `genre`, `coverArt`, `albumId`, `artistId`, `suffix`, `contentType`, `bitRate` and `size`. You can pass `coverArt` straight to the upstream `/rest/getCoverArt`. Songs synced before these fields existed get them on the next library sync. Subsoxy's own play statistics aren't included.
 
 ## Library sync
 
@@ -133,7 +133,7 @@ A sync pages through all songs with `search3` and an empty query, 500 songs per 
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.
-- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts. Each sync request gives up after 30s, so a stalled upstream server can't block later syncs.
+- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts. A complete fetch that would delete more than half of a user's stored songs is held back too, since that more likely means upstream answered wrongly (a permission change, a misconfigured music folder) than that the music is gone. It is applied once a sync at least 30 minutes later (`MassDeletionConfirmDelay`) still sees it. Each sync request gives up after 30s, so a stalled upstream server can't block later syncs.
 
 Each sync logs added, updated, unchanged and deleted counts per user.
 

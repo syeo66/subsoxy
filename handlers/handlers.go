@@ -92,6 +92,11 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 		status = "failed"
 	}
 
+	children := make([]models.Child, len(songs))
+	for i, song := range songs {
+		children[i] = models.NewChild(song)
+	}
+
 	if format == "xml" {
 		xmlResponse := models.XMLSubsonicResponse{
 			Status:  status,
@@ -99,7 +104,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 			Error:   subsonicErr,
 		}
 		if subsonicErr == nil {
-			xmlResponse.Songs = &models.XMLSongs{Song: songs}
+			xmlResponse.Songs = &models.XMLSongs{Song: children}
 		}
 
 		w.Header().Set("Content-Type", "application/xml")
@@ -118,7 +123,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 		}
 	} else {
 		body["songs"] = map[string]interface{}{
-			"song": songs,
+			"song": children,
 		}
 	}
 
@@ -278,7 +283,7 @@ func scrobbleTime(times []string, i int, now time.Time) time.Time {
 	return now
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(userID, songID, eventType string, at time.Time), setLastPlayed func(string, string), processScrobbleFunc func(string, string, bool) bool) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(userID, songID, eventType string, at time.Time), setLastPlayed func(string, string), processScrobbleFunc func(userID, client, songID string, isSubmission bool) bool) bool {
 	userID := r.FormValue("u") // Also parses the form if that hasn't happened yet
 	songIDs := r.Form["id"]
 	times := r.Form["time"]
@@ -297,6 +302,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 
 	// The Subsonic API treats a scrobble without "submission" as a submission
 	isSubmission := r.FormValue("submission") != "false"
+	client := r.FormValue("c")
 	sanitizedUserID := SanitizeForLogging(userID)
 	now := time.Now()
 
@@ -310,7 +316,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 
 		// Process pending songs first (may mark earlier songs as skipped)
 		// Returns true if this is a new play event, false if it's a duplicate
-		shouldRecord := processScrobbleFunc(userID, songID, isSubmission)
+		shouldRecord := processScrobbleFunc(userID, client, songID, isSubmission)
 
 		if isSubmission && shouldRecord {
 			recordFunc(userID, songID, "play", scrobbleTime(times, i, now))

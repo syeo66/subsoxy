@@ -1048,28 +1048,28 @@ func TestProcessScrobbleDuplicateDetection(t *testing.T) {
 	}
 
 	t.Run("First submission should allow recording", func(t *testing.T) {
-		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", song1, true, recordSkipFunc)
 		if !shouldRecord {
 			t.Error("First submission should allow recording")
 		}
 	})
 
 	t.Run("Duplicate submission for same song should NOT allow recording", func(t *testing.T) {
-		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", song1, true, recordSkipFunc)
 		if shouldRecord {
 			t.Error("Duplicate submission for same song should NOT allow recording")
 		}
 	})
 
 	t.Run("Third duplicate submission should still NOT allow recording", func(t *testing.T) {
-		shouldRecord := service.ProcessScrobble(userID, song1, true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", song1, true, recordSkipFunc)
 		if shouldRecord {
 			t.Error("Third duplicate submission for same song should NOT allow recording")
 		}
 	})
 
 	t.Run("Different song submission should allow recording", func(t *testing.T) {
-		shouldRecord := service.ProcessScrobble(userID, song2, true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", song2, true, recordSkipFunc)
 		if !shouldRecord {
 			t.Error("Submission for different song should allow recording")
 		}
@@ -1079,13 +1079,13 @@ func TestProcessScrobbleDuplicateDetection(t *testing.T) {
 		song3 := "song3"
 
 		// First scrobble without submission (now playing)
-		shouldRecord := service.ProcessScrobble(userID, song3, false, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", song3, false, recordSkipFunc)
 		if !shouldRecord {
 			t.Error("Non-submission scrobble should allow recording (though handler won't record it)")
 		}
 
 		// Then scrobble with submission (actual play)
-		shouldRecord = service.ProcessScrobble(userID, song3, true, recordSkipFunc)
+		shouldRecord = service.ProcessScrobble(userID, "", song3, true, recordSkipFunc)
 		if !shouldRecord {
 			t.Error("Submission after non-submission for same song should allow recording")
 		}
@@ -1099,10 +1099,10 @@ func TestProcessScrobbleDuplicateDetection(t *testing.T) {
 		skipRecords = make(map[string]int)
 
 		// Scrobble song4 without submission
-		service.ProcessScrobble(userID, song4, false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", song4, false, recordSkipFunc)
 
 		// Scrobble song5 without submission - should mark song4 as skipped
-		service.ProcessScrobble(userID, song5, false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", song5, false, recordSkipFunc)
 
 		if skipRecords[song4] != 1 {
 			t.Errorf("Expected song4 to be marked as skipped once, got %d", skipRecords[song4])
@@ -1117,10 +1117,10 @@ func TestProcessScrobbleDuplicateDetection(t *testing.T) {
 		skipRecords = make(map[string]int)
 
 		// Scrobble song6 WITH submission
-		service.ProcessScrobble(userID, song6, true, recordSkipFunc)
+		service.ProcessScrobble(userID, "", song6, true, recordSkipFunc)
 
 		// Scrobble song7 - song6 should NOT be marked as skipped (it was a definitive play)
-		service.ProcessScrobble(userID, song7, true, recordSkipFunc)
+		service.ProcessScrobble(userID, "", song7, true, recordSkipFunc)
 
 		if skipRecords[song6] != 0 {
 			t.Errorf("Expected song6 NOT to be marked as skipped, got %d", skipRecords[song6])
@@ -1165,7 +1165,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 
 	t.Run("Single play should result in play_count=1", func(t *testing.T) {
 		// Process scrobble with submission=true
-		shouldRecord := service.ProcessScrobble(userID, "song1", true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", "song1", true, recordSkipFunc)
 		if !shouldRecord {
 			t.Fatal("First submission should allow recording")
 		}
@@ -1194,7 +1194,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 
 	t.Run("Duplicate submission should NOT increment play_count again", func(t *testing.T) {
 		// Try to submit the same song again (duplicate/retry)
-		shouldRecord := service.ProcessScrobble(userID, "song1", true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", "song1", true, recordSkipFunc)
 		if shouldRecord {
 			t.Fatal("Duplicate submission should NOT allow recording")
 		}
@@ -1221,7 +1221,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 
 	t.Run("New song play should work correctly after duplicate", func(t *testing.T) {
 		// Process scrobble for song2 with submission=true
-		shouldRecord := service.ProcessScrobble(userID, "song2", true, recordSkipFunc)
+		shouldRecord := service.ProcessScrobble(userID, "", "song2", true, recordSkipFunc)
 		if !shouldRecord {
 			t.Fatal("Submission for different song should allow recording")
 		}
@@ -1288,13 +1288,13 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song1 (60s duration) without submission
-		service.ProcessScrobble(userID, "song1", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song1", false, recordSkipFunc)
 
 		// Wait 100ms (much less than 2x60s = 120s)
 		time.Sleep(100 * time.Millisecond)
 
 		// Scrobble song2 - song1 should be marked as skipped
-		service.ProcessScrobble(userID, "song2", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song2", false, recordSkipFunc)
 
 		if skipRecords["song1"] != 1 {
 			t.Errorf("Expected song1 to be marked as skipped once, got %d", skipRecords["song1"])
@@ -1311,17 +1311,17 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song1 (60s duration) without submission
-		service.ProcessScrobble(userID, "song1", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song1", false, recordSkipFunc)
 
 		// Manually set the timestamp to simulate time passing (more than 2x60s = 120s)
 		service.mu.Lock()
-		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+		if lastScrobble, exists := service.lastScrobble[playerKey(userID, "")]; exists {
 			lastScrobble.Timestamp = time.Now().Add(-130 * time.Second) // 130 seconds ago (> 2x60s)
 		}
 		service.mu.Unlock()
 
 		// Scrobble song2 - song1 should NOT be marked as skipped (too much time passed)
-		service.ProcessScrobble(userID, "song2", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song2", false, recordSkipFunc)
 
 		if skipRecords["song1"] != 0 {
 			t.Errorf("Expected song1 NOT to be marked as skipped (too much time), got %d", skipRecords["song1"])
@@ -1338,13 +1338,13 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song4 (0s duration) without submission
-		service.ProcessScrobble(userID, "song4", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song4", false, recordSkipFunc)
 
 		// Wait 100ms
 		time.Sleep(100 * time.Millisecond)
 
 		// Scrobble song3 - song4 should be marked as skipped (fallback behavior when duration is 0)
-		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song3", false, recordSkipFunc)
 
 		if skipRecords["song4"] != 1 {
 			t.Errorf("Expected song4 to be marked as skipped (fallback), got %d", skipRecords["song4"])
@@ -1361,17 +1361,17 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song4 (0s duration) without submission
-		service.ProcessScrobble(userID, "song4", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song4", false, recordSkipFunc)
 
 		// Manually set the timestamp to simulate time exceeding the max timeout (1 hour + 1 minute)
 		service.mu.Lock()
-		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+		if lastScrobble, exists := service.lastScrobble[playerKey(userID, "")]; exists {
 			lastScrobble.Timestamp = time.Now().Add(-61 * time.Minute) // 61 minutes ago (> 1 hour)
 		}
 		service.mu.Unlock()
 
 		// Scrobble song3 - song4 should NOT be marked as skipped (exceeded max timeout)
-		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song3", false, recordSkipFunc)
 
 		if skipRecords["song4"] != 0 {
 			t.Errorf("Expected song4 NOT to be marked as skipped (exceeded max timeout), got %d", skipRecords["song4"])
@@ -1388,17 +1388,17 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song4 (0s duration) without submission
-		service.ProcessScrobble(userID, "song4", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song4", false, recordSkipFunc)
 
 		// Manually set the timestamp to simulate time within the max timeout (30 minutes)
 		service.mu.Lock()
-		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+		if lastScrobble, exists := service.lastScrobble[playerKey(userID, "")]; exists {
 			lastScrobble.Timestamp = time.Now().Add(-30 * time.Minute) // 30 minutes ago (< 1 hour)
 		}
 		service.mu.Unlock()
 
 		// Scrobble song3 - song4 should be marked as skipped (within max timeout)
-		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song3", false, recordSkipFunc)
 
 		if skipRecords["song4"] != 1 {
 			t.Errorf("Expected song4 to be marked as skipped (within max timeout), got %d", skipRecords["song4"])
@@ -1415,17 +1415,17 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song2 (300s = 5 min duration) without submission
-		service.ProcessScrobble(userID, "song2", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song2", false, recordSkipFunc)
 
 		// Manually set the timestamp to simulate 550 seconds passing (less than 2x300s = 600s)
 		service.mu.Lock()
-		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+		if lastScrobble, exists := service.lastScrobble[playerKey(userID, "")]; exists {
 			lastScrobble.Timestamp = time.Now().Add(-550 * time.Second)
 		}
 		service.mu.Unlock()
 
 		// Scrobble song3 - song2 should be marked as skipped (still within threshold)
-		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song3", false, recordSkipFunc)
 
 		if skipRecords["song2"] != 1 {
 			t.Errorf("Expected song2 to be marked as skipped (within 2x300s threshold), got %d", skipRecords["song2"])
@@ -1442,17 +1442,17 @@ func TestProcessScrobbleTimeBasedSkipDetection(t *testing.T) {
 		}
 
 		// Scrobble song2 (300s = 5 min duration) without submission
-		service.ProcessScrobble(userID, "song2", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song2", false, recordSkipFunc)
 
 		// Manually set the timestamp to simulate 650 seconds passing (more than 2x300s = 600s)
 		service.mu.Lock()
-		if lastScrobble, exists := service.lastScrobble[userID]; exists {
+		if lastScrobble, exists := service.lastScrobble[playerKey(userID, "")]; exists {
 			lastScrobble.Timestamp = time.Now().Add(-650 * time.Second)
 		}
 		service.mu.Unlock()
 
 		// Scrobble song3 - song2 should NOT be marked as skipped (exceeded threshold)
-		service.ProcessScrobble(userID, "song3", false, recordSkipFunc)
+		service.ProcessScrobble(userID, "", "song3", false, recordSkipFunc)
 
 		if skipRecords["song2"] != 0 {
 			t.Errorf("Expected song2 NOT to be marked as skipped (exceeded 2x300s threshold), got %d", skipRecords["song2"])
@@ -1722,4 +1722,66 @@ func TestGetWeightedShuffledSongsStopsWaitingWhenCancelled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Shuffle kept waiting on the similarity lookup after cancellation")
 	}
+}
+
+// TestProcessScrobblePerPlayer checks that skips are detected per player, and that a song
+// played again on repeat counts again while a quick resubmission doesn't
+func TestProcessScrobblePerPlayer(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_per_player.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	if err := db.StoreSongs(userID, []models.Song{
+		{ID: "song1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "song2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 200},
+	}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	t.Run("Players don't skip each other's songs", func(t *testing.T) {
+		service := New(db, logger)
+		skips := map[string]int{}
+		recordSkip := func(_ string, song *models.Song) { skips[song.ID]++ }
+
+		service.ProcessScrobble(userID, "phone", "song1", false, recordSkip)
+		service.ProcessScrobble(userID, "desktop", "song2", false, recordSkip)
+		if len(skips) != 0 {
+			t.Errorf("Expected no skips across players, got %v", skips)
+		}
+
+		// The same player moving on still skips
+		service.ProcessScrobble(userID, "phone", "song2", false, recordSkip)
+		if skips["song1"] != 1 {
+			t.Errorf("Expected song1 skipped on the phone, got %v", skips)
+		}
+	})
+
+	t.Run("Repeat play counts again after half the song", func(t *testing.T) {
+		service := New(db, logger)
+		noSkip := func(string, *models.Song) {}
+
+		if !service.ProcessScrobble(userID, "phone", "song1", true, noSkip) {
+			t.Fatal("First submission should be recorded")
+		}
+		if service.ProcessScrobble(userID, "phone", "song1", true, noSkip) {
+			t.Error("Immediate resubmission should be ignored as a retry")
+		}
+
+		service.mu.Lock()
+		service.lastScrobble[playerKey(userID, "phone")].Timestamp = time.Now().Add(-91 * time.Second)
+		service.mu.Unlock()
+
+		if !service.ProcessScrobble(userID, "phone", "song1", true, noSkip) {
+			t.Error("Submission more than half of the 180s song later should be recorded as another play")
+		}
+	})
 }
