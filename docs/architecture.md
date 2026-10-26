@@ -72,18 +72,10 @@ CREATE TABLE songs (
     PRIMARY KEY (id, user_id)
 );
 
-CREATE TABLE play_events (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       TEXT NOT NULL,
-    song_id       TEXT NOT NULL,
-    event_type    TEXT NOT NULL,           -- play | skip
-    timestamp     DATETIME NOT NULL,
-    previous_song TEXT
-);
-
-CREATE INDEX idx_songs_user_id         ON songs(user_id);
-CREATE INDEX idx_play_events_user_id   ON play_events(user_id);
+CREATE INDEX idx_songs_user_id_id ON songs(user_id, id);
 ```
+
+Plays and skips aren't logged individually: each one updates the counters on its song's row, which hold everything the shuffle uses.
 
 There's no separate artist table. The shuffle's artist factor sums `adjusted_plays`/`adjusted_skips` from `songs` (`GetAllArtistAdjustedStats`, one grouped query per shuffle).
 
@@ -95,6 +87,7 @@ These run automatically at startup and are idempotent:
 - Add missing columns `cover_art`, `last_skipped`, `adjusted_plays`, `adjusted_skips`, `adjusted_at`, `genre`, `year`. The adjusted values start out equal to the raw counts. Genre and year are filled in by the next library sync.
 - Drop the old `song_transitions` table (and its indexes and `song_transitions_backup`), then `VACUUM`. That table grew quadratically with library size and rarely affected the shuffle.
 - Drop the old `artist_stats` table (and its indexes). It held raw per-artist counts that the shuffle no longer read.
+- Drop the old `play_events` table (and its indexes and `play_events_backup`), then `VACUUM`. It logged every play and skip but was never read.
 
 ### Connection pool
 

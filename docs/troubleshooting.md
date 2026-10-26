@@ -54,7 +54,6 @@ You've hit the rate limit. Raise it (`-rate-limit-rps 200 -rate-limit-burst 400`
 | `[database:CONNECTION_FAILED]` | File permissions (`ls -la subsoxy.db`), another process holding a lock (`lsof subsoxy.db`), free disk space |
 | `[database:QUERY_FAILED]` | `sqlite3 subsoxy.db "PRAGMA integrity_check;"` and `.schema` |
 | Corrupt database | Move it aside and restart. A fresh schema is created, but play history is lost |
-| DB file keeps growing | Optionally prune old events: `DELETE FROM play_events WHERE timestamp < datetime('now','-1 year'); VACUUM;` |
 | Pool errors under load | Try conservative settings: `-db-max-open-conns 10 -db-max-idle-conns 2` |
 
 The first start after upgrading from a version that still had `song_transitions` runs a `VACUUM`. That can take a while on a large database.

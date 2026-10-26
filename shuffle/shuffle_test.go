@@ -620,12 +620,12 @@ func TestGetWeightedShuffledSongsWithHistory(t *testing.T) {
 
 	// Song 2 was heard more recently than song 1, both within the 2-week replay window
 	now := time.Now()
-	err = db.RecordPlayEventAt("testuser", "1", "play", nil, now.Add(-3*24*time.Hour))
+	err = db.RecordPlayEventAt("testuser", "1", "play", now.Add(-3*24*time.Hour))
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
 	}
 
-	err = db.RecordPlayEventAt("testuser", "2", "skip", nil, now.Add(-1*24*time.Hour))
+	err = db.RecordPlayEventAt("testuser", "2", "skip", now.Add(-1*24*time.Hour))
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
@@ -680,7 +680,7 @@ func TestGetWeightedShuffledSongsFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
-	if err := db.RecordPlayEvent(userID, "recentRock80", "play", nil); err != nil {
+	if err := db.RecordPlayEvent(userID, "recentRock80", "play"); err != nil {
 		t.Fatalf("Failed to record play event: %v", err)
 	}
 
@@ -900,26 +900,26 @@ func TestCalculateArtistWeight(t *testing.T) {
 	// Simulate play/skip events to create artist stats
 	// Great Artist: 10 plays, 0 skips (ratio = 1.0)
 	for i := 0; i < 10; i++ {
-		if err := db.RecordPlayEvent(userID, "1", "play", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "1", "play"); err != nil {
 			t.Fatalf("Failed to record play event: %v", err)
 		}
 	}
 
 	// Poor Artist: 0 plays, 10 skips (ratio = 0.0)
 	for i := 0; i < 10; i++ {
-		if err := db.RecordPlayEvent(userID, "2", "skip", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "2", "skip"); err != nil {
 			t.Fatalf("Failed to record skip event: %v", err)
 		}
 	}
 
 	// Average Artist: 5 plays, 5 skips (ratio = 0.5)
 	for i := 0; i < 5; i++ {
-		if err := db.RecordPlayEvent(userID, "4", "play", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "4", "play"); err != nil {
 			t.Fatalf("Failed to record play event: %v", err)
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if err := db.RecordPlayEvent(userID, "4", "skip", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "4", "skip"); err != nil {
 			t.Fatalf("Failed to record skip event: %v", err)
 		}
 	}
@@ -1000,7 +1000,7 @@ func TestCalculateArtistWeightBoundaryConditions(t *testing.T) {
 
 	// Simulate 100 plays, 0 skips
 	for i := 0; i < 100; i++ {
-		if err := db.RecordPlayEvent(userID, "1", "play", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "1", "play"); err != nil {
 			t.Fatalf("Failed to record play event: %v", err)
 		}
 	}
@@ -1158,7 +1158,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 
 	// Mock skip recording function that actually records to DB
 	recordSkipFunc := func(userID string, song *models.Song) {
-		if err := db.RecordPlayEvent(userID, song.ID, "skip", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, song.ID, "skip"); err != nil {
 			t.Errorf("Failed to record skip event: %v", err)
 		}
 	}
@@ -1171,7 +1171,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 		}
 
 		// Record the play event (this is what HandleScrobble does)
-		if err := db.RecordPlayEvent(userID, "song1", "play", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "song1", "play"); err != nil {
 			t.Fatalf("Failed to record play event: %v", err)
 		}
 
@@ -1227,7 +1227,7 @@ func TestProcessScrobbleIntegrationWithDatabase(t *testing.T) {
 		}
 
 		// Record the play event
-		if err := db.RecordPlayEvent(userID, "song2", "play", nil); err != nil {
+		if err := db.RecordPlayEvent(userID, "song2", "play"); err != nil {
 			t.Fatalf("Failed to record play event: %v", err)
 		}
 
@@ -1623,7 +1623,7 @@ func TestPriorsIgnoreUnheardSongs(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		id := strconv.Itoa(i)
 		for _, event := range []string{"skip", "skip", "skip", "play"} {
-			if err := db.RecordPlayEvent("user1", id, event, nil); err != nil {
+			if err := db.RecordPlayEvent("user1", id, event); err != nil {
 				t.Fatalf("Failed to record event: %v", err)
 			}
 		}

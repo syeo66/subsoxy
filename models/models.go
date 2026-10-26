@@ -79,14 +79,6 @@ func NewChild(song Song) Child {
 	}
 }
 
-type PlayEvent struct {
-	ID           int       `json:"id"`
-	SongID       string    `json:"songId"`
-	EventType    string    `json:"eventType"` // "play", "skip", "start"
-	Timestamp    time.Time `json:"timestamp"`
-	PreviousSong *string   `json:"previousSong,omitempty"`
-}
-
 type WeightedSong struct {
 	Song   Song    `json:"song"`
 	Weight float64 `json:"weight"`

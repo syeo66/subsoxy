@@ -78,44 +78,6 @@ func TestSongJSONSerialization(t *testing.T) {
 	}
 }
 
-func TestPlayEventStructure(t *testing.T) {
-	previousSong := "prev123"
-	event := PlayEvent{
-		ID:           1,
-		SongID:       "123",
-		EventType:    "play",
-		Timestamp:    time.Now(),
-		PreviousSong: &previousSong,
-	}
-
-	if event.ID != 1 {
-		t.Errorf("PlayEvent.ID = %d, want %d", event.ID, 1)
-	}
-	if event.SongID != "123" {
-		t.Errorf("PlayEvent.SongID = %s, want %s", event.SongID, "123")
-	}
-	if event.EventType != "play" {
-		t.Errorf("PlayEvent.EventType = %s, want %s", event.EventType, "play")
-	}
-	if event.PreviousSong == nil || *event.PreviousSong != "prev123" {
-		t.Errorf("PlayEvent.PreviousSong = %v, want %s", event.PreviousSong, "prev123")
-	}
-}
-
-func TestPlayEventWithNilPreviousSong(t *testing.T) {
-	event := PlayEvent{
-		ID:           1,
-		SongID:       "123",
-		EventType:    "start",
-		Timestamp:    time.Now(),
-		PreviousSong: nil,
-	}
-
-	if event.PreviousSong != nil {
-		t.Errorf("PlayEvent.PreviousSong = %v, want nil", event.PreviousSong)
-	}
-}
-
 func TestWeightedSongStructure(t *testing.T) {
 	song := Song{
 		ID:     "123",
@@ -249,22 +211,5 @@ func TestHookFunction(t *testing.T) {
 	// Test allowing hook
 	if allowingHook(w, req, "/rest/ping") {
 		t.Error("Allowing hook should return false")
-	}
-}
-
-func TestEventTypeValues(t *testing.T) {
-	validEventTypes := []string{"play", "skip", "start"}
-
-	for _, eventType := range validEventTypes {
-		event := PlayEvent{
-			ID:        1,
-			SongID:    "123",
-			EventType: eventType,
-			Timestamp: time.Now(),
-		}
-
-		if event.EventType != eventType {
-			t.Errorf("PlayEvent.EventType = %s, want %s", event.EventType, eventType)
-		}
 	}
 }

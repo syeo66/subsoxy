@@ -133,7 +133,7 @@ A sync pages through all songs with `search3` and an empty query, 500 songs per 
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.
-- Songs no longer on the upstream server are deleted from `songs`. Their `play_events` are kept as history. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts. A complete fetch that would delete more than half of a user's stored songs is held back too, since that more likely means upstream answered wrongly (a permission change, a misconfigured music folder) than that the music is gone. It is applied once a sync at least 30 minutes later (`MassDeletionConfirmDelay`) still sees it. Each sync request gives up after 30s, so a stalled upstream server can't block later syncs.
+- Songs no longer on the upstream server are deleted from `songs`, along with their play and skip history. A song whose ID changes upstream (in Navidrome, e.g. after its file is moved or renamed) therefore starts over as unheard. If any folder, artist or album couldn't be fetched, nothing is deleted in that sync, so an upstream hiccup can't wipe play counts. A complete fetch that would delete more than half of a user's stored songs is held back too, since that more likely means upstream answered wrongly (a permission change, a misconfigured music folder) than that the music is gone. It is applied once a sync at least 30 minutes later (`MassDeletionConfirmDelay`) still sees it. Each sync request gives up after 30s, so a stalled upstream server can't block later syncs.
 
 Each sync logs added, updated, unchanged and deleted counts per user.
 

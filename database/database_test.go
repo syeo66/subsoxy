@@ -1,7 +1,6 @@
 package database
 
 import (
-	"database/sql"
 	"fmt"
 	"math"
 	"os"
@@ -123,7 +122,7 @@ func TestCreateTables(t *testing.T) {
 	defer db.Close()
 
 	// Check that tables were created
-	tables := []string{"songs", "play_events"}
+	tables := []string{"songs"}
 	for _, table := range tables {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count)
@@ -136,7 +135,7 @@ func TestCreateTables(t *testing.T) {
 	}
 
 	// Check that indexes were created
-	indexes := []string{"idx_play_events_song_id", "idx_play_events_timestamp"}
+	indexes := []string{"idx_songs_user_id_id"}
 	for _, index := range indexes {
 		var count int
 		err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", index).Scan(&count)
@@ -148,13 +147,15 @@ func TestCreateTables(t *testing.T) {
 		}
 	}
 
-	// song_transitions is no longer part of the schema
-	var count int
-	if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%song_transitions%'").Scan(&count); err != nil {
-		t.Fatalf("Failed to check for song_transitions: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Expected no song_transitions table or indexes, found %d objects", count)
+	// song_transitions and play_events are no longer part of the schema
+	for _, name := range []string{"song_transitions", "play_events"} {
+		var count int
+		if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE ?", "%"+name+"%").Scan(&count); err != nil {
+			t.Fatalf("Failed to check for %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Errorf("Expected no %s table or indexes, found %d objects", name, count)
+		}
 	}
 }
 
@@ -217,6 +218,73 @@ func TestDropSongTransitionsTableMigration(t *testing.T) {
 		}
 		if len(songs) != 1 {
 			t.Errorf("Run %d: expected 1 song after migration, got %d", i+1, len(songs))
+		}
+		db.Close()
+	}
+}
+
+func TestDropPlayEventsTableMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_drop_play_events.db"
+	defer os.Remove(dbPath)
+
+	// Simulate a database created by a version that still logged every play and skip
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	if err := db.RecordPlayEvent("testuser", "1", "play"); err != nil {
+		t.Fatalf("Failed to record play event: %v", err)
+	}
+	legacyQueries := []string{
+		`CREATE TABLE play_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			song_id TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			timestamp DATETIME NOT NULL,
+			previous_song TEXT
+		)`,
+		`CREATE INDEX idx_play_events_user_id ON play_events(user_id)`,
+		`CREATE INDEX idx_play_events_song_id ON play_events(song_id)`,
+		`CREATE INDEX idx_play_events_timestamp ON play_events(timestamp)`,
+		`INSERT INTO play_events (user_id, song_id, event_type, timestamp) VALUES ('testuser', '1', 'play', CURRENT_TIMESTAMP)`,
+		`CREATE TABLE play_events_backup AS SELECT * FROM play_events`,
+	}
+	for _, query := range legacyQueries {
+		if _, err := db.conn.Exec(query); err != nil {
+			t.Fatalf("Failed to set up legacy schema: %v", err)
+		}
+	}
+	db.Close()
+
+	// Reopening runs the migrations, twice to verify they are idempotent
+	for i := 0; i < 2; i++ {
+		db, err = New(dbPath, logger)
+		if err != nil {
+			t.Fatalf("Failed to reopen database (run %d): %v", i+1, err)
+		}
+
+		var count int
+		if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%play_events%'").Scan(&count); err != nil {
+			t.Fatalf("Failed to check for play_events: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("Run %d: expected play_events table, backup and indexes to be dropped, found %d objects", i+1, count)
+		}
+
+		// The song's counters hold the listening history and must survive the migration
+		songs, err := db.GetAllSongs("testuser")
+		if err != nil {
+			t.Fatalf("Failed to get songs: %v", err)
+		}
+		if len(songs) != 1 || songs[0].PlayCount != 1 {
+			t.Errorf("Run %d: expected 1 song with 1 play after migration, got %+v", i+1, songs)
 		}
 		db.Close()
 	}
@@ -440,19 +508,9 @@ func TestRecordPlayEvent(t *testing.T) {
 	}
 
 	// Record a play event
-	err = db.RecordPlayEvent("testuser", "1", "play", nil)
+	err = db.RecordPlayEvent("testuser", "1", "play")
 	if err != nil {
 		t.Errorf("Failed to record play event: %v", err)
-	}
-
-	// Verify event was recorded
-	var count int
-	err = db.conn.QueryRow("SELECT COUNT(*) FROM play_events WHERE song_id = ? AND event_type = ?", "1", "play").Scan(&count)
-	if err != nil {
-		t.Errorf("Failed to count play events: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 play event, got %d", count)
 	}
 
 	// Verify play count was updated
@@ -496,7 +554,7 @@ func TestRecordSkipEvent(t *testing.T) {
 	}
 
 	// Record a skip event
-	err = db.RecordPlayEvent("testuser", "1", "skip", nil)
+	err = db.RecordPlayEvent("testuser", "1", "skip")
 	if err != nil {
 		t.Errorf("Failed to record skip event: %v", err)
 	}
@@ -509,48 +567,6 @@ func TestRecordSkipEvent(t *testing.T) {
 	}
 	if skipCount != 1 {
 		t.Errorf("Expected skip count 1, got %d", skipCount)
-	}
-}
-
-func TestRecordPlayEventWithPreviousSong(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.WarnLevel)
-
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := New(dbPath, logger)
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	// Store test songs
-	songs := []models.Song{
-		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
-		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
-	}
-
-	err = db.StoreSongs("testuser", songs)
-	if err != nil {
-		t.Errorf("Failed to store songs: %v", err)
-	}
-
-	// Record play event with previous song
-	previousSong := "1"
-	err = db.RecordPlayEvent("testuser", "2", "play", &previousSong)
-	if err != nil {
-		t.Errorf("Failed to record play event with previous song: %v", err)
-	}
-
-	// Verify previous song was recorded
-	var recordedPreviousSong sql.NullString
-	err = db.conn.QueryRow("SELECT previous_song FROM play_events WHERE song_id = ?", "2").Scan(&recordedPreviousSong)
-	if err != nil {
-		t.Errorf("Failed to get previous song: %v", err)
-	}
-	if !recordedPreviousSong.Valid || recordedPreviousSong.String != "1" {
-		t.Errorf("Expected previous song '1', got %v", recordedPreviousSong)
 	}
 }
 
@@ -677,7 +693,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 				case 0:
 					// Record play event
 					songID := fmt.Sprintf("%d", (goroutineID%3)+1)
-					err := db.RecordPlayEvent("testuser", songID, "play", nil)
+					err := db.RecordPlayEvent("testuser", songID, "play")
 					if err != nil {
 						t.Errorf("Goroutine %d: RecordPlayEvent failed: %v", goroutineID, err)
 					}
@@ -690,7 +706,7 @@ func TestConcurrentDatabaseAccess(t *testing.T) {
 				case 2:
 					// Record skip event
 					songID := fmt.Sprintf("%d", ((goroutineID+1)%3)+1)
-					err := db.RecordPlayEvent("testuser", songID, "skip", nil)
+					err := db.RecordPlayEvent("testuser", songID, "skip")
 					if err != nil {
 						t.Errorf("Goroutine %d: RecordPlayEvent (skip) failed: %v", goroutineID, err)
 					}
@@ -1021,11 +1037,11 @@ func TestDeleteSongs(t *testing.T) {
 	}
 
 	// Record some play events to test preservation of historical data
-	err = db.RecordPlayEvent(userID, "song1", "play", nil)
+	err = db.RecordPlayEvent(userID, "song1", "play")
 	if err != nil {
 		t.Fatalf("Failed to record play event: %v", err)
 	}
-	err = db.RecordPlayEvent(userID, "song2", "skip", nil)
+	err = db.RecordPlayEvent(userID, "song2", "skip")
 	if err != nil {
 		t.Fatalf("Failed to record skip event: %v", err)
 	}
@@ -1126,11 +1142,11 @@ func TestDifferentialSyncWorkflow(t *testing.T) {
 	}
 
 	// Record some user activity
-	err = db.RecordPlayEvent(userID, "song1", "play", nil)
+	err = db.RecordPlayEvent(userID, "song1", "play")
 	if err != nil {
 		t.Fatalf("Failed to record play event: %v", err)
 	}
-	err = db.RecordPlayEvent(userID, "song2", "skip", nil)
+	err = db.RecordPlayEvent(userID, "song2", "skip")
 	if err != nil {
 		t.Fatalf("Failed to record skip event: %v", err)
 	}
@@ -1278,7 +1294,7 @@ func TestRecordPlayEventErrorHandling(t *testing.T) {
 	defer db.Close()
 
 	// Test with empty user ID
-	err = db.RecordPlayEvent("", "song1", "play", nil)
+	err = db.RecordPlayEvent("", "song1", "play")
 	if err == nil {
 		t.Error("Expected error for empty user ID")
 	}
@@ -1287,7 +1303,7 @@ func TestRecordPlayEventErrorHandling(t *testing.T) {
 	}
 
 	// Test with empty song ID
-	err = db.RecordPlayEvent("testuser", "", "play", nil)
+	err = db.RecordPlayEvent("testuser", "", "play")
 	if err == nil {
 		t.Error("Expected error for empty song ID")
 	}
@@ -1296,7 +1312,7 @@ func TestRecordPlayEventErrorHandling(t *testing.T) {
 	}
 
 	// Test with empty event type
-	err = db.RecordPlayEvent("testuser", "song1", "", nil)
+	err = db.RecordPlayEvent("testuser", "song1", "")
 	if err == nil {
 		t.Error("Expected error for empty event type")
 	}
@@ -1304,15 +1320,18 @@ func TestRecordPlayEventErrorHandling(t *testing.T) {
 		t.Errorf("Expected validation error, got: %v", err)
 	}
 
-	// Test with invalid event type (should still work as DB doesn't validate content)
-	err = db.RecordPlayEvent("testuser", "song1", "invalid_type", nil)
-	if err != nil {
-		t.Errorf("Unexpected error for invalid event type: %v", err)
+	// Test with an event type other than play or skip
+	err = db.RecordPlayEvent("testuser", "song1", "invalid_type")
+	if err == nil {
+		t.Error("Expected error for invalid event type")
+	}
+	if !strings.Contains(err.Error(), "validation") {
+		t.Errorf("Expected validation error, got: %v", err)
 	}
 
 	// Test with very long string values
 	longString := strings.Repeat("a", 10000)
-	err = db.RecordPlayEvent(longString, longString, "play", &longString)
+	err = db.RecordPlayEvent(longString, longString, "play")
 	if err != nil {
 		t.Errorf("Unexpected error for long string values: %v", err)
 	}
@@ -1420,7 +1439,7 @@ func TestSQLInjectionResistance(t *testing.T) {
 
 	// Test with potential SQL injection in song ID
 	maliciousSongID := "'; DROP TABLE songs; --"
-	err = db.RecordPlayEvent("testuser", maliciousSongID, "play", nil)
+	err = db.RecordPlayEvent("testuser", maliciousSongID, "play")
 	if err != nil {
 		t.Errorf("Unexpected error for malicious song ID: %v", err)
 	}
@@ -1467,7 +1486,7 @@ func TestGetAllArtistAdjustedStats(t *testing.T) {
 		{"user1", "3", "skip"},
 		{"user2", "1", "skip"},
 	} {
-		if err := db.RecordPlayEvent(ev.user, ev.song, ev.event, nil); err != nil {
+		if err := db.RecordPlayEvent(ev.user, ev.song, ev.event); err != nil {
 			t.Fatalf("Failed to record event: %v", err)
 		}
 	}
@@ -1532,7 +1551,7 @@ func TestAdjustedCountersDecayOverTime(t *testing.T) {
 	}
 
 	// A play one half-life ago is worth half a play now
-	if err := db.RecordPlayEventAt("user1", "1", "play", nil, oneHalfLifeAgo); err != nil {
+	if err := db.RecordPlayEventAt("user1", "1", "play", oneHalfLifeAgo); err != nil {
 		t.Fatalf("Failed to record play: %v", err)
 	}
 	if got := getSong().AdjustedPlays; math.Abs(got-0.5) > 1e-3 {
@@ -1540,7 +1559,7 @@ func TestAdjustedCountersDecayOverTime(t *testing.T) {
 	}
 
 	// A skip now counts fully
-	if err := db.RecordPlayEventAt("user1", "1", "skip", nil, now); err != nil {
+	if err := db.RecordPlayEventAt("user1", "1", "skip", now); err != nil {
 		t.Fatalf("Failed to record skip: %v", err)
 	}
 	song := getSong()
@@ -1549,7 +1568,7 @@ func TestAdjustedCountersDecayOverTime(t *testing.T) {
 	}
 
 	// A play delivered late counts for what it's worth today, and doesn't move last_played back
-	if err := db.RecordPlayEventAt("user1", "1", "play", nil, twoHalfLivesAgo); err != nil {
+	if err := db.RecordPlayEventAt("user1", "1", "play", twoHalfLivesAgo); err != nil {
 		t.Fatalf("Failed to record late play: %v", err)
 	}
 	song = getSong()

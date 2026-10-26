@@ -1097,36 +1097,22 @@ func readPostForm(r *http.Request) (url.Values, error) {
 	return url.ParseQuery(string(body))
 }
 
-func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string, previousSong *string) {
-	ps.recordPlayEvent(userID, songID, eventType, previousSong, time.Now())
+func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string) {
+	ps.RecordPlayEventAt(userID, songID, eventType, time.Now())
 }
 
 // RecordPlayEventAt records a play or skip that happened at the given time
 func (ps *ProxyServer) RecordPlayEventAt(userID, songID, eventType string, at time.Time) {
-	ps.recordPlayEvent(userID, songID, eventType, nil, at)
-}
-
-func (ps *ProxyServer) recordPlayEvent(userID, songID, eventType string, previousSong *string, at time.Time) {
-	if err := ps.db.RecordPlayEventAt(userID, songID, eventType, previousSong, at); err != nil {
+	if err := ps.db.RecordPlayEventAt(userID, songID, eventType, at); err != nil {
 		ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record play event")
 		return
 	}
 	ps.shuffle.InvalidateEmpiricalPriors(userID)
 
-	// Sanitize inputs for logging
-	sanitizedUserID := sanitizeUsername(userID)
-	sanitizedSongID := sanitizeForLogging(songID)
-	var sanitizedPreviousSong *string
-	if previousSong != nil {
-		sanitized := sanitizeForLogging(*previousSong)
-		sanitizedPreviousSong = &sanitized
-	}
-
 	ps.logger.WithFields(logrus.Fields{
-		"userID":       sanitizedUserID,
-		"songId":       sanitizedSongID,
-		"eventType":    eventType,
-		"previousSong": sanitizedPreviousSong,
+		"userID":    sanitizeUsername(userID),
+		"songId":    sanitizeForLogging(songID),
+		"eventType": eventType,
 	}).Debug("Recorded play event")
 }
 
@@ -1158,7 +1144,7 @@ func songHasChanged(existing, new models.Song) bool {
 // Returns true if a play event should be recorded, false if it's a duplicate submission
 func (ps *ProxyServer) ProcessScrobble(userID, client, songID string, isSubmission bool) bool {
 	recordSkipFunc := func(userID string, song *models.Song) {
-		err := ps.db.RecordPlayEvent(userID, song.ID, "skip", nil)
+		err := ps.db.RecordPlayEvent(userID, song.ID, "skip")
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
 				"user_id": userID,

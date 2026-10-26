@@ -372,22 +372,15 @@ func TestRecordPlayEvent(t *testing.T) {
 		t.Fatalf("Failed to store test songs: %v", err)
 	}
 
-	t.Run("Record play event without previous song", func(t *testing.T) {
-		server.RecordPlayEvent("testuser", "1", "play", nil)
+	t.Run("Record play event", func(t *testing.T) {
+		server.RecordPlayEvent("testuser", "1", "play")
 
 		// Verify event was recorded (can't easily verify without exposing internals)
 		// The method should not panic or return errors
 	})
 
-	t.Run("Record play event with previous song", func(t *testing.T) {
-		previousSong := "1"
-		server.RecordPlayEvent("testuser", "2", "play", &previousSong)
-
-		// Should record the play event with its previous song
-	})
-
 	t.Run("Record skip event", func(t *testing.T) {
-		server.RecordPlayEvent("testuser", "1", "skip", nil)
+		server.RecordPlayEvent("testuser", "1", "skip")
 
 		// Should record skip event
 	})
@@ -823,7 +816,7 @@ func TestErrorHandling(t *testing.T) {
 	defer server.Shutdown(context.Background())
 
 	// Test that methods handle errors gracefully
-	server.RecordPlayEvent("testuser", "nonexistent", "play", nil)
+	server.RecordPlayEvent("testuser", "nonexistent", "play")
 	server.SetLastPlayed("testuser", "nonexistent")
 
 	// Should not panic
@@ -1710,13 +1703,13 @@ func TestRecordPlayEventRefreshesPriors(t *testing.T) {
 		return 0
 	}
 
-	server.RecordPlayEvent("testuser", "1", "play", nil)
+	server.RecordPlayEvent("testuser", "1", "play")
 	before := playSkipWeight() // computes and caches the priors
 
 	// Skips on other songs raise the user's skip prior, which changes song 1's weight
 	for i := 0; i < 10; i++ {
-		server.RecordPlayEvent("testuser", "2", "skip", nil)
-		server.RecordPlayEvent("testuser", "3", "skip", nil)
+		server.RecordPlayEvent("testuser", "2", "skip")
+		server.RecordPlayEvent("testuser", "3", "skip")
 	}
 	after := playSkipWeight()
 
@@ -2186,7 +2179,7 @@ func TestSyncSongsForUserIncompleteFetchKeepsSongs(t *testing.T) {
 	if got := len(songsByID()); got != 3 {
 		t.Fatalf("Expected 3 songs after initial sync, got %d", got)
 	}
-	if err := server.db.RecordPlayEvent("user1", "song3", "play", nil); err != nil {
+	if err := server.db.RecordPlayEvent("user1", "song3", "play"); err != nil {
 		t.Fatalf("Failed to record play: %v", err)
 	}
 

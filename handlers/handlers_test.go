@@ -1303,7 +1303,7 @@ func TestHandleShuffleResponseFields(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("Failed to store songs: %v", err)
 	}
-	if err := db.RecordPlayEvent("testuser", "1", "play", nil); err != nil {
+	if err := db.RecordPlayEvent("testuser", "1", "play"); err != nil {
 		t.Fatalf("Failed to record play: %v", err)
 	}
 

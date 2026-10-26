@@ -239,23 +239,10 @@ func (db *DB) createTables() error {
 			cover_art TEXT,
 			PRIMARY KEY (id, user_id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS play_events (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id TEXT NOT NULL,
-			song_id TEXT NOT NULL,
-			event_type TEXT NOT NULL,
-			timestamp DATETIME NOT NULL,
-			previous_song TEXT,
-			FOREIGN KEY (song_id, user_id) REFERENCES songs(id, user_id),
-			FOREIGN KEY (previous_song, user_id) REFERENCES songs(id, user_id)
-		)`,
 		// Serves lookups by user and lets the shuffle page through a user's songs in id order
 		// without sorting them. It covers everything the older user_id-only index did.
 		`CREATE INDEX IF NOT EXISTS idx_songs_user_id_id ON songs(user_id, id)`,
 		`DROP INDEX IF EXISTS idx_songs_user_id`,
-		`CREATE INDEX IF NOT EXISTS idx_play_events_user_id ON play_events(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_play_events_song_id ON play_events(song_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_play_events_timestamp ON play_events(timestamp)`,
 	}
 
 	for _, query := range queries {
@@ -310,6 +297,11 @@ func (db *DB) createTables() error {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop artist_stats table")
 	}
 
+	// Drop the obsolete play_events table if it still exists
+	if err := db.dropPlayEventsTable(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop play_events table")
+	}
+
 	return nil
 }
 
@@ -344,7 +336,6 @@ func (db *DB) migrateExistingData() error {
 	// Create temporary tables for backup
 	backupQueries := []string{
 		`CREATE TABLE IF NOT EXISTS songs_backup AS SELECT * FROM songs`,
-		`CREATE TABLE IF NOT EXISTS play_events_backup AS SELECT * FROM play_events`,
 	}
 
 	for _, query := range backupQueries {
@@ -357,7 +348,6 @@ func (db *DB) migrateExistingData() error {
 	// Drop existing tables
 	dropQueries := []string{
 		`DROP TABLE IF EXISTS songs`,
-		`DROP TABLE IF EXISTS play_events`,
 	}
 
 	for _, query := range dropQueries {
@@ -592,6 +582,39 @@ func (db *DB) dropArtistStatsTable() error {
 	}
 
 	db.logger.Info("Dropped obsolete artist_stats table")
+	return nil
+}
+
+// dropPlayEventsTable removes the play_events table (and its indexes), plus any backup copy
+// made by migrateExistingData, left over from databases created when every play and skip was
+// logged. Nothing read the log: the counters on the songs table hold everything the shuffle
+// uses. The freed disk space is reclaimed afterwards.
+func (db *DB) dropPlayEventsTable() error {
+	var count int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('play_events', 'play_events_backup')`).Scan(&count)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for play_events table")
+	}
+	if count == 0 {
+		return nil
+	}
+
+	// Dropping the table also drops its indexes
+	if _, err := db.conn.Exec(`DROP TABLE IF EXISTS play_events`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop play_events table")
+	}
+	if _, err := db.conn.Exec(`DROP TABLE IF EXISTS play_events_backup`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to drop play_events_backup table")
+	}
+
+	db.logger.Info("Dropped obsolete play_events table")
+
+	// The table grows with every play; VACUUM returns the freed pages to the filesystem.
+	// Failure only means the file stays larger than necessary, so it is non-fatal.
+	if _, err := db.conn.Exec(`VACUUM`); err != nil {
+		db.logger.WithError(err).Warn("Failed to vacuum database after dropping play_events (non-fatal)")
+	}
+
 	return nil
 }
 
@@ -945,9 +968,6 @@ func (db *DB) DeleteSongs(userID string, songIDs []string) error {
 		}
 	}
 
-	// Note: We intentionally preserve play_events as historical data
-	// This maintains user listening history even if songs are removed from the library
-
 	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction").
 			WithContext("failed_songs", failedSongs).
@@ -964,76 +984,72 @@ func (db *DB) DeleteSongs(userID string, songIDs []string) error {
 	return nil
 }
 
-func (db *DB) RecordPlayEvent(userID, songID, eventType string, previousSong *string) error {
-	return db.RecordPlayEventAt(userID, songID, eventType, previousSong, time.Now())
+func (db *DB) RecordPlayEvent(userID, songID, eventType string) error {
+	return db.RecordPlayEventAt(userID, songID, eventType, time.Now())
 }
 
 // RecordPlayEventAt records a play or skip that happened at the given time, which may be in
-// the past when a client delivers scrobbles it queued while offline
-func (db *DB) RecordPlayEventAt(userID, songID, eventType string, previousSong *string, at time.Time) error {
+// the past when a client delivers scrobbles it queued while offline. It updates the song's
+// counters; an event for a song that isn't stored for the user has nothing to update.
+func (db *DB) RecordPlayEventAt(userID, songID, eventType string, at time.Time) error {
 	if userID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "userID")
 	}
 	if songID == "" {
 		return errors.ErrValidationFailed.WithContext("field", "songID")
 	}
-	if eventType == "" {
-		return errors.ErrValidationFailed.WithContext("field", "eventType")
+	if eventType != "play" && eventType != "skip" {
+		return errors.ErrValidationFailed.WithContext("field", "eventType").WithContext("value", eventType)
 	}
 
-	// Use a transaction to ensure atomicity
+	// The counters are read, decayed and written back, so this happens in one transaction
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction")
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT INTO play_events (user_id, song_id, event_type, timestamp, previous_song) VALUES (?, ?, ?, ?, ?)`,
-		userID, songID, eventType, at, previousSong)
-	if err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to record play event").
-			WithContext("user_id", userID).
-			WithContext("song_id", songID).
-			WithContext("event_type", eventType)
-	}
-
-	// Get the current adjusted values for this song to update stats
-	// If the song doesn't exist in the database, we skip updating stats but still record the event
 	var adjustedPlays, adjustedSkips float64
 	var adjustedAt int64
 	err = tx.QueryRow(`SELECT COALESCE(adjusted_plays, 0.0), COALESCE(adjusted_skips, 0.0), COALESCE(adjusted_at, 0) FROM songs WHERE id = ? AND user_id = ?`,
 		songID, userID).Scan(&adjustedPlays, &adjustedSkips, &adjustedAt)
-	if err == nil && (eventType == "play" || eventType == "skip") {
-		// Decay the stored counters and the new event to whichever is later, so an event
-		// delivered late counts for what it would have been worth had it arrived on time
-		ref := at
-		if stored := time.Unix(adjustedAt, 0); adjustedAt != 0 && stored.After(at) {
-			ref = stored
-		}
-		adjustedPlays, adjustedSkips = decayedAt(adjustedPlays, adjustedSkips, adjustedAt, ref)
-		eventWeight := decayFactor(at, ref)
-
-		countColumn, timeColumn := "play_count", "last_played"
-		if eventType == "play" {
-			adjustedPlays += eventWeight
-		} else {
-			adjustedSkips += eventWeight
-			countColumn, timeColumn = "skip_count", "last_skipped"
-		}
-
-		// The last played/skipped time only moves forward, even for a late event
-		_, err := tx.Exec(`UPDATE songs SET `+countColumn+` = `+countColumn+` + 1,
-			`+timeColumn+` = CASE WHEN `+timeColumn+` IS NULL OR `+timeColumn+` < ? THEN ? ELSE `+timeColumn+` END,
-			adjusted_plays = ?, adjusted_skips = ?, adjusted_at = ?
-			WHERE id = ? AND user_id = ?`,
-			at, at, adjustedPlays, adjustedSkips, ref.Unix(), songID, userID)
-		if err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song "+countColumn).
-				WithContext("user_id", userID).
-				WithContext("song_id", songID)
-		}
+	if err == sql.ErrNoRows {
+		return nil
 	}
-	// If song doesn't exist (err != nil), we skip stats updates but continue to record the event
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to read song counters").
+			WithContext("user_id", userID).
+			WithContext("song_id", songID)
+	}
+
+	// Decay the stored counters and the new event to whichever is later, so an event
+	// delivered late counts for what it would have been worth had it arrived on time
+	ref := at
+	if stored := time.Unix(adjustedAt, 0); adjustedAt != 0 && stored.After(at) {
+		ref = stored
+	}
+	adjustedPlays, adjustedSkips = decayedAt(adjustedPlays, adjustedSkips, adjustedAt, ref)
+	eventWeight := decayFactor(at, ref)
+
+	countColumn, timeColumn := "play_count", "last_played"
+	if eventType == "play" {
+		adjustedPlays += eventWeight
+	} else {
+		adjustedSkips += eventWeight
+		countColumn, timeColumn = "skip_count", "last_skipped"
+	}
+
+	// The last played/skipped time only moves forward, even for a late event
+	_, err = tx.Exec(`UPDATE songs SET `+countColumn+` = `+countColumn+` + 1,
+		`+timeColumn+` = CASE WHEN `+timeColumn+` IS NULL OR `+timeColumn+` < ? THEN ? ELSE `+timeColumn+` END,
+		adjusted_plays = ?, adjusted_skips = ?, adjusted_at = ?
+		WHERE id = ? AND user_id = ?`,
+		at, at, adjustedPlays, adjustedSkips, ref.Unix(), songID, userID)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song "+countColumn).
+			WithContext("user_id", userID).
+			WithContext("song_id", songID)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction")
