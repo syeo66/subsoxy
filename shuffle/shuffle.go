@@ -22,11 +22,12 @@ const BatchSize = 1000
 
 // Weight calculation constants
 const (
-	NeverPlayedWeight      = 4.0
-	HoursPerDay            = 24.0
+	NeverPlayedWeight = 4.0
+	HoursPerDay       = 24.0
+	// Songs heard within TwoWeekReplayThreshold aren't shuffled at all. After that a song's time
+	// weight rises from TimeDecayMinWeight until TimeDecayDaysThreshold, then keeps growing.
 	TimeDecayDaysThreshold = 30
-	TimeDecayMinWeight     = 0.1
-	TimeDecayMaxWeight     = 0.9
+	TimeDecayMinWeight     = 0.5
 	DaysPerYear            = 365.0
 	UnplayedSongWeight     = 1.5
 	PlayRatioMinWeight     = 0.2
@@ -722,13 +723,20 @@ func (s *Service) calculateTimeDecayWeight(lastPlayed, lastSkipped time.Time) fl
 		return NeverPlayedWeight
 	}
 
-	daysSinceLastPresented := time.Since(lastPresented).Hours() / HoursPerDay
-
-	if daysSinceLastPresented < TimeDecayDaysThreshold {
-		return TimeDecayMinWeight + (daysSinceLastPresented/TimeDecayDaysThreshold)*TimeDecayMaxWeight
+	days := time.Since(lastPresented).Hours() / HoursPerDay
+	if days >= TimeDecayDaysThreshold {
+		return longAgoWeight(days)
 	}
 
-	return 1.0 + math.Min(daysSinceLastPresented/DaysPerYear, 1.0)
+	// Ramp up from where the replay prevention ends, meeting longAgoWeight at the threshold
+	progress := max(days-TwoWeekReplayThreshold, 0) / (TimeDecayDaysThreshold - TwoWeekReplayThreshold)
+	return TimeDecayMinWeight + progress*(longAgoWeight(TimeDecayDaysThreshold)-TimeDecayMinWeight)
+}
+
+// longAgoWeight is the time weight of a song last presented at least TimeDecayDaysThreshold
+// days ago: it grows by 1.0 a year, up to 2.0
+func longAgoWeight(days float64) float64 {
+	return 1.0 + math.Min(days/DaysPerYear, 1.0)
 }
 
 // calculatePlaySkipWeight uses an empirical Bayesian approach (Beta-Binomial model) to calculate

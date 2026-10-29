@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,11 +39,49 @@ const (
 	MaxRejectedSecrets = 1024
 )
 
-// encryptedCredential holds encrypted password data
+// Credential is the secret a Subsonic client authenticates with: a password, or a token
+// (the MD5 of password and salt) together with its salt
+type Credential struct {
+	Password string `json:"p,omitempty"`
+	Token    string `json:"t,omitempty"`
+	Salt     string `json:"s,omitempty"`
+}
+
+// Password returns a password credential
+func Password(password string) Credential {
+	return Credential{Password: password}
+}
+
+// Token returns a token credential
+func Token(token, salt string) Credential {
+	return Credential{Token: token, Salt: salt}
+}
+
+// IsToken reports whether the credential is a token rather than a password
+func (c Credential) IsToken() bool {
+	return c.Password == ""
+}
+
+// IsZero reports whether the credential has nothing to authenticate with
+func (c Credential) IsZero() bool {
+	return c.Password == "" && (c.Token == "" || c.Salt == "")
+}
+
+// AddTo sets the credential's authentication parameters: "p", or "t" and "s"
+func (c Credential) AddTo(params url.Values) {
+	if c.IsToken() {
+		params.Set("t", c.Token)
+		params.Set("s", c.Salt)
+	} else {
+		params.Set("p", c.Password)
+	}
+}
+
+// encryptedCredential holds an encrypted Credential
 type encryptedCredential struct {
-	EncryptedPassword []byte    `json:"encrypted_password"`
-	Nonce             []byte    `json:"nonce"`
-	ValidatedAt       time.Time `json:"-"`
+	Ciphertext  []byte
+	Nonce       []byte
+	ValidatedAt time.Time
 }
 
 type Manager struct {
@@ -77,14 +114,14 @@ func New(logger *logrus.Logger, upstreamURL string) *Manager {
 
 // ValidateAndStore checks the credentials with upstream, unless they were checked recently,
 // and stores them for sync. Cancelling ctx abandons the upstream check.
-func (cm *Manager) ValidateAndStore(ctx context.Context, username, password string) (bool, error) {
-	if username == "" || password == "" {
+func (cm *Manager) ValidateAndStore(ctx context.Context, username string, cred Credential) (bool, error) {
+	if username == "" || cred.IsZero() {
 		err := errors.ErrInvalidCredentials.WithContext("reason", "empty username or password")
 		cm.logger.WithError(err).Warn("Invalid credentials provided")
 		return false, err
 	}
 
-	secretKey := cm.secretKey(username, password)
+	secretKey := cm.secretKey(username, cred)
 	if cm.isVerified(username, secretKey) {
 		return false, nil // Recently verified, not new
 	}
@@ -95,7 +132,7 @@ func (cm *Manager) ValidateAndStore(ctx context.Context, username, password stri
 			WithContext("reason", "recently rejected by upstream")
 	}
 
-	if err := cm.validate(ctx, username, password); err != nil {
+	if err := cm.validate(ctx, username, cred); err != nil {
 		// Only upstream's own rejection is remembered. A network failure or unexpected
 		// response says nothing about the credentials, so those are tried again next time.
 		if errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
@@ -105,16 +142,17 @@ func (cm *Manager) ValidateAndStore(ctx context.Context, username, password stri
 		return false, err
 	}
 
-	encryptedCred, err := cm.encryptPassword(password)
+	encryptedCred, err := cm.encrypt(cred)
 	if err != nil {
-		return false, errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt password")
+		return false, errors.Wrap(err, errors.CategoryCredentials, "ENCRYPTION_FAILED", "failed to encrypt credential")
 	}
 
 	now := time.Now()
 	encryptedCred.ValidatedAt = now
 
 	cm.mutex.Lock()
-	isNewCredential := len(cm.validCredentials) == 0 || cm.validCredentials[username].EncryptedPassword == nil
+	_, known := cm.validCredentials[username]
+	isNewCredential := !known
 	cm.validCredentials[username] = encryptedCred
 	cm.rememberVerified(username, secretKey, now)
 	cm.mutex.Unlock()
@@ -122,7 +160,7 @@ func (cm *Manager) ValidateAndStore(ctx context.Context, username, password stri
 	// Only log when credentials are actually new or changed
 	if isNewCredential {
 		// Log differently for token vs password auth
-		if strings.HasPrefix(password, "TOKEN:") {
+		if cred.IsToken() {
 			cm.logger.WithField("username", username).Info("Token-based credentials validated and stored")
 		} else {
 			cm.logger.WithField("username", username).Info("Password-based credentials validated and stored")
@@ -132,11 +170,13 @@ func (cm *Manager) ValidateAndStore(ctx context.Context, username, password stri
 }
 
 // secretKey identifies a username/secret pair without keeping the secret itself
-func (cm *Manager) secretKey(username, password string) string {
+func (cm *Manager) secretKey(username string, cred Credential) string {
 	mac := hmac.New(sha256.New, cm.encryptionKey)
 	mac.Write([]byte(username))
 	mac.Write([]byte{0})
-	mac.Write([]byte(password))
+	// The JSON encoding keeps a password and a token with the same text apart
+	encoded, _ := json.Marshal(cred)
+	mac.Write(encoded)
 	return string(mac.Sum(nil))
 }
 
@@ -214,7 +254,7 @@ func (cm *Manager) HasRecent(username string, maxAge time.Duration) bool {
 	return ok && time.Since(cred.ValidatedAt) < maxAge
 }
 
-func (cm *Manager) validate(ctx context.Context, username, password string) error {
+func (cm *Manager) validate(ctx context.Context, username string, cred Credential) error {
 	// Construct URL with proper encoding to prevent credential exposure in logs
 	baseURL, err := url.Parse(cm.upstreamURL + "/rest/ping")
 	if err != nil {
@@ -227,23 +267,10 @@ func (cm *Manager) validate(ctx context.Context, username, password string) erro
 	params := url.Values{}
 	params.Add("u", username)
 
-	// Check if this is token-based authentication
-	if strings.HasPrefix(password, "TOKEN:") {
-		// Extract token and salt from the special format: "TOKEN:token:salt"
-		parts := strings.Split(password, ":")
-		if len(parts) != 3 {
-			return errors.ErrInvalidCredentials.WithContext("username", username).
-				WithContext("reason", "invalid token format")
-		}
-		token := parts[1]
-		salt := parts[2]
-
-		params.Add("t", token)
-		params.Add("s", salt)
+	cred.AddTo(params)
+	if cred.IsToken() {
 		cm.logger.WithField("username", username).Debug("Validating token-based authentication")
 	} else {
-		// Traditional password-based authentication
-		params.Add("p", password)
 		cm.logger.WithField("username", username).Debug("Validating password-based authentication")
 	}
 
@@ -295,34 +322,34 @@ func (cm *Manager) validate(ctx context.Context, username, password string) erro
 }
 
 // Get returns the stored credential for one user
-func (cm *Manager) Get(username string) (string, bool) {
+func (cm *Manager) Get(username string) (Credential, bool) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
 	encryptedCred, ok := cm.validCredentials[username]
 	if !ok {
-		return "", false
+		return Credential{}, false
 	}
-	password, err := cm.decryptPassword(encryptedCred)
+	cred, err := cm.decrypt(encryptedCred)
 	if err != nil {
-		cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored password")
-		return "", false
+		cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored credential")
+		return Credential{}, false
 	}
-	return password, true
+	return cred, true
 }
 
-// GetAllValid returns all valid credentials as a map of username to password
-func (cm *Manager) GetAllValid() map[string]string {
+// GetAllValid returns all valid credentials as a map of username to credential
+func (cm *Manager) GetAllValid() map[string]Credential {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
-	validCreds := make(map[string]string)
+	validCreds := make(map[string]Credential)
 	for username, encryptedCred := range cm.validCredentials {
-		if password, err := cm.decryptPassword(encryptedCred); err == nil {
-			validCreds[username] = password
+		if cred, err := cm.decrypt(encryptedCred); err == nil {
+			validCreds[username] = cred
 		} else {
 			// If decryption fails, skip this credential
-			cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored password")
+			cm.logger.WithError(err).WithField("username", username).Warn("Failed to decrypt stored credential")
 		}
 	}
 
@@ -342,8 +369,13 @@ func generateEncryptionKey() []byte {
 	return key
 }
 
-// encryptPassword encrypts a password using AES-256-GCM
-func (cm *Manager) encryptPassword(password string) (encryptedCredential, error) {
+// encrypt encrypts a credential using AES-256-GCM
+func (cm *Manager) encrypt(cred Credential) (encryptedCredential, error) {
+	plaintext, err := json.Marshal(cred)
+	if err != nil {
+		return encryptedCredential{}, err
+	}
+
 	block, err := aes.NewCipher(cm.encryptionKey)
 	if err != nil {
 		return encryptedCredential{}, err
@@ -359,32 +391,34 @@ func (cm *Manager) encryptPassword(password string) (encryptedCredential, error)
 		return encryptedCredential{}, err
 	}
 
-	encryptedPassword := gcm.Seal(nil, nonce, []byte(password), nil)
-
 	return encryptedCredential{
-		EncryptedPassword: encryptedPassword,
-		Nonce:             nonce,
+		Ciphertext: gcm.Seal(nil, nonce, plaintext, nil),
+		Nonce:      nonce,
 	}, nil
 }
 
-// decryptPassword decrypts a password using AES-256-GCM
-func (cm *Manager) decryptPassword(cred encryptedCredential) (string, error) {
+// decrypt decrypts a credential using AES-256-GCM
+func (cm *Manager) decrypt(encrypted encryptedCredential) (Credential, error) {
 	block, err := aes.NewCipher(cm.encryptionKey)
 	if err != nil {
-		return "", err
+		return Credential{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return Credential{}, err
 	}
 
-	plaintext, err := gcm.Open(nil, cred.Nonce, cred.EncryptedPassword, nil)
+	plaintext, err := gcm.Open(nil, encrypted.Nonce, encrypted.Ciphertext, nil)
 	if err != nil {
-		return "", err
+		return Credential{}, err
 	}
 
-	return string(plaintext), nil
+	var cred Credential
+	if err := json.Unmarshal(plaintext, &cred); err != nil {
+		return Credential{}, err
+	}
+	return cred, nil
 }
 
 // GetEncryptionInfo returns information about the encryption setup (for testing)

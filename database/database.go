@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"math"
 	"strings"
@@ -29,11 +30,6 @@ const (
 // transactions take the write lock at BEGIN so that wait applies to them too.
 const sqliteConnParams = "_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate"
 
-// Database operation constants
-const (
-	DefaultDateString = "1970-01-01"
-)
-
 // AdjustedHalfLife is how long it takes the decayed play and skip counters to lose half
 // their value, so a play from a year ago counts for about a quarter of one from today.
 const AdjustedHalfLife = 180 * 24 * time.Hour
@@ -58,8 +54,8 @@ func decayedAt(plays, skips float64, adjustedAt int64, now time.Time) (float64, 
 
 // songColumns selects the columns scanSong reads
 const songColumns = `id, title, artist, album, duration,
-		COALESCE(last_played, '1970-01-01') as last_played,
-		COALESCE(last_skipped, '1970-01-01') as last_skipped,
+		COALESCE(last_played, 0) as last_played,
+		COALESCE(last_skipped, 0) as last_skipped,
 		COALESCE(play_count, 0) as play_count,
 		COALESCE(skip_count, 0) as skip_count,
 		COALESCE(adjusted_plays, 0.0) as adjusted_plays,
@@ -80,47 +76,28 @@ const songColumns = `id, title, artist, album, duration,
 // scanSong reads a row selected with songColumns, with the decayed counters as of now
 func scanSong(rows *sql.Rows, now time.Time) (models.Song, error) {
 	var song models.Song
-	var lastPlayedStr, lastSkippedStr string
-	var adjustedAt int64
+	var lastPlayed, lastSkipped, adjustedAt int64
 	err := rows.Scan(&song.ID, &song.Title, &song.Artist, &song.Album, &song.Duration,
-		&lastPlayedStr, &lastSkippedStr, &song.PlayCount, &song.SkipCount,
+		&lastPlayed, &lastSkipped, &song.PlayCount, &song.SkipCount,
 		&song.AdjustedPlays, &song.AdjustedSkips, &adjustedAt, &song.CoverArt, &song.Genre, &song.Year,
 		&song.AlbumID, &song.ArtistID, &song.Track, &song.DiscNumber, &song.Suffix, &song.ContentType, &song.BitRate, &song.Size)
 	if err != nil {
 		return song, err
 	}
 
-	if lastPlayedStr != DefaultDateString {
-		song.LastPlayed, _ = parseTimestamp(lastPlayedStr)
-	}
-	if lastSkippedStr != DefaultDateString {
-		song.LastSkipped, _ = parseTimestamp(lastSkippedStr)
-	}
+	song.LastPlayed = unixTime(lastPlayed)
+	song.LastSkipped = unixTime(lastSkipped)
 	song.AdjustedPlays, song.AdjustedSkips = decayedAt(song.AdjustedPlays, song.AdjustedSkips, adjustedAt, now)
 
 	return song, nil
 }
 
-// parseTimestamp tries multiple datetime formats to parse SQLite timestamps
-// Handles both Go's time.Time format (with timezone) and SQLite's datetime() format (without timezone)
-func parseTimestamp(s string) (time.Time, error) {
-	formats := []string{
-		"2006-01-02 15:04:05.999999-07:00", // Go's time.Time format with timezone and fractional seconds
-		"2006-01-02 15:04:05",              // SQLite's datetime() format
-		"2006-01-02T15:04:05.999999-07:00", // RFC3339 variant with T separator
-		"2006-01-02T15:04:05Z07:00",        // RFC3339 without fractional seconds
+// unixTime converts a stored Unix timestamp, 0 when there is none, to a time
+func unixTime(seconds int64) time.Time {
+	if seconds == 0 {
+		return time.Time{}
 	}
-
-	var lastErr error
-	for _, format := range formats {
-		if t, err := time.Parse(format, s); err == nil {
-			return t, nil
-		} else {
-			lastErr = err
-		}
-	}
-
-	return time.Time{}, lastErr
+	return time.Unix(seconds, 0)
 }
 
 // sqliteDSN appends the connection settings to the database path, keeping any
@@ -232,8 +209,8 @@ func (db *DB) createTables() error {
 			artist TEXT NOT NULL,
 			album TEXT NOT NULL,
 			duration INTEGER NOT NULL,
-			last_played DATETIME,
-			last_skipped DATETIME,
+			last_played INTEGER, -- Unix seconds, see convertTimestampsToUnix
+			last_skipped INTEGER,
 			play_count INTEGER DEFAULT 0,
 			skip_count INTEGER DEFAULT 0,
 			cover_art TEXT,
@@ -285,6 +262,12 @@ func (db *DB) createTables() error {
 	// Add the columns getRandomSongs returns to clients if they don't exist
 	if err := db.addClientMetadataColumns(); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to add client metadata columns")
+	}
+
+	// Store last_played and last_skipped as Unix seconds. Runs after addAdjustedAtColumn,
+	// which reads the older text timestamps.
+	if err := db.convertTimestampsToUnix(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to convert timestamps")
 	}
 
 	// Drop the obsolete song_transitions table if it still exists
@@ -530,6 +513,26 @@ func (db *DB) addClientMetadataColumns() error {
 	return nil
 }
 
+// convertTimestampsToUnix rewrites last_played and last_skipped values stored as text, as
+// databases from before Unix timestamps hold them, as Unix seconds. Text timestamps carry
+// the offset of the zone they were written in, or none for UTC, which strftime honors.
+// Text that can't be parsed becomes NULL, as if the song had no such event, which is how
+// it was read before. Converted rows are integers, so this only does work once.
+func (db *DB) convertTimestampsToUnix() error {
+	for _, column := range []string{"last_played", "last_skipped"} {
+		result, err := db.conn.Exec(`UPDATE songs SET ` + column + ` = CAST(strftime('%s', ` + column + `) AS INTEGER)
+			WHERE typeof(` + column + `) = 'text'`)
+		if err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to convert timestamps").
+				WithContext("column", column)
+		}
+		if n, _ := result.RowsAffected(); n > 0 {
+			db.logger.WithFields(logrus.Fields{"column": column, "rows": n}).Info("Converted timestamps to Unix seconds")
+		}
+	}
+	return nil
+}
+
 // dropSongTransitionsTable removes the song_transitions table (and its indexes), plus any backup
 // copy made by migrateExistingData, left over from databases created before transition tracking
 // was removed, then reclaims the freed disk space.
@@ -719,11 +722,11 @@ func (db *DB) GetSongsBatchFiltered(userID string, limit int, afterID string, cu
 	}
 
 	// Format the cutoff time for database comparison
-	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
+	cutoff := cutoffTime.Unix()
 
 	rows, err := db.conn.Query(`SELECT `+songColumns+`
-		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') < ?) AND (COALESCE(last_skipped, '1970-01-01') < ?)
-		AND id > ? ORDER BY id LIMIT ?`, userID, cutoffStr, cutoffStr, afterID, limit)
+		FROM songs WHERE user_id = ? AND COALESCE(last_played, 0) < ? AND COALESCE(last_skipped, 0) < ?
+		AND id > ? ORDER BY id LIMIT ?`, userID, cutoff, cutoff, afterID, limit)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query filtered songs batch").
 			WithContext("userID", userID).
@@ -772,18 +775,18 @@ func (db *DB) GetEligibleSongsByIDs(userID string, songIDs []string, cutoffTime 
 		return nil, nil
 	}
 
-	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
+	cutoff := cutoffTime.Unix()
 
 	placeholders := make([]string, len(songIDs))
 	args := make([]interface{}, 0, len(songIDs)+3)
-	args = append(args, userID, cutoffStr, cutoffStr)
+	args = append(args, userID, cutoff, cutoff)
 	for i, songID := range songIDs {
 		placeholders[i] = "?"
 		args = append(args, songID)
 	}
 
 	rows, err := db.conn.Query(`SELECT `+songColumns+`
-		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') < ?) AND (COALESCE(last_skipped, '1970-01-01') < ?)
+		FROM songs WHERE user_id = ? AND COALESCE(last_played, 0) < ? AND COALESCE(last_skipped, 0) < ?
 		AND id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query eligible songs by IDs").
@@ -820,11 +823,11 @@ func (db *DB) GetRecentlyHeardSongs(userID string, cutoffTime time.Time) ([]mode
 		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
 	}
 
-	cutoffStr := cutoffTime.Format("2006-01-02 15:04:05")
+	cutoff := cutoffTime.Unix()
 
 	rows, err := db.conn.Query(`SELECT `+songColumns+`
-		FROM songs WHERE user_id = ? AND (COALESCE(last_played, '1970-01-01') >= ? OR COALESCE(last_skipped, '1970-01-01') >= ?)`,
-		userID, cutoffStr, cutoffStr)
+		FROM songs WHERE user_id = ? AND (COALESCE(last_played, 0) >= ? OR COALESCE(last_skipped, 0) >= ?)`,
+		userID, cutoff, cutoff)
 	if err != nil {
 		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query recently heard songs").
 			WithContext("userID", userID)
@@ -1044,7 +1047,7 @@ func (db *DB) RecordPlayEventAt(userID, songID, eventType string, at time.Time) 
 		`+timeColumn+` = CASE WHEN `+timeColumn+` IS NULL OR `+timeColumn+` < ? THEN ? ELSE `+timeColumn+` END,
 		adjusted_plays = ?, adjusted_skips = ?, adjusted_at = ?
 		WHERE id = ? AND user_id = ?`,
-		at, at, adjustedPlays, adjustedSkips, ref.Unix(), songID, userID)
+		at.Unix(), at.Unix(), adjustedPlays, adjustedSkips, ref.Unix(), songID, userID)
 	if err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to update song "+countColumn).
 			WithContext("user_id", userID).
@@ -1075,6 +1078,12 @@ func (db *DB) healthCheckLoop() {
 }
 
 // performHealthCheck pings the database and logs connection pool statistics
+// Ping reports whether the database answers a query
+func (db *DB) Ping(ctx context.Context) error {
+	var one int
+	return db.conn.QueryRowContext(ctx, `SELECT 1`).Scan(&one)
+}
+
 func (db *DB) performHealthCheck() {
 	if err := db.conn.Ping(); err != nil {
 		db.logger.WithError(err).Error("Database health check failed")

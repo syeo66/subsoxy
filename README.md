@@ -47,6 +47,7 @@ To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin 
 | `/rest/scrobble` | Records plays and skips, then forwards to the upstream server |
 | `/rest/stream`, `/rest/ping`, `/rest/getLicense` | Logged, then forwarded |
 | `/debug` | HTML view of per-song weights (only with `-debug-mode`) |
+| `/healthz` | `200 ok` while the database answers, `503` otherwise. Not forwarded, rate limited or logged. Used by the Docker `HEALTHCHECK` |
 | everything else | Forwarded unchanged |
 
 ## Documentation

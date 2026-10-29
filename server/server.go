@@ -56,8 +56,12 @@ const (
 	MassDeletionFraction     = 0.5
 	MassDeletionConfirmDelay = 30 * time.Minute
 	ReadHeaderTimeout        = 10 * time.Second
-	SubsonicAPIVersion       = "1.15.0"
-	ClientName               = "subsoxy"
+	// Path of the health check, answered by subsoxy itself rather than forwarded
+	HealthEndpoint = "/healthz"
+	// How long the health check waits for the database
+	HealthCheckTimeout = 2 * time.Second
+	SubsonicAPIVersion = "1.15.0"
+	ClientName         = "subsoxy"
 )
 
 // ASCII control character constants
@@ -246,8 +250,8 @@ func (ps *ProxyServer) AddAuthenticatedHook(endpoint string, hook models.Hook) {
 
 // isAuthenticated verifies the request's credentials with the same upstream validation
 // used for credential capture, and checks that they belong to the user the hooks act on.
-func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password string) bool {
-	if username == "" || password == "" {
+func (ps *ProxyServer) isAuthenticated(r *http.Request, username string, cred credentials.Credential) bool {
+	if username == "" || cred.IsZero() {
 		return false
 	}
 
@@ -261,7 +265,7 @@ func (ps *ProxyServer) isAuthenticated(r *http.Request, username, password strin
 		return false
 	}
 
-	isNewCredential, err := ps.credentials.ValidateAndStore(r.Context(), username, password)
+	isNewCredential, err := ps.credentials.ValidateAndStore(r.Context(), username, cred)
 	if err != nil {
 		ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials, forwarding without local handling")
 		return false
@@ -364,7 +368,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	authenticated := false
 
 	if strings.HasPrefix(endpoint, "/rest/") || needsAuth {
-		username, password := ps.extractCredentials(r)
+		username, cred := ps.extractCredentials(r)
 
 		// Validate input lengths
 		if len(username) > MaxUsernameLength {
@@ -377,16 +381,16 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 		if needsAuth {
 			// Validated synchronously, which also captures the credentials for sync
-			authenticated = ps.isAuthenticated(r, username, password)
-		} else if username != "" && password != "" {
+			authenticated = ps.isAuthenticated(r, username, cred)
+		} else if username != "" && !cred.IsZero() {
 			if !ps.credentials.HasRecent(username, CredentialRecaptureInterval) {
-				ps.captureCredentials(username, password)
+				ps.captureCredentials(username, cred)
 			}
 		} else {
 			// Log details about request without exposing any credential information
 			ps.logger.WithFields(logrus.Fields{
 				"has_username":  username != "",
-				"has_password":  password != "",
+				"has_secret":    !cred.IsZero(),
 				"endpoint":      sanitizedEndpoint,
 				"method":        r.Method,
 				"content_type":  r.Header.Get("Content-Type"),
@@ -414,7 +418,7 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 // captureCredentials validates credentials from a forwarded request in the background and
 // stores them for sync. It's best effort: when every worker is busy the credentials are
 // left for a later request, so forwarding is never held up.
-func (ps *ProxyServer) captureCredentials(username, password string) {
+func (ps *ProxyServer) captureCredentials(username string, cred credentials.Credential) {
 	select {
 	case ps.credentialWorkers <- struct{}{}:
 	default:
@@ -431,7 +435,7 @@ func (ps *ProxyServer) captureCredentials(username, password string) {
 
 		ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
 		// Not tied to the request, which may finish first, but abandoned on shutdown
-		isNewCredential, err := ps.credentials.ValidateAndStore(ps.ctx, username, password)
+		isNewCredential, err := ps.credentials.ValidateAndStore(ps.ctx, username, cred)
 		if err != nil {
 			ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
 		} else if isNewCredential {
@@ -458,6 +462,8 @@ func (ps *ProxyServer) Start() error {
 		ps.logger.Info("Security headers middleware disabled")
 	}
 
+	// Registered ahead of the proxy, so health checks skip its logging and rate limiting
+	router.HandleFunc(HealthEndpoint, ps.healthHandler).Methods(http.MethodGet, http.MethodHead)
 	router.PathPrefix("/").HandlerFunc(ps.proxyHandler)
 
 	// Listen before returning, so a port that can't be bound is reported to the caller,
@@ -486,6 +492,23 @@ func (ps *ProxyServer) Start() error {
 	}()
 
 	return nil
+}
+
+// healthHandler answers container health checks: 200 while the database answers, 503
+// otherwise. Upstream isn't checked, so an upstream outage doesn't get the proxy restarted.
+func (ps *ProxyServer) healthHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), HealthCheckTimeout)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := ps.db.Ping(ctx); err != nil {
+		ps.logger.WithError(err).Warn("Health check failed: database unavailable")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("database unavailable\n"))
+		return
+	}
+	w.Write([]byte("ok\n"))
 }
 
 func (ps *ProxyServer) Shutdown(ctx context.Context) error {
@@ -574,7 +597,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 			}
 		}
 
-		ps.syncUserWithPassword(username, allCredentials[username])
+		ps.syncUserWithCredential(username, allCredentials[username])
 	}
 
 	ps.logger.Info("Multi-user song sync completed")
@@ -582,32 +605,32 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 
 // syncUser syncs one user's library with their stored credentials
 func (ps *ProxyServer) syncUser(username string) {
-	password, ok := ps.credentials.Get(username)
+	cred, ok := ps.credentials.Get(username)
 	if !ok {
 		ps.logger.WithField("user", sanitizeUsername(username)).Warn("No stored credentials for user, skipping sync")
 		return
 	}
-	ps.syncUserWithPassword(username, password)
+	ps.syncUserWithCredential(username, cred)
 }
 
-// syncUserWithPassword syncs one user's library unless a sync for that user is already running
-func (ps *ProxyServer) syncUserWithPassword(username, password string) {
+// syncUserWithCredential syncs one user's library unless a sync for that user is already running
+func (ps *ProxyServer) syncUserWithCredential(username string, cred credentials.Credential) {
 	if _, running := ps.syncingUsers.LoadOrStore(username, struct{}{}); running {
 		ps.logger.WithField("user", sanitizeUsername(username)).Debug("Sync already in progress for user, skipping")
 		return
 	}
 	defer ps.syncingUsers.Delete(username)
 
-	if err := ps.syncSongsForUser(username, password); err != nil {
+	if err := ps.syncSongsForUser(username, cred); err != nil {
 		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
 	}
 }
 
 // syncSongsForUser fetches a user's library from upstream and applies the differences locally
-func (ps *ProxyServer) syncSongsForUser(username, password string) error {
+func (ps *ProxyServer) syncSongsForUser(username string, cred credentials.Credential) error {
 	ps.logger.WithField("user", sanitizeUsername(username)).Info("Syncing songs for user")
 
-	allSongs, incomplete, err := ps.fetchLibrary(username, password)
+	allSongs, incomplete, err := ps.fetchLibrary(username, cred)
 	if err != nil {
 		return err
 	}
@@ -738,8 +761,8 @@ func (ps *ProxyServer) confirmDeletion(username string, toDelete, stored int) bo
 // walking the folder tree (a request per artist and album) when the server doesn't answer
 // that search. incomplete is set when part of the library could not be fetched: the list is
 // then partial, so songs missing from it must not be treated as removed upstream.
-func (ps *ProxyServer) fetchLibrary(username, password string) (songs []models.Song, incomplete bool, err error) {
-	songs, err = ps.fetchLibraryBySearch(username, password)
+func (ps *ProxyServer) fetchLibrary(username string, cred credentials.Credential) (songs []models.Song, incomplete bool, err error) {
+	songs, err = ps.fetchLibraryBySearch(username, cred)
 	if err == nil && len(songs) > 0 {
 		return songs, false, nil
 	}
@@ -748,16 +771,16 @@ func (ps *ProxyServer) fetchLibrary(username, password string) (songs []models.S
 	// so an empty library is only believed once the folder walk agrees
 	ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).
 		Info("Library search returned no songs, syncing by walking the music folders")
-	return ps.fetchLibraryByDirectories(username, password)
+	return ps.fetchLibraryByDirectories(username, cred)
 }
 
 // fetchLibraryBySearch pages through all songs with search3 and an empty query
-func (ps *ProxyServer) fetchLibraryBySearch(username, password string) ([]models.Song, error) {
+func (ps *ProxyServer) fetchLibraryBySearch(username string, cred credentials.Credential) ([]models.Song, error) {
 	var songs []models.Song
 	seen := make(map[string]bool)
 
 	for offset := 0; ; offset += LibraryPageSize {
-		params := ps.buildAuthParams(username, password)
+		params := ps.buildAuthParams(username, cred)
 		params.Set("query", "")
 		params.Set("artistCount", "0")
 		params.Set("albumCount", "0")
@@ -791,9 +814,9 @@ func (ps *ProxyServer) fetchLibraryBySearch(username, password string) ([]models
 }
 
 // fetchLibraryByDirectories walks music folders, artists and albums to collect all songs
-func (ps *ProxyServer) fetchLibraryByDirectories(username, password string) ([]models.Song, bool, error) {
+func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentials.Credential) ([]models.Song, bool, error) {
 	// First, get all music folders
-	musicFolders, err := ps.getMusicFolders(username, password)
+	musicFolders, err := ps.getMusicFolders(username, cred)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errors.CategoryNetwork, "MUSIC_FOLDERS_FAILED", "failed to get music folders").
 			WithContext("username", username)
@@ -814,7 +837,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username, password string) ([]m
 		}).Debug("Processing music folder")
 
 		// Get indexes for this folder to get artists
-		indexes, err := ps.getIndexes(username, password, folderID)
+		indexes, err := ps.getIndexes(username, cred, folderID)
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
 				"user":      sanitizeUsername(username),
@@ -834,7 +857,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username, password string) ([]m
 				}).Debug("Processing artist")
 
 				// Get albums for this artist
-				albums, err := ps.getMusicDirectory(username, password, artist.ID)
+				albums, err := ps.getMusicDirectory(username, cred, artist.ID)
 				if err != nil {
 					ps.logger.WithError(err).WithFields(logrus.Fields{
 						"user":      sanitizeUsername(username),
@@ -854,7 +877,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username, password string) ([]m
 						}).Debug("Processing album")
 
 						// Get songs for this album
-						songs, err := ps.getMusicDirectory(username, password, album.ID)
+						songs, err := ps.getMusicDirectory(username, cred, album.ID)
 						if err != nil {
 							ps.logger.WithError(err).WithFields(logrus.Fields{
 								"user":     sanitizeUsername(username),
@@ -920,17 +943,17 @@ func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response 
 }
 
 // getMusicFolders fetches all music folders for a user
-func (ps *ProxyServer) getMusicFolders(username, password string) ([]models.MusicFolder, error) {
+func (ps *ProxyServer) getMusicFolders(username string, cred credentials.Credential) ([]models.MusicFolder, error) {
 	var response models.SubsonicResponse
-	if err := ps.getSubsonic("getMusicFolders", ps.buildAuthParams(username, password), &response); err != nil {
+	if err := ps.getSubsonic("getMusicFolders", ps.buildAuthParams(username, cred), &response); err != nil {
 		return nil, err
 	}
 	return response.SubsonicResponse.MusicFolders.MusicFolder, nil
 }
 
 // getIndexes fetches artist indexes for a music folder
-func (ps *ProxyServer) getIndexes(username, password, musicFolderId string) ([]models.Index, error) {
-	params := ps.buildAuthParams(username, password)
+func (ps *ProxyServer) getIndexes(username string, cred credentials.Credential, musicFolderId string) ([]models.Index, error) {
+	params := ps.buildAuthParams(username, cred)
 	if musicFolderId != "" {
 		params.Add("musicFolderId", musicFolderId)
 	}
@@ -942,8 +965,8 @@ func (ps *ProxyServer) getIndexes(username, password, musicFolderId string) ([]m
 }
 
 // getMusicDirectory fetches directory contents (albums or songs)
-func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]models.Song, error) {
-	params := ps.buildAuthParams(username, password)
+func (ps *ProxyServer) getMusicDirectory(username string, cred credentials.Credential, id string) ([]models.Song, error) {
+	params := ps.buildAuthParams(username, cred)
 	params.Add("id", id)
 	var response models.SubsonicResponse
 	if err := ps.getSubsonic("getMusicDirectory", params, &response); err != nil {
@@ -953,23 +976,10 @@ func (ps *ProxyServer) getMusicDirectory(username, password, id string) ([]model
 }
 
 // buildAuthParams builds authentication parameters for API calls
-func (ps *ProxyServer) buildAuthParams(username, password string) url.Values {
+func (ps *ProxyServer) buildAuthParams(username string, cred credentials.Credential) url.Values {
 	params := url.Values{}
 	params.Add("u", username)
-
-	// Check if this is token-based authentication
-	if strings.HasPrefix(password, "TOKEN:") {
-		// Extract token and salt from the special format: "TOKEN:token:salt"
-		parts := strings.Split(password, ":")
-		if len(parts) == 3 {
-			params.Add("t", parts[1])
-			params.Add("s", parts[2])
-		}
-	} else {
-		// Traditional password-based authentication
-		params.Add("p", password)
-	}
-
+	cred.AddTo(params)
 	params.Add("f", "json")
 	params.Add("v", SubsonicAPIVersion)
 	params.Add("c", ClientName)
@@ -978,9 +988,9 @@ func (ps *ProxyServer) buildAuthParams(username, password string) url.Values {
 }
 
 // getSortedUsernames returns a sorted slice of usernames for consistent ordering
-func getSortedUsernames(credentials map[string]string) []string {
-	usernames := make([]string, 0, len(credentials))
-	for username := range credentials {
+func getSortedUsernames(creds map[string]credentials.Credential) []string {
+	usernames := make([]string, 0, len(creds))
+	for username := range creds {
 		usernames = append(usernames, username)
 	}
 	// Sort to ensure consistent ordering across sync runs
@@ -994,19 +1004,19 @@ func getSortedUsernames(credentials map[string]string) []string {
 	return usernames
 }
 
-// extractCredentials extracts username and password from various sources in the request
-func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password string) {
+// extractCredentials extracts the username and credential from various sources in the request
+func (ps *ProxyServer) extractCredentials(r *http.Request) (string, credentials.Credential) {
 	if r.Form == nil {
 		ps.parseForm(r)
 	}
 
 	// Query parameters or form-encoded POST body (most common)
-	username = r.Form.Get("u")
-	password = r.Form.Get("p")
+	username := r.Form.Get("u")
+	password := r.Form.Get("p")
 
 	if username != "" && password != "" {
 		ps.logger.Debug("Credentials extracted from request parameters (password-based)")
-		return username, password
+		return username, credentials.Password(password)
 	}
 
 	// Try token-based authentication (t + s parameters)
@@ -1015,9 +1025,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 
 	if username != "" && token != "" && salt != "" {
 		ps.logger.Debug("Token-based authentication detected - will validate with upstream")
-		// For token-based auth, we return a special marker to indicate token validation needed
-		// The validation will be done directly against the upstream server
-		return username, "TOKEN:" + token + ":" + salt
+		return username, credentials.Token(token, salt)
 	}
 
 	// Try Authorization header (Basic Auth format)
@@ -1026,7 +1034,7 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 		if strings.HasPrefix(authHeader, "Basic ") {
 			if headerUsername, headerPassword, ok := r.BasicAuth(); ok {
 				ps.logger.Debug("Credentials extracted from Authorization header (Basic Auth)")
-				return headerUsername, headerPassword
+				return headerUsername, credentials.Password(headerPassword)
 			}
 		}
 	}
@@ -1035,12 +1043,12 @@ func (ps *ProxyServer) extractCredentials(r *http.Request) (username, password s
 	if headerUsername := r.Header.Get("X-Subsonic-Username"); headerUsername != "" {
 		if headerPassword := r.Header.Get("X-Subsonic-Password"); headerPassword != "" {
 			ps.logger.Debug("Credentials extracted from X-Subsonic headers")
-			return headerUsername, headerPassword
+			return headerUsername, credentials.Password(headerPassword)
 		}
 	}
 
 	ps.logger.Debug("No credentials found in request")
-	return "", ""
+	return "", credentials.Credential{}
 }
 
 // parseForm fills r.Form and r.PostForm from the query and a form-encoded POST body
@@ -1162,7 +1170,7 @@ func (ps *ProxyServer) ProcessScrobble(userID, client, songID string, isSubmissi
 // Returns nil without error when the plugin is not available so the caller gracefully
 // skips the similarity weight.
 func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
-	password, ok := ps.credentials.Get(userID)
+	cred, ok := ps.credentials.Get(userID)
 	if !ok {
 		return nil, nil
 	}
@@ -1172,7 +1180,7 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]floa
 		return nil, err
 	}
 
-	params := ps.buildAuthParams(userID, password)
+	params := ps.buildAuthParams(userID, cred)
 	params.Add("id", songID)
 	params.Add("count", "50")
 	baseURL.RawQuery = params.Encode()

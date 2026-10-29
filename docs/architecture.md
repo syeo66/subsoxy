@@ -59,8 +59,8 @@ CREATE TABLE songs (
     artist         TEXT NOT NULL,
     album          TEXT NOT NULL,
     duration       INTEGER NOT NULL,       -- seconds
-    last_played    DATETIME,
-    last_skipped   DATETIME,
+    last_played    INTEGER,                -- Unix time (older databases: DATETIME column, converted on startup)
+    last_skipped   INTEGER,
     play_count     INTEGER DEFAULT 0,      -- raw
     skip_count     INTEGER DEFAULT 0,      -- raw
     adjusted_plays REAL DEFAULT 0.0,       -- decayed, see how-it-works.md

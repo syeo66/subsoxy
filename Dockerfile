@@ -28,4 +28,8 @@ COPY --from=run-test-stage /server /server
 
 EXPOSE 8080
 
+# busybox wget is part of alpine. PORT is the same variable the server reads.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-8080}/healthz" || exit 1
+
 ENTRYPOINT ["/server"]

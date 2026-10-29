@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/syeo66/subsoxy/config"
+	"github.com/syeo66/subsoxy/credentials"
 	"github.com/syeo66/subsoxy/models"
 )
 
@@ -545,7 +546,7 @@ func TestFetchAndStoreSongs(t *testing.T) {
 		server.config.UpstreamURL = mockServer.URL
 
 		// Store valid credentials
-		_, _ = server.credentials.ValidateAndStore(context.Background(), "testuser", "testpass")
+		_, _ = server.credentials.ValidateAndStore(context.Background(), "testuser", credentials.Password("testpass"))
 
 		// This would normally fetch from upstream, but we can't easily test without
 		// changing the URL or mocking the HTTP client
@@ -736,7 +737,8 @@ func TestExtractCredentials(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := tt.setupRequest()
-			username, password := server.extractCredentials(req)
+			username, cred := server.extractCredentials(req)
+			password := cred.Password
 
 			if username != tt.expectedUsername {
 				t.Errorf("Expected username %q, got %q", tt.expectedUsername, username)
@@ -745,6 +747,43 @@ func TestExtractCredentials(t *testing.T) {
 				t.Errorf("Expected password %q, got %q", tt.expectedPassword, password)
 			}
 		})
+	}
+}
+
+func TestExtractCredentialsKeepsPasswordAndTokenApart(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:    "8080",
+		UpstreamURL:  "http://localhost:4533",
+		LogLevel:     "warn",
+		DatabasePath: "test.db",
+	}
+	defer os.Remove("test.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	tests := []struct {
+		query string
+		want  credentials.Credential
+	}{
+		{"u=alice&t=abc123&s=salt", credentials.Token("abc123", "salt")},
+		// A password that looks like a token is still a password
+		{"u=alice&p=" + url.QueryEscape("TOKEN:abc:def"), credentials.Password("TOKEN:abc:def")},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest("GET", "/rest/ping?"+tt.query, nil)
+		username, cred := server.extractCredentials(req)
+		if username != "alice" || cred != tt.want {
+			t.Errorf("extractCredentials(%q) = %q, %+v; want alice, %+v", tt.query, username, cred, tt.want)
+		}
+
+		params := server.buildAuthParams(username, cred)
+		if params.Get("p") != tt.want.Password || params.Get("t") != tt.want.Token || params.Get("s") != tt.want.Salt {
+			t.Errorf("buildAuthParams for %q = %v, want the same secret back", tt.query, params)
+		}
 	}
 }
 
@@ -1230,29 +1269,29 @@ func TestFetchAndStoreSongsMultiUser(t *testing.T) {
 	defer server.Shutdown(context.Background())
 
 	// Add multiple users with valid credentials
-	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", "pass1")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", credentials.Password("pass1"))
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", "pass2")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", credentials.Password("pass2"))
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore(context.Background(), "user3", "pass3")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user3", credentials.Password("pass3"))
 	if err != nil {
 		t.Errorf("Failed to validate user3: %v", err)
 	}
 
 	// Trigger direct sync for each user to avoid delays
-	err = server.syncSongsForUser("user1", "pass1")
+	err = server.syncSongsForUser("user1", credentials.Password("pass1"))
 	if err != nil {
 		t.Errorf("Failed to sync songs for user1: %v", err)
 	}
-	err = server.syncSongsForUser("user2", "pass2")
+	err = server.syncSongsForUser("user2", credentials.Password("pass2"))
 	if err != nil {
 		t.Errorf("Failed to sync songs for user2: %v", err)
 	}
-	err = server.syncSongsForUser("user3", "pass3")
+	err = server.syncSongsForUser("user3", credentials.Password("pass3"))
 	if err != nil {
 		t.Errorf("Failed to sync songs for user3: %v", err)
 	}
@@ -1408,21 +1447,21 @@ func TestSyncSongsForUserError(t *testing.T) {
 	defer server.Shutdown(context.Background())
 
 	// Add multiple users with valid credentials
-	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", "pass1")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user1", credentials.Password("pass1"))
 	if err != nil {
 		t.Errorf("Failed to validate user1: %v", err)
 	}
-	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", "pass2")
+	_, err = server.credentials.ValidateAndStore(context.Background(), "user2", credentials.Password("pass2"))
 	if err != nil {
 		t.Errorf("Failed to validate user2: %v", err)
 	}
 
 	// Trigger direct sync for user1 only (user2 should fail)
-	err = server.syncSongsForUser("user1", "pass1")
+	err = server.syncSongsForUser("user1", credentials.Password("pass1"))
 	if err != nil {
 		t.Errorf("Failed to sync songs for user1: %v", err)
 	}
-	err = server.syncSongsForUser("user2", "pass2")
+	err = server.syncSongsForUser("user2", credentials.Password("pass2"))
 	if err == nil {
 		t.Error("Expected sync to fail for user2, but it succeeded")
 	}
@@ -1485,7 +1524,11 @@ func TestGetSortedUsernames(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := getSortedUsernames(tc.input)
+			creds := make(map[string]credentials.Credential, len(tc.input))
+			for username, password := range tc.input {
+				creds[username] = credentials.Password(password)
+			}
+			result := getSortedUsernames(creds)
 
 			if len(result) != len(tc.expected) {
 				t.Errorf("Expected %d usernames, got %d", len(tc.expected), len(result))
@@ -2173,7 +2216,7 @@ func TestSyncSongsForUserIncompleteFetchKeepsSongs(t *testing.T) {
 		return byID
 	}
 
-	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 		t.Fatalf("Initial sync failed: %v", err)
 	}
 	if got := len(songsByID()); got != 3 {
@@ -2187,7 +2230,7 @@ func TestSyncSongsForUserIncompleteFetchKeepsSongs(t *testing.T) {
 	mu.Lock()
 	failAlbum2 = true
 	mu.Unlock()
-	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 		t.Fatalf("Incomplete sync failed: %v", err)
 	}
 	song3, ok := songsByID()["song3"]
@@ -2203,7 +2246,7 @@ func TestSyncSongsForUserIncompleteFetchKeepsSongs(t *testing.T) {
 	failAlbum2 = false
 	albumIDs = []string{"album1"}
 	mu.Unlock()
-	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 		t.Fatalf("Complete sync failed: %v", err)
 	}
 	songs := songsByID()
@@ -2421,7 +2464,7 @@ func TestNewCredentialsSyncOnlyThatUser(t *testing.T) {
 	upstream := &upstreamRecorder{}
 	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
 
-	if _, err := server.credentials.ValidateAndStore(context.Background(), "bob", "hunter2"); err != nil {
+	if _, err := server.credentials.ValidateAndStore(context.Background(), "bob", credentials.Password("hunter2")); err != nil {
 		t.Fatalf("Failed to store bob's credentials: %v", err)
 	}
 
@@ -2445,13 +2488,13 @@ func TestSyncSkippedWhileUserSyncRunning(t *testing.T) {
 	server := newCaptureTestServer(t, upstream, config.DefaultCredentialWorkers)
 
 	server.syncingUsers.Store("alice", struct{}{})
-	server.syncUserWithPassword("alice", "secret")
+	server.syncUserWithCredential("alice", credentials.Password("secret"))
 	if got := upstream.count("/rest/getMusicFolders alice"); got != 0 {
 		t.Errorf("Expected no second sync while one is running, got %d", got)
 	}
 
 	server.syncingUsers.Delete("alice")
-	server.syncUserWithPassword("alice", "secret")
+	server.syncUserWithCredential("alice", credentials.Password("secret"))
 	if got := upstream.count("/rest/getMusicFolders alice"); got != 1 {
 		t.Errorf("Expected sync to run once the earlier one finished, got %d", got)
 	}
@@ -2543,7 +2586,7 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 		mu.Lock()
 		clear(calls)
 		mu.Unlock()
-		if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 			t.Fatalf("%s: sync failed: %v", name, err)
 		}
 		songIDs, err := server.db.GetExistingSongIDs("user1")
@@ -2627,7 +2670,7 @@ func TestSyncSongsForUserHoldsBackMassDeletion(t *testing.T) {
 
 	syncAndCount := func(name string) int {
 		t.Helper()
-		if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+		if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 			t.Fatalf("%s: sync failed: %v", name, err)
 		}
 		ids, err := server.db.GetExistingSongIDs("user1")
@@ -2720,7 +2763,7 @@ func TestSyncSongsForUserWritesOnlyChangedSongs(t *testing.T) {
 	}
 	defer server.Shutdown(context.Background())
 
-	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 		t.Fatalf("Initial sync failed: %v", err)
 	}
 
@@ -2745,7 +2788,7 @@ func TestSyncSongsForUserWritesOnlyChangedSongs(t *testing.T) {
 	library = append(library, models.Song{ID: "song4", Title: "Four", Artist: "Artist", Album: "Album", Duration: 240})
 	mu.Unlock()
 
-	if err := server.syncSongsForUser("user1", "pass1"); err != nil {
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 		t.Fatalf("Second sync failed: %v", err)
 	}
 
@@ -2802,5 +2845,52 @@ func TestStartReportsPortInUse(t *testing.T) {
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		t.Errorf("Failed to shut down after a failed start: %v", err)
+	}
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to find a free port: %v", err)
+	}
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	listener.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         port,
+		UpstreamURL:       "http://127.0.0.1:1", // Unreachable: a forwarded request would fail
+		LogLevel:          "error",
+		DatabasePath:      "test_health.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req, _ := http.NewRequest(method, "http://127.0.0.1:"+port+HealthEndpoint, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s failed: %v", method, HealthEndpoint, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s %s = %d, want 200 without contacting upstream", method, HealthEndpoint, resp.StatusCode)
+		}
+	}
+
+	// Once the database is gone the check fails
+	server.db.Close()
+	w := httptest.NewRecorder()
+	server.healthHandler(w, httptest.NewRequest(http.MethodGet, HealthEndpoint, nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Health check with a closed database = %d, want 503", w.Code)
 	}
 }

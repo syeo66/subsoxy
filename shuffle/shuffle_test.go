@@ -114,32 +114,32 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 			name:        "Played today",
 			lastPlayed:  time.Now(),
 			lastSkipped: time.Time{},
-			expectedMin: 0.1,
-			expectedMax: 0.2,
-			description: "Recently played songs should get low weight",
+			expectedMin: 0.5,
+			expectedMax: 0.5,
+			description: "Songs within the replay prevention get the lowest weight",
 		},
 		{
 			name:        "Skipped today, never played",
 			lastPlayed:  time.Time{},
 			lastSkipped: time.Now(),
-			expectedMin: 0.1,
-			expectedMax: 0.2,
-			description: "Recently skipped songs should get low weight even if never played",
+			expectedMin: 0.5,
+			expectedMax: 0.5,
+			description: "Recently skipped songs get the lowest weight even if never played",
 		},
 		{
 			name:        "Played 30 days ago, skipped today",
 			lastPlayed:  time.Now().AddDate(0, 0, -30),
 			lastSkipped: time.Now(),
-			expectedMin: 0.1,
-			expectedMax: 0.2,
+			expectedMin: 0.5,
+			expectedMax: 0.5,
 			description: "Should use more recent timestamp (skip)",
 		},
 		{
 			name:        "Skipped 30 days ago, played today",
 			lastPlayed:  time.Now(),
 			lastSkipped: time.Now().AddDate(0, 0, -30),
-			expectedMin: 0.1,
-			expectedMax: 0.2,
+			expectedMin: 0.5,
+			expectedMax: 0.5,
 			description: "Should use more recent timestamp (play)",
 		},
 		{
@@ -149,6 +149,14 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 			expectedMin: 0.5,
 			expectedMax: 0.6,
 			description: "Songs played 15 days ago should be mid-range",
+		},
+		{
+			name:        "Played 14 days ago",
+			lastPlayed:  time.Now().AddDate(0, 0, -14),
+			lastSkipped: time.Time{},
+			expectedMin: 0.5,
+			expectedMax: 0.51,
+			description: "Songs just past the replay prevention should start at the lowest weight",
 		},
 		{
 			name:        "Played 30 days ago",
@@ -184,6 +192,28 @@ func TestCalculateTimeDecayWeight(t *testing.T) {
 					tt.description, tt.expectedMin, tt.expectedMax, weight)
 			}
 		})
+	}
+}
+
+func TestTimeDecayWeightIsContinuous(t *testing.T) {
+	service := &Service{}
+	weightAt := func(days float64) float64 {
+		lastPlayed := time.Now().Add(-time.Duration(days * float64(24*time.Hour)))
+		return service.calculateTimeDecayWeight(lastPlayed, time.Time{})
+	}
+
+	below, above := weightAt(TimeDecayDaysThreshold-0.001), weightAt(TimeDecayDaysThreshold+0.001)
+	if math.Abs(above-below) > 1e-3 {
+		t.Errorf("Weight jumps at %d days: %.4f before, %.4f after", TimeDecayDaysThreshold, below, above)
+	}
+
+	previous := 0.0
+	for days := 0.0; days <= 2*DaysPerYear; days += 0.5 {
+		w := weightAt(days)
+		if w < previous-1e-9 {
+			t.Fatalf("Weight decreases at %.1f days: %.4f after %.4f", days, w, previous)
+		}
+		previous = w
 	}
 }
 
@@ -347,7 +377,7 @@ func TestCalculateSongWeight(t *testing.T) {
 			setupFunc: func() {
 				// No setup needed
 			},
-			expectedWeight: 1.0 * 0.1 * 1.743 * 1.0, // Recently played with Bayesian-smoothed play ratio
+			expectedWeight: 1.0 * TimeDecayMinWeight * UnplayedSongWeight * 1.0, // Within the replay prevention; no decayed history, so the unplayed play/skip weight
 			tolerance:      0.05,
 			description:    "Recently played but always played song should balance time decay with play ratio",
 		},

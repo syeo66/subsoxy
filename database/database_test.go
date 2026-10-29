@@ -1651,6 +1651,84 @@ func TestAdjustedAtMigration(t *testing.T) {
 	}
 }
 
+func TestTimestampsToUnixMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_timestamps_unix.db"
+	defer os.Remove(dbPath)
+
+	db, err := New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	if err := db.StoreSongs("user1", []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 180},
+		{ID: "3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 180},
+	}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	// Text timestamps as older versions wrote them: Go's format with the writer's zone offset,
+	// and SQLite's datetime() format in UTC. All three name the same instant.
+	want := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	for _, q := range []string{
+		`UPDATE songs SET last_played = '2026-10-20 10:00:00.123456789+02:00' WHERE id = '1'`,
+		`UPDATE songs SET last_played = '2026-10-20 08:00:00' WHERE id = '2'`,
+		`UPDATE songs SET last_skipped = '2026-10-20 03:00:00-05:00' WHERE id = '3'`,
+	} {
+		if _, err := db.conn.Exec(q); err != nil {
+			t.Fatalf("Failed to set up old timestamps: %v", err)
+		}
+	}
+	db.Close()
+
+	db, err = New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to reopen database: %v", err)
+	}
+	defer db.Close()
+
+	var textCount int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM songs WHERE typeof(last_played) = 'text' OR typeof(last_skipped) = 'text'`).Scan(&textCount); err != nil {
+		t.Fatalf("Failed to count text timestamps: %v", err)
+	}
+	if textCount != 0 {
+		t.Errorf("Expected no text timestamps after migration, got %d", textCount)
+	}
+
+	all, err := db.GetAllSongs("user1")
+	if err != nil {
+		t.Fatalf("GetAllSongs failed: %v", err)
+	}
+	for _, song := range all {
+		got := song.LastPlayed
+		if song.ID == "3" {
+			got = song.LastSkipped
+		}
+		if !got.Equal(want) {
+			t.Errorf("Song %s timestamp after migration = %v, want %v", song.ID, got, want)
+		}
+	}
+
+	// The 14-day filter compares the same instants, whatever zone they were written in
+	recent, err := db.GetRecentlyHeardSongs("user1", want)
+	if err != nil {
+		t.Fatalf("GetRecentlyHeardSongs failed: %v", err)
+	}
+	if len(recent) != 3 {
+		t.Errorf("Expected all 3 songs heard at the cutoff, got %d", len(recent))
+	}
+	eligible, err := db.GetSongsBatchFiltered("user1", 10, "", want.Add(time.Second))
+	if err != nil {
+		t.Fatalf("GetSongsBatchFiltered failed: %v", err)
+	}
+	if len(eligible) != 3 {
+		t.Errorf("Expected all 3 songs eligible just after the cutoff, got %d", len(eligible))
+	}
+}
+
 func TestDropArtistStatsMigration(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)

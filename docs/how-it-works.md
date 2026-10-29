@@ -73,7 +73,7 @@ weight = time × play_skip × artist × similarity
 
 | Factor | Range | What it does |
 |--------|-------|--------------|
-| **time** | 0.1–2.0, or 4.0 | Based on whichever is newer, `last_played` or `last_skipped`. Never presented: **4.0**. Under 30 days ago: 0.1 rising to 1.0. Older: `1 + min(days/365, 1)`, up to 2.0 |
+| **time** | 0.5–2.0, or 4.0 | Based on whichever is newer, `last_played` or `last_skipped`. Never presented: **4.0**. Songs from the last 14 days aren't picked anyway, so the weight starts at 0.5 on day 14 and rises linearly to about 1.08 on day 30. Older: `1 + min(days/365, 1)`, up to 2.0 |
 | **play_skip** | 0.2–1.8, or 1.5 | Bayesian play ratio from the song's adjusted counts (see below). No history: **1.5** |
 | **artist** | 0.5–1.5 | The same Bayesian ratio, using the sum of adjusted counts over all the artist's songs. Unknown artist: 1.0 |
 | **similarity** | 1.0–1.5 | `1 + 0.5 × score`, where `score` (0–1) is how acoustically close the song is to the current reference track. 1.0 when similarity is unavailable |
