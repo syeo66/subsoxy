@@ -952,3 +952,42 @@ func TestValidateAndStoreAbandonsCancelledValidation(t *testing.T) {
 		t.Error("Cancelled validation should not mark the credentials as rejected")
 	}
 }
+
+func TestForget(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	upstream, calls := newPingCounter(t)
+	manager := New(logger, upstream.URL)
+
+	if _, err := manager.ValidateAndStore(context.Background(), "alice", Password("old")); err != nil {
+		t.Fatalf("ValidateAndStore failed: %v", err)
+	}
+	if !manager.Forget("alice", Password("old")) {
+		t.Error("Forgetting the stored credential should remove it")
+	}
+	if _, ok := manager.Get("alice"); ok {
+		t.Error("A forgotten credential should no longer be stored")
+	}
+
+	// It's refused without asking upstream, though upstream would accept it here
+	before := calls()
+	if _, err := manager.ValidateAndStore(context.Background(), "alice", Password("old")); !errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
+		t.Errorf("Expected a forgotten credential to be refused, got %v", err)
+	}
+	if got := calls() - before; got != 0 {
+		t.Errorf("Expected no upstream validation for a forgotten credential, got %d", got)
+	}
+
+	// A new password is stored as new credentials, which starts a sync
+	if isNew, err := manager.ValidateAndStore(context.Background(), "alice", Password("new")); err != nil || !isNew {
+		t.Fatalf("Expected the new password to be stored as new, got isNew=%v err=%v", isNew, err)
+	}
+
+	// Rejecting the old credential later leaves the newer stored one alone
+	if manager.Forget("alice", Password("old")) {
+		t.Error("Forgetting a credential that isn't stored should not remove the stored one")
+	}
+	if cred, ok := manager.Get("alice"); !ok || cred != Password("new") {
+		t.Errorf("Expected the new credential to stay stored, got %+v (stored: %v)", cred, ok)
+	}
+}

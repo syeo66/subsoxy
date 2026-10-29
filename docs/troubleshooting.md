@@ -39,7 +39,7 @@ curl -v http://upstream:4533/rest/ping          # reachable from the proxy host?
 curl -w "%{time_total}\n" -o /dev/null -s http://upstream:4533/rest/ping   # slow?
 ```
 
-Credential validation times out after 10s. A failed sync for one user is logged and retried on the next hourly cycle.
+Credential validation times out after 10s. A failed sync for one user is logged and retried on the next hourly cycle. The exception is upstream rejecting the stored credentials (`Upstream rejected stored credentials, dropping them`): that user isn't synced again until a client logs in with the current password.
 
 If similarity never seems to have any effect, the upstream server probably doesn't provide `/rest/getSonicSimilarTracks`. That's fine: the shuffle carries on without that factor.
 

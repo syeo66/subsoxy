@@ -62,6 +62,8 @@ const (
 	HealthCheckTimeout = 2 * time.Second
 	SubsonicAPIVersion = "1.15.0"
 	ClientName         = "subsoxy"
+	// Subsonic error code for a wrong username or password
+	SubsonicErrorWrongCredentials = 40
 )
 
 // ASCII control character constants
@@ -621,9 +623,25 @@ func (ps *ProxyServer) syncUserWithCredential(username string, cred credentials.
 	}
 	defer ps.syncingUsers.Delete(username)
 
-	if err := ps.syncSongsForUser(username, cred); err != nil {
+	err := ps.syncSongsForUser(username, cred)
+	if isRejectedCredential(err) {
+		// The password changed or the account is gone: stop syncing with this credential
+		// until the client sends one upstream accepts
+		removed := ps.credentials.Forget(username, cred)
+		ps.logger.WithError(err).WithFields(logrus.Fields{
+			"user":    sanitizeUsername(username),
+			"removed": removed,
+		}).Warn("Upstream rejected stored credentials, dropping them")
+		return
+	}
+	if err != nil {
 		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
 	}
+}
+
+// isRejectedCredential reports whether err means upstream rejected the credentials
+func isRejectedCredential(err error) bool {
+	return errors.IsCode(err, errors.ErrInvalidCredentials.Code)
 }
 
 // syncSongsForUser fetches a user's library from upstream and applies the differences locally
@@ -766,6 +784,10 @@ func (ps *ProxyServer) fetchLibrary(username string, cred credentials.Credential
 	if err == nil && len(songs) > 0 {
 		return songs, false, nil
 	}
+	// Walking the folders with the same credentials would be rejected too
+	if isRejectedCredential(err) {
+		return nil, false, err
+	}
 
 	// No songs could also mean the server doesn't treat an empty query as "everything",
 	// so an empty library is only believed once the folder walk agrees
@@ -907,8 +929,18 @@ type subsonicResponse interface {
 	ResponseStatus() string
 }
 
+// subsonicErrorEnvelope reads the error code of a failed Subsonic response
+type subsonicErrorEnvelope struct {
+	SubsonicResponse struct {
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	} `json:"subsonic-response"`
+}
+
 // getSubsonic calls a Subsonic endpoint upstream and decodes its JSON response into
-// response, failing unless the response status is "ok"
+// response, failing unless the response status is "ok". When upstream rejects the
+// credentials the error is errors.ErrInvalidCredentials, unwrapped so callers can check it.
 func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response subsonicResponse) error {
 	baseURL, err := url.Parse(ps.config.UpstreamURL + "/rest/" + endpoint)
 	if err != nil {
@@ -931,11 +963,20 @@ func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response 
 		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to read response")
+	}
+	if err := json.Unmarshal(body, response); err != nil {
 		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
 	}
 
 	if response.ResponseStatus() != "ok" {
+		var failed subsonicErrorEnvelope
+		if json.Unmarshal(body, &failed) == nil && failed.SubsonicResponse.Error.Code == SubsonicErrorWrongCredentials {
+			return errors.ErrInvalidCredentials.WithContext("endpoint", endpoint).
+				WithContext("reason", "rejected by upstream")
+		}
 		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
 	}
 

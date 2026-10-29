@@ -2894,3 +2894,80 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("Health check with a closed database = %d, want 503", w.Code)
 	}
 }
+
+func TestSyncDropsCredentialsUpstreamRejects(t *testing.T) {
+	var mu sync.Mutex
+	password := "old" // The password upstream currently accepts
+	errorCode := 40   // What upstream answers a sync with any other password
+	calls := map[string]int{}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls[r.URL.Path]++
+		body := map[string]interface{}{"status": "ok", "version": "1.15.0"}
+		if r.URL.Query().Get("p") != password {
+			body["status"] = "failed"
+			body["error"] = map[string]interface{}{"code": errorCode, "message": "upstream error"}
+		} else if r.URL.Path == "/rest/search3" {
+			body["searchResult3"] = map[string]interface{}{"song": []models.Song{{ID: "song1", Title: "Song", Artist: "Artist", Album: "Album"}}}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"subsonic-response": body})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_rejected_credentials.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if _, err := server.credentials.ValidateAndStore(context.Background(), "alice", credentials.Password("old")); err != nil {
+		t.Fatalf("Failed to store credentials: %v", err)
+	}
+
+	// Another upstream failure says nothing about the credentials, so they're kept
+	mu.Lock()
+	password, errorCode = "new", 0
+	mu.Unlock()
+	server.syncUser("alice")
+	if _, ok := server.credentials.Get("alice"); !ok {
+		t.Fatal("Credentials should be kept when sync fails for another reason")
+	}
+
+	// After a password change upstream rejects the stored one: it's dropped, without a folder walk
+	mu.Lock()
+	errorCode = 40
+	clear(calls)
+	mu.Unlock()
+	server.syncUser("alice")
+	if _, ok := server.credentials.Get("alice"); ok {
+		t.Error("Credentials upstream rejected should be dropped")
+	}
+	mu.Lock()
+	if calls["/rest/getMusicFolders"] != 0 {
+		t.Errorf("Expected no folder walk with rejected credentials, got %d getMusicFolders calls", calls["/rest/getMusicFolders"])
+	}
+	mu.Unlock()
+
+	// The periodic sync then skips the user until a client sends the new password
+	mu.Lock()
+	clear(calls)
+	mu.Unlock()
+	server.fetchAndStoreSongs()
+	mu.Lock()
+	if len(calls) != 0 {
+		t.Errorf("Expected no upstream calls for a user without credentials, got %v", calls)
+	}
+	mu.Unlock()
+}

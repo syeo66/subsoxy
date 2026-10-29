@@ -246,6 +246,28 @@ func (cm *Manager) rememberRejected(secretKey string, now time.Time) {
 	cm.rejectedSecrets[secretKey] = now.Add(RejectedSecretTTL)
 }
 
+// Forget handles upstream rejecting a credential it accepted before, e.g. after a password
+// change. The credential is no longer trusted as verified, is refused like any rejected one
+// for RejectedSecretTTL, and is removed from storage if it's still the user's stored one, so
+// a newer credential stored meanwhile is kept. It reports whether the stored one was removed.
+func (cm *Manager) Forget(username string, cred Credential) bool {
+	secretKey := cm.secretKey(username, cred)
+
+	cm.mutex.Lock()
+	delete(cm.verifiedSecrets[username], secretKey)
+	removed := false
+	if stored, ok := cm.validCredentials[username]; ok {
+		if storedCred, err := cm.decrypt(stored); err != nil || storedCred == cred {
+			delete(cm.validCredentials, username)
+			removed = true
+		}
+	}
+	cm.mutex.Unlock()
+
+	cm.rememberRejected(secretKey, time.Now())
+	return removed
+}
+
 // HasRecent reports whether the user's stored credential was confirmed by upstream within maxAge
 func (cm *Manager) HasRecent(username string, maxAge time.Duration) bool {
 	cm.mutex.RLock()
