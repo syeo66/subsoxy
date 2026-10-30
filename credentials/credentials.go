@@ -17,6 +17,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/syeo66/subsoxy/errors"
+	"github.com/syeo66/subsoxy/models"
 )
 
 // Encryption constants
@@ -24,8 +25,6 @@ const (
 	AES256KeySize          = 32
 	KeyIdentificationBytes = 8
 	HTTPClientTimeout      = 10 * time.Second
-	SubsonicAPIVersion     = "1.15.0"
-	ClientName             = "subsoxy"
 	// How long a secret confirmed by upstream is trusted without asking upstream again
 	VerifiedSecretTTL = 15 * time.Minute
 	// Upper bound on remembered secrets per user. Token clients may use a new salt for
@@ -296,8 +295,8 @@ func (cm *Manager) validate(ctx context.Context, username string, cred Credentia
 		cm.logger.WithField("username", username).Debug("Validating password-based authentication")
 	}
 
-	params.Add("v", SubsonicAPIVersion)
-	params.Add("c", ClientName)
+	params.Add("v", models.SubsonicAPIVersion)
+	params.Add("c", models.ClientName)
 	params.Add("f", "json")
 	baseURL.RawQuery = params.Encode()
 
@@ -380,14 +379,9 @@ func (cm *Manager) GetAllValid() map[string]Credential {
 
 // generateEncryptionKey creates a random 32-byte key for AES-256
 func generateEncryptionKey() []byte {
-	// Use a combination of random bytes and system entropy
 	key := make([]byte, AES256KeySize)
-	if _, err := rand.Read(key); err != nil {
-		// Fallback to deterministic key if crypto/rand fails
-		// This should never happen in practice
-		hash := sha256.Sum256([]byte("subsoxy-fallback-key"))
-		return hash[:]
-	}
+	// Never fails: crypto/rand crashes the program if the system can't supply randomness
+	rand.Read(key)
 	return key
 }
 

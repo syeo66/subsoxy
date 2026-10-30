@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,15 +26,14 @@ import (
 	"github.com/syeo66/subsoxy/database"
 	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/handlers"
+	"github.com/syeo66/subsoxy/logsafe"
 	"github.com/syeo66/subsoxy/middleware"
 	"github.com/syeo66/subsoxy/models"
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
 const (
-	MaxEndpointLength   = 1000
-	MaxUsernameLength   = 100
-	MaxRemoteAddrLength = 100
+	MaxUsernameLength = 100
 	// Largest form-encoded POST body parsed for credentials, the same limit net/http uses
 	MaxFormBodySize = 10 << 20
 )
@@ -60,16 +61,8 @@ const (
 	HealthEndpoint = "/healthz"
 	// How long the health check waits for the database
 	HealthCheckTimeout = 2 * time.Second
-	SubsonicAPIVersion = "1.15.0"
-	ClientName         = "subsoxy"
 	// Subsonic error code for a wrong username or password
 	SubsonicErrorWrongCredentials = 40
-)
-
-// ASCII control character constants
-const (
-	ASCIIControlCharMin = 32
-	ASCIIControlCharMax = 127
 )
 
 type ProxyServer struct {
@@ -192,50 +185,6 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	return server, nil
 }
 
-// sanitizeForLogging removes control characters and limits length to prevent log injection
-func sanitizeForLogging(input string) string {
-	// Remove control characters (ASCII 0-31 and 127)
-	sanitized := strings.Map(func(r rune) rune {
-		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
-			return -1
-		}
-		return r
-	}, input)
-
-	// Limit length to prevent resource exhaustion
-	if len(sanitized) > MaxEndpointLength {
-		sanitized = sanitized[:MaxEndpointLength] + "..."
-	}
-
-	return sanitized
-}
-
-// sanitizeRemoteAddr sanitizes remote address for logging
-func sanitizeRemoteAddr(remoteAddr string) string {
-	if len(remoteAddr) > MaxRemoteAddrLength {
-		return remoteAddr[:MaxRemoteAddrLength] + "..."
-	}
-	return remoteAddr
-}
-
-// sanitizeUsername sanitizes username for logging
-func sanitizeUsername(username string) string {
-	// Remove control characters
-	sanitized := strings.Map(func(r rune) rune {
-		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
-			return -1
-		}
-		return r
-	}, username)
-
-	// Limit length
-	if len(sanitized) > MaxUsernameLength {
-		sanitized = sanitized[:MaxUsernameLength] + "..."
-	}
-
-	return sanitized
-}
-
 func (ps *ProxyServer) AddHook(endpoint string, hook models.Hook) {
 	ps.hooks[endpoint] = append(ps.hooks[endpoint], hook)
 }
@@ -260,25 +209,31 @@ func (ps *ProxyServer) isAuthenticated(r *http.Request, username string, cred cr
 	// Hooks identify the user by the "u" parameter
 	if r.FormValue("u") != username {
 		ps.logger.WithFields(logrus.Fields{
-			"username": sanitizeUsername(username),
-			"endpoint": sanitizeForLogging(r.URL.Path),
-			"remote":   sanitizeRemoteAddr(r.RemoteAddr),
+			"username": logsafe.Username(username),
+			"endpoint": logsafe.String(r.URL.Path),
+			"remote":   ps.clientAddr(r),
 		}).Warn("Request user does not match credentials, forwarding without local handling")
 		return false
 	}
 
 	isNewCredential, err := ps.credentials.ValidateAndStore(r.Context(), username, cred)
 	if err != nil {
-		ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials, forwarding without local handling")
+		ps.logger.WithError(err).WithField("username", logsafe.Username(username)).Warn("Failed to validate credentials, forwarding without local handling")
 		return false
 	}
 
 	if isNewCredential {
-		ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
+		ps.logger.WithField("username", logsafe.Username(username)).Info("New credentials captured, triggering immediate sync")
 		ps.credentialWg.Go(func() { ps.syncUser(username) })
 	}
 
 	return true
+}
+
+// clientAddr is the address of the client that sent the request, for logging. Behind a
+// trusted reverse proxy that's the forwarded client rather than the proxy.
+func (ps *ProxyServer) clientAddr(r *http.Request) string {
+	return middleware.ClientIP(r, ps.config.TrustedProxies).String()
 }
 
 // setCORSHeaders sets CORS headers based on configuration
@@ -334,20 +289,20 @@ func (ps *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sanitize inputs for logging
-	sanitizedEndpoint := sanitizeForLogging(endpoint)
-	sanitizedRemoteAddr := sanitizeRemoteAddr(r.RemoteAddr)
+	sanitizedEndpoint := logsafe.String(endpoint)
+	clientAddr := ps.clientAddr(r)
 
 	ps.logger.WithFields(logrus.Fields{
 		"method":   r.Method,
 		"endpoint": sanitizedEndpoint,
-		"remote":   sanitizedRemoteAddr,
-	}).Info("Incoming request")
+		"remote":   clientAddr,
+	}).Debug("Incoming request")
 
 	if ps.rateLimiter != nil {
 		if client, allowed := ps.rateLimiter.Allow(r); !allowed {
 			ps.logger.WithFields(logrus.Fields{
 				"endpoint": sanitizedEndpoint,
-				"remote":   sanitizedRemoteAddr,
+				"remote":   clientAddr,
 				"client":   client,
 			}).Warn("Rate limit exceeded")
 
@@ -424,7 +379,7 @@ func (ps *ProxyServer) captureCredentials(username string, cred credentials.Cred
 	select {
 	case ps.credentialWorkers <- struct{}{}:
 	default:
-		ps.logger.WithField("username", sanitizeUsername(username)).Debug("All credential workers busy, skipping credential capture")
+		ps.logger.WithField("username", logsafe.Username(username)).Debug("All credential workers busy, skipping credential capture")
 		return
 	}
 	ps.credentialWg.Add(1)
@@ -435,13 +390,13 @@ func (ps *ProxyServer) captureCredentials(username string, cred credentials.Cred
 			ps.credentialWg.Done() // Mark goroutine as complete
 		}()
 
-		ps.logger.WithField("username", sanitizeUsername(username)).Debug("Extracted credentials from request, attempting validation")
+		ps.logger.WithField("username", logsafe.Username(username)).Debug("Extracted credentials from request, attempting validation")
 		// Not tied to the request, which may finish first, but abandoned on shutdown
 		isNewCredential, err := ps.credentials.ValidateAndStore(ps.ctx, username, cred)
 		if err != nil {
-			ps.logger.WithError(err).WithField("username", sanitizeUsername(username)).Warn("Failed to validate credentials")
+			ps.logger.WithError(err).WithField("username", logsafe.Username(username)).Warn("Failed to validate credentials")
 		} else if isNewCredential {
-			ps.logger.WithField("username", sanitizeUsername(username)).Info("New credentials captured, triggering immediate sync")
+			ps.logger.WithField("username", logsafe.Username(username)).Info("New credentials captured, triggering immediate sync")
 			// Sync outside the worker slot, which is only meant for validation
 			ps.credentialWg.Go(func() { ps.syncUser(username) })
 		}
@@ -589,7 +544,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 	ps.logger.WithField("user_count", len(allCredentials)).Info("Starting multi-user song sync")
 
 	// Sync users one after another, pausing between them to avoid overwhelming upstream
-	for i, username := range getSortedUsernames(allCredentials) {
+	for i, username := range slices.Sorted(maps.Keys(allCredentials)) {
 		if i > 0 {
 			select {
 			case <-time.After(UserSyncStaggerDelay):
@@ -609,7 +564,7 @@ func (ps *ProxyServer) fetchAndStoreSongs() {
 func (ps *ProxyServer) syncUser(username string) {
 	cred, ok := ps.credentials.Get(username)
 	if !ok {
-		ps.logger.WithField("user", sanitizeUsername(username)).Warn("No stored credentials for user, skipping sync")
+		ps.logger.WithField("user", logsafe.Username(username)).Warn("No stored credentials for user, skipping sync")
 		return
 	}
 	ps.syncUserWithCredential(username, cred)
@@ -618,7 +573,7 @@ func (ps *ProxyServer) syncUser(username string) {
 // syncUserWithCredential syncs one user's library unless a sync for that user is already running
 func (ps *ProxyServer) syncUserWithCredential(username string, cred credentials.Credential) {
 	if _, running := ps.syncingUsers.LoadOrStore(username, struct{}{}); running {
-		ps.logger.WithField("user", sanitizeUsername(username)).Debug("Sync already in progress for user, skipping")
+		ps.logger.WithField("user", logsafe.Username(username)).Debug("Sync already in progress for user, skipping")
 		return
 	}
 	defer ps.syncingUsers.Delete(username)
@@ -629,13 +584,13 @@ func (ps *ProxyServer) syncUserWithCredential(username string, cred credentials.
 		// until the client sends one upstream accepts
 		removed := ps.credentials.Forget(username, cred)
 		ps.logger.WithError(err).WithFields(logrus.Fields{
-			"user":    sanitizeUsername(username),
+			"user":    logsafe.Username(username),
 			"removed": removed,
 		}).Warn("Upstream rejected stored credentials, dropping them")
 		return
 	}
 	if err != nil {
-		ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).Error("Failed to sync songs for user")
+		ps.logger.WithError(err).WithField("user", logsafe.Username(username)).Error("Failed to sync songs for user")
 	}
 }
 
@@ -646,7 +601,7 @@ func isRejectedCredential(err error) bool {
 
 // syncSongsForUser fetches a user's library from upstream and applies the differences locally
 func (ps *ProxyServer) syncSongsForUser(username string, cred credentials.Credential) error {
-	ps.logger.WithField("user", sanitizeUsername(username)).Info("Syncing songs for user")
+	ps.logger.WithField("user", logsafe.Username(username)).Info("Syncing songs for user")
 
 	allSongs, incomplete, err := ps.fetchLibrary(username, cred)
 	if err != nil {
@@ -686,7 +641,7 @@ func (ps *ProxyServer) syncSongsForUser(username string, cred credentials.Creden
 	// Deleting a song also deletes its play statistics, so only do it after a complete fetch
 	if incomplete && len(songsToDelete) > 0 {
 		ps.logger.WithFields(logrus.Fields{
-			"user":            sanitizeUsername(username),
+			"user":            logsafe.Username(username),
 			"songs_to_delete": len(songsToDelete),
 		}).Warn("Library fetch was incomplete, keeping songs missing from upstream until the next complete sync")
 		songsToDelete = nil
@@ -704,7 +659,7 @@ func (ps *ProxyServer) syncSongsForUser(username string, cred credentials.Creden
 				WithContext("songs_to_delete", len(songsToDelete))
 		}
 		ps.logger.WithFields(logrus.Fields{
-			"user":    sanitizeUsername(username),
+			"user":    logsafe.Username(username),
 			"deleted": len(songsToDelete),
 		}).Info("Removed songs no longer in upstream library")
 	}
@@ -734,7 +689,7 @@ func (ps *ProxyServer) syncSongsForUser(username string, cred credentials.Creden
 	}
 
 	ps.logger.WithFields(logrus.Fields{
-		"user":      sanitizeUsername(username),
+		"user":      logsafe.Username(username),
 		"total":     len(allSongs),
 		"deleted":   len(songsToDelete),
 		"added":     addedCount,
@@ -759,7 +714,7 @@ func (ps *ProxyServer) confirmDeletion(username string, toDelete, stored int) bo
 	}
 
 	fields := logrus.Fields{
-		"user":            sanitizeUsername(username),
+		"user":            logsafe.Username(username),
 		"songs_to_delete": toDelete,
 		"stored_songs":    stored,
 	}
@@ -791,7 +746,7 @@ func (ps *ProxyServer) fetchLibrary(username string, cred credentials.Credential
 
 	// No songs could also mean the server doesn't treat an empty query as "everything",
 	// so an empty library is only believed once the folder walk agrees
-	ps.logger.WithError(err).WithField("user", sanitizeUsername(username)).
+	ps.logger.WithError(err).WithField("user", logsafe.Username(username)).
 		Info("Library search returned no songs, syncing by walking the music folders")
 	return ps.fetchLibraryByDirectories(username, cred)
 }
@@ -853,7 +808,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 		folderID := fmt.Sprintf("%v", folder.ID)
 
 		ps.logger.WithFields(logrus.Fields{
-			"user":        sanitizeUsername(username),
+			"user":        logsafe.Username(username),
 			"folder_id":   folderID,
 			"folder_name": folder.Name,
 		}).Debug("Processing music folder")
@@ -862,7 +817,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 		indexes, err := ps.getIndexes(username, cred, folderID)
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
-				"user":      sanitizeUsername(username),
+				"user":      logsafe.Username(username),
 				"folder_id": folderID,
 			}).Warn("Failed to get indexes for folder, skipping")
 			incomplete = true
@@ -873,7 +828,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 		for _, index := range indexes {
 			for _, artist := range index.Artists {
 				ps.logger.WithFields(logrus.Fields{
-					"user":        sanitizeUsername(username),
+					"user":        logsafe.Username(username),
 					"artist_id":   artist.ID,
 					"artist_name": artist.Name,
 				}).Debug("Processing artist")
@@ -882,7 +837,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 				albums, err := ps.getMusicDirectory(username, cred, artist.ID)
 				if err != nil {
 					ps.logger.WithError(err).WithFields(logrus.Fields{
-						"user":      sanitizeUsername(username),
+						"user":      logsafe.Username(username),
 						"artist_id": artist.ID,
 					}).Warn("Failed to get albums for artist, skipping")
 					incomplete = true
@@ -893,7 +848,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 				for _, album := range albums {
 					if album.IsDir {
 						ps.logger.WithFields(logrus.Fields{
-							"user":        sanitizeUsername(username),
+							"user":        logsafe.Username(username),
 							"album_id":    album.ID,
 							"album_title": album.Title,
 						}).Debug("Processing album")
@@ -902,7 +857,7 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 						songs, err := ps.getMusicDirectory(username, cred, album.ID)
 						if err != nil {
 							ps.logger.WithError(err).WithFields(logrus.Fields{
-								"user":     sanitizeUsername(username),
+								"user":     logsafe.Username(username),
 								"album_id": album.ID,
 							}).Warn("Failed to get songs for album, skipping")
 							incomplete = true
@@ -1022,27 +977,10 @@ func (ps *ProxyServer) buildAuthParams(username string, cred credentials.Credent
 	params.Add("u", username)
 	cred.AddTo(params)
 	params.Add("f", "json")
-	params.Add("v", SubsonicAPIVersion)
-	params.Add("c", ClientName)
+	params.Add("v", models.SubsonicAPIVersion)
+	params.Add("c", models.ClientName)
 
 	return params
-}
-
-// getSortedUsernames returns a sorted slice of usernames for consistent ordering
-func getSortedUsernames(creds map[string]credentials.Credential) []string {
-	usernames := make([]string, 0, len(creds))
-	for username := range creds {
-		usernames = append(usernames, username)
-	}
-	// Sort to ensure consistent ordering across sync runs
-	for i := 0; i < len(usernames)-1; i++ {
-		for j := i + 1; j < len(usernames); j++ {
-			if usernames[i] > usernames[j] {
-				usernames[i], usernames[j] = usernames[j], usernames[i]
-			}
-		}
-	}
-	return usernames
 }
 
 // extractCredentials extracts the username and credential from various sources in the request
@@ -1100,7 +1038,7 @@ func (ps *ProxyServer) parseForm(r *http.Request) {
 	if r.Method == http.MethodPost {
 		parsed, err := readPostForm(r)
 		if err != nil {
-			ps.logger.WithError(err).WithField("endpoint", sanitizeForLogging(r.URL.Path)).Warn("Failed to parse POST form, using query parameters only")
+			ps.logger.WithError(err).WithField("endpoint", logsafe.String(r.URL.Path)).Warn("Failed to parse POST form, using query parameters only")
 		} else {
 			postForm = parsed
 		}
@@ -1153,14 +1091,14 @@ func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string) {
 // RecordPlayEventAt records a play or skip that happened at the given time
 func (ps *ProxyServer) RecordPlayEventAt(userID, songID, eventType string, at time.Time) {
 	if err := ps.db.RecordPlayEventAt(userID, songID, eventType, at); err != nil {
-		ps.logger.WithError(err).WithField("userID", sanitizeUsername(userID)).Error("Failed to record play event")
+		ps.logger.WithError(err).WithField("userID", logsafe.Username(userID)).Error("Failed to record play event")
 		return
 	}
 	ps.shuffle.InvalidateEmpiricalPriors(userID)
 
 	ps.logger.WithFields(logrus.Fields{
-		"userID":    sanitizeUsername(userID),
-		"songId":    sanitizeForLogging(songID),
+		"userID":    logsafe.Username(userID),
+		"songId":    logsafe.String(songID),
 		"eventType": eventType,
 	}).Debug("Recorded play event")
 }
@@ -1263,8 +1201,8 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]floa
 	}
 
 	ps.logger.WithFields(logrus.Fields{
-		"userID": sanitizeUsername(userID),
-		"songID": sanitizeForLogging(songID),
+		"userID": logsafe.Username(userID),
+		"songID": logsafe.String(songID),
 		"count":  len(scores),
 	}).Debug("Fetched similar songs from AudioMuse-AI plugin (getSonicSimilarTracks)")
 

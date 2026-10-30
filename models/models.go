@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// How subsoxy identifies itself in Subsonic API calls and responses
+const (
+	SubsonicAPIVersion = "1.15.0"
+	ClientName         = "subsoxy"
+)
+
 type Song struct {
 	ID            string    `json:"id" xml:"id,attr"`
 	Title         string    `json:"title" xml:"title,attr"`

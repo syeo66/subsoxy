@@ -1484,67 +1484,6 @@ func TestSyncSongsForUserError(t *testing.T) {
 	}
 }
 
-func TestGetSortedUsernames(t *testing.T) {
-	testCases := []struct {
-		name     string
-		input    map[string]string
-		expected []string
-	}{
-		{
-			name:     "Empty map",
-			input:    map[string]string{},
-			expected: []string{},
-		},
-		{
-			name: "Single user",
-			input: map[string]string{
-				"user1": "pass1",
-			},
-			expected: []string{"user1"},
-		},
-		{
-			name: "Multiple users",
-			input: map[string]string{
-				"user3": "pass3",
-				"user1": "pass1",
-				"user2": "pass2",
-			},
-			expected: []string{"user1", "user2", "user3"},
-		},
-		{
-			name: "Users with special characters",
-			input: map[string]string{
-				"user_z": "pass_z",
-				"user_a": "pass_a",
-				"user_m": "pass_m",
-			},
-			expected: []string{"user_a", "user_m", "user_z"},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			creds := make(map[string]credentials.Credential, len(tc.input))
-			for username, password := range tc.input {
-				creds[username] = credentials.Password(password)
-			}
-			result := getSortedUsernames(creds)
-
-			if len(result) != len(tc.expected) {
-				t.Errorf("Expected %d usernames, got %d", len(tc.expected), len(result))
-			}
-
-			for i, expected := range tc.expected {
-				if i >= len(result) || result[i] != expected {
-					t.Errorf("Expected username at index %d to be %s, got %s", i, expected, result[i])
-				}
-			}
-		})
-	}
-}
-
-// CORS functionality tests
-
 func TestSetCORSHeaders(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -2970,4 +2909,20 @@ func TestSyncDropsCredentialsUpstreamRejects(t *testing.T) {
 		t.Errorf("Expected no upstream calls for a user without credentials, got %v", calls)
 	}
 	mu.Unlock()
+}
+
+func TestClientAddrUsesForwardedClientBehindTrustedProxy(t *testing.T) {
+	ps := &ProxyServer{config: &config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}}
+
+	r := httptest.NewRequest("GET", "/rest/ping", nil)
+	r.RemoteAddr = "10.0.0.2:51234"
+	r.Header.Set("X-Forwarded-For", "198.51.100.1")
+	if got := ps.clientAddr(r); got != "198.51.100.1" {
+		t.Errorf("Expected forwarded client address, got %s", got)
+	}
+
+	r.RemoteAddr = "203.0.113.7:51234"
+	if got := ps.clientAddr(r); got != "203.0.113.7" {
+		t.Errorf("Expected an untrusted peer's own address, got %s", got)
+	}
 }

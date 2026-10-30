@@ -7,12 +7,13 @@
 | `main.go` | Builds config and server, registers hooks | `config`, `server` |
 | `config/` | Flag/env parsing and validation | `errors` |
 | `server/` | Reverse proxy, middleware chain, credential capture, library sync, shutdown | all |
-| `handlers/` | Hook implementations: shuffle, scrobble, stream, debug UI; input validation | `errors`, `shuffle` |
+| `handlers/` | Hook implementations: shuffle, scrobble, stream, debug UI; input validation | `errors`, `logsafe`, `models`, `shuffle` |
 | `shuffle/` | Weighting, selection, skip detection, similarity cache | `models`, `database` |
 | `database/` | SQLite schema, migrations, queries, connection pool | `errors`, `models` |
-| `credentials/` | Upstream validation and encrypted in-memory credential store | `errors` |
+| `credentials/` | Upstream validation and encrypted in-memory credential store | `errors`, `models` |
 | `middleware/` | Security headers | `config` |
-| `models/` | Shared structs (`Song`, `PlayEvent`, Subsonic response types, `Hook`) | — |
+| `models/` | Shared structs (`Song`, `PlayEvent`, Subsonic response types, `Hook`) and the API version/client name sent upstream | — |
+| `logsafe/` | Strips control characters from and truncates user-supplied values before logging | — |
 | `errors/` | Structured `SubsoxyError` type | — |
 
 External dependencies: `gorilla/mux` (routing), `sirupsen/logrus` (logging), `mattn/go-sqlite3` (CGO SQLite driver), `golang.org/x/time/rate` (rate limiter), `golang.org/x/sync/singleflight` (deduplicating similarity fetches).

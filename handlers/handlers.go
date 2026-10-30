@@ -13,32 +13,23 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/syeo66/subsoxy/errors"
+	"github.com/syeo66/subsoxy/logsafe"
 	"github.com/syeo66/subsoxy/models"
 	"github.com/syeo66/subsoxy/shuffle"
 )
 
-const (
-	MaxSongIDLength = 255
-	MaxInputLength  = 1000
-)
+const MaxSongIDLength = 255
 
 // Shuffle constants
 const (
 	DefaultShuffleSize = 50
 	MaxShuffleSize     = 10000
-	SubsonicAPIVersion = "1.15.0"
 )
 
 // Subsonic API error codes
 const (
 	SubsonicErrorGeneric          = 0
 	SubsonicErrorMissingParameter = 10
-)
-
-// ASCII control character constants
-const (
-	ASCIIControlCharMin = 32
-	ASCIIControlCharMax = 127
 )
 
 type Handler struct {
@@ -51,24 +42,6 @@ func New(logger *logrus.Logger, shuffleService *shuffle.Service) *Handler {
 		logger:  logger,
 		shuffle: shuffleService,
 	}
-}
-
-// SanitizeForLogging removes control characters and limits length to prevent log injection
-func SanitizeForLogging(input string) string {
-	// Remove control characters (ASCII 0-31 and 127)
-	sanitized := strings.Map(func(r rune) rune {
-		if r < ASCIIControlCharMin || r == ASCIIControlCharMax {
-			return -1
-		}
-		return r
-	}, input)
-
-	// Limit length to prevent resource exhaustion
-	if len(sanitized) > MaxInputLength {
-		sanitized = sanitized[:MaxInputLength] + "..."
-	}
-
-	return sanitized
 }
 
 // ValidateSongID validates song ID format and length
@@ -100,7 +73,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 	if format == "xml" {
 		xmlResponse := models.XMLSubsonicResponse{
 			Status:  status,
-			Version: SubsonicAPIVersion,
+			Version: models.SubsonicAPIVersion,
 			Error:   subsonicErr,
 		}
 		if subsonicErr == nil {
@@ -114,7 +87,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 
 	body := map[string]interface{}{
 		"status":  status,
-		"version": SubsonicAPIVersion,
+		"version": models.SubsonicAPIVersion,
 	}
 	if subsonicErr != nil {
 		body["error"] = map[string]interface{}{
@@ -169,7 +142,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 
 	// Songs aren't stored with their music folder, so upstream answers folder-limited requests
 	if r.FormValue("musicFolderId") != "" {
-		h.logger.WithField("userID", SanitizeForLogging(userID)).Debug("Shuffle request limited to a music folder, forwarding to upstream")
+		h.logger.WithField("userID", logsafe.String(userID)).Debug("Shuffle request limited to a music folder, forwarding to upstream")
 		return false
 	}
 
@@ -185,7 +158,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		year, err := strconv.Atoi(value)
 		if err != nil {
 			validationErr := errors.ErrInvalidInput.WithContext("field", param.name).
-				WithContext("value", SanitizeForLogging(value))
+				WithContext("value", logsafe.String(value))
 			h.logger.WithError(validationErr).Warn("Invalid year parameter")
 			h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Invalid "+param.name+" parameter")
 			return true
@@ -201,10 +174,10 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	if err != nil {
 		// Nobody is left to answer when the client gave up
 		if r.Context().Err() != nil {
-			h.logger.WithField("userID", SanitizeForLogging(userID)).Debug("Shuffle request cancelled by client")
+			h.logger.WithField("userID", logsafe.String(userID)).Debug("Shuffle request cancelled by client")
 			return true
 		}
-		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get weighted shuffled songs")
+		h.logger.WithError(err).WithField("userID", logsafe.String(userID)).Error("Failed to get weighted shuffled songs")
 		h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Internal server error")
 		return true
 	}
@@ -223,19 +196,19 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	h.logger.WithFields(logrus.Fields{
 		"size":     size,
 		"returned": len(songs),
-		"userID":   SanitizeForLogging(userID),
+		"userID":   logsafe.String(userID),
 	}).Info("Served weighted shuffle request")
 
 	return true
 }
 
 func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	h.logger.Info("Ping endpoint accessed")
+	h.logger.Debug("Ping endpoint accessed")
 	return false
 }
 
 func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	h.logger.Info("License endpoint accessed")
+	h.logger.Debug("License endpoint accessed")
 	return false
 }
 
@@ -256,8 +229,8 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint 
 		}
 
 		h.logger.WithFields(logrus.Fields{
-			"song_id": SanitizeForLogging(songID),
-			"user_id": SanitizeForLogging(userID),
+			"song_id": logsafe.String(songID),
+			"user_id": logsafe.String(userID),
 		}).Debug("Stream request logged (no tracking for skip detection)")
 	} else {
 		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
@@ -303,7 +276,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 	// The Subsonic API treats a scrobble without "submission" as a submission
 	isSubmission := r.FormValue("submission") != "false"
 	client := r.FormValue("c")
-	sanitizedUserID := SanitizeForLogging(userID)
+	sanitizedUserID := logsafe.String(userID)
 	now := time.Now()
 
 	// A client may send several songs at once, e.g. plays it queued while offline
@@ -312,7 +285,7 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 			h.logger.WithError(err).Warn("Invalid song ID in scrobble request")
 			continue
 		}
-		sanitizedSongID := SanitizeForLogging(songID)
+		sanitizedSongID := logsafe.String(songID)
 
 		// Process pending songs first (may mark earlier songs as skipped)
 		// Returns true if this is a new play event, false if it's a duplicate
@@ -355,7 +328,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 
 	songs, err := h.shuffle.GetAllSongsWithWeights(userID)
 	if err != nil {
-		h.logger.WithError(err).WithField("userID", SanitizeForLogging(userID)).Error("Failed to get songs for debug")
+		h.logger.WithError(err).WithField("userID", logsafe.String(userID)).Error("Failed to get songs for debug")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return true
 	}
@@ -386,7 +359,7 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 		}
 	}
 
-	escapedUserID := html.EscapeString(SanitizeForLogging(userID))
+	escapedUserID := html.EscapeString(logsafe.String(userID))
 
 	var page strings.Builder
 	page.WriteString(`<!DOCTYPE html>
@@ -526,9 +499,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	w.Write([]byte(page.String()))
 
 	h.logger.WithFields(logrus.Fields{
-		"userID":          SanitizeForLogging(userID),
+		"userID":          logsafe.String(userID),
 		"songCount":       len(songs),
-		"referenceSongID": SanitizeForLogging(referenceSongID),
+		"referenceSongID": logsafe.String(referenceSongID),
 	}).Info("Served debug request")
 
 	return true
