@@ -155,31 +155,6 @@ var (
 	ErrMissingParameter = New(CategoryValidation, "MISSING_PARAMETER", "missing required parameter")
 )
 
-// Helper functions for common error patterns
-func IsCategory(err error, category string) bool {
-	var subsoxyErr *SubsoxyError
-	if !As(err, &subsoxyErr) {
-		return false
-	}
-	return subsoxyErr.Category == category
-}
-
-func GetErrorCode(err error) string {
-	var subsoxyErr *SubsoxyError
-	if !As(err, &subsoxyErr) {
-		return ""
-	}
-	return subsoxyErr.Code
-}
-
-func GetErrorContext(err error) map[string]interface{} {
-	var subsoxyErr *SubsoxyError
-	if !As(err, &subsoxyErr) {
-		return nil
-	}
-	return subsoxyErr.Context
-}
-
 // IsCode checks if an error chain contains a SubsoxyError with the specified code
 func IsCode(err error, code string) bool {
 	var subsoxyErr *SubsoxyError
@@ -189,34 +164,7 @@ func IsCode(err error, code string) bool {
 	return subsoxyErr.Code == code
 }
 
-// HasCategory checks if an error chain contains any SubsoxyError with the specified category
-func HasCategory(err error, category string) bool {
-	for err != nil {
-		if IsCategory(err, category) {
-			return true
-		}
-		err = errors.Unwrap(err)
-	}
-	return false
-}
-
-// GetRootCause returns the root cause of an error chain
-func GetRootCause(err error) error {
-	for {
-		unwrapped := errors.Unwrap(err)
-		if unwrapped == nil {
-			return err
-		}
-		err = unwrapped
-	}
-}
-
 // As is a wrapper around errors.As for Go 1.13+ compatibility
 func As(err error, target interface{}) bool {
 	return errors.As(err, target)
-}
-
-// Is is a wrapper around errors.Is for Go 1.13+ compatibility
-func Is(err, target error) bool {
-	return errors.Is(err, target)
 }

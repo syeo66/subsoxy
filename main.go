@@ -33,18 +33,6 @@ func main() {
 
 	handlers := proxyServer.GetHandlers()
 
-	proxyServer.AddHook("/rest/ping", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandlePing(w, r, endpoint)
-	})
-
-	proxyServer.AddHook("/rest/getLicense", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleGetLicense(w, r, endpoint)
-	})
-
-	proxyServer.AddHook("/rest/stream", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleStream(w, r, endpoint)
-	})
-
 	proxyServer.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
 		return handlers.HandleScrobble(w, r, endpoint, proxyServer.RecordPlayEventAt, proxyServer.SetLastPlayed, proxyServer.ProcessScrobble)
 	})

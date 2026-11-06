@@ -7,7 +7,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,9 +21,8 @@ import (
 
 // Encryption constants
 const (
-	AES256KeySize          = 32
-	KeyIdentificationBytes = 8
-	HTTPClientTimeout      = 10 * time.Second
+	AES256KeySize     = 32
+	HTTPClientTimeout = 10 * time.Second
 	// How long a secret confirmed by upstream is trusted without asking upstream again
 	VerifiedSecretTTL = 15 * time.Minute
 	// Upper bound on remembered secrets per user. Token clients may use a new salt for
@@ -320,26 +318,41 @@ func (cm *Manager) validate(ctx context.Context, username string, cred Credentia
 			WithContext("reason", "non-200 response")
 	}
 
-	var pingResp map[string]interface{}
+	var pingResp struct {
+		SubsonicResponse *struct {
+			Status string `json:"status"`
+			Error  struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"subsonic-response"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&pingResp); err != nil {
 		return errors.Wrap(err, errors.CategoryCredentials, "VALIDATION_FAILED", "failed to decode ping response").
 			WithContext("username", username)
 	}
 
-	if subsonicResp, ok := pingResp["subsonic-response"].(map[string]interface{}); ok {
-		if status, ok := subsonicResp["status"].(string); ok {
-			if status == "ok" {
-				return nil
-			} else {
-				return errors.ErrInvalidCredentials.WithContext("username", username).
-					WithContext("subsonic_status", status).
-					WithContext("reason", "invalid username/password")
-			}
-		}
+	subsonicResp := pingResp.SubsonicResponse
+	if subsonicResp == nil || subsonicResp.Status == "" {
+		return errors.ErrCredentialsValidation.WithContext("username", username).
+			WithContext("reason", "invalid response format from upstream server")
+	}
+	if subsonicResp.Status == "ok" {
+		return nil
 	}
 
+	// Only the wrong-credentials code means the secret is bad. Any other failure (a server
+	// fault, token auth upstream can't verify) says nothing about it, so it isn't reported as
+	// a rejection, which callers remember and act on.
+	if subsonicResp.Error.Code == models.SubsonicErrorWrongCredentials {
+		return errors.ErrInvalidCredentials.WithContext("username", username).
+			WithContext("subsonic_status", subsonicResp.Status).
+			WithContext("reason", "invalid username/password")
+	}
 	return errors.ErrCredentialsValidation.WithContext("username", username).
-		WithContext("reason", "invalid response format from upstream server")
+		WithContext("subsonic_status", subsonicResp.Status).
+		WithContext("subsonic_error_code", subsonicResp.Error.Code).
+		WithContext("reason", "upstream failed the ping without rejecting the credentials")
 }
 
 // Get returns the stored credential for one user
@@ -435,9 +448,4 @@ func (cm *Manager) decrypt(encrypted encryptedCredential) (Credential, error) {
 		return Credential{}, err
 	}
 	return cred, nil
-}
-
-// GetEncryptionInfo returns information about the encryption setup (for testing)
-func (cm *Manager) GetEncryptionInfo() string {
-	return base64.StdEncoding.EncodeToString(cm.encryptionKey[:KeyIdentificationBytes]) // Only first 8 bytes for identification
 }

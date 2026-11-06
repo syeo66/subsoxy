@@ -34,8 +34,6 @@ A **hook** is `func(w http.ResponseWriter, r *http.Request, endpoint string) boo
 
 | Path | Handler | Forwards? |
 |------|---------|-----------|
-| `/rest/ping`, `/rest/getLicense` | log only | yes |
-| `/rest/stream` | log only | yes |
 | `/rest/scrobble` | `HandleScrobble`: play/skip detection | yes |
 | `/rest/getRandomSongs` | `HandleShuffle`: weighted shuffle | no |
 | `/debug` (with `-debug-mode`) | `HandleDebug`: HTML weight table | no |

@@ -12,6 +12,11 @@ const (
 	ClientName         = "subsoxy"
 )
 
+// SubsonicErrorWrongCredentials is the Subsonic error code for a wrong username or password.
+// Other failed responses (41 for token auth upstream can't verify, 0 for a server fault, ...)
+// say nothing about whether the credentials are right.
+const SubsonicErrorWrongCredentials = 40
+
 type Song struct {
 	ID            string    `json:"id" xml:"id,attr"`
 	Title         string    `json:"title" xml:"title,attr"`

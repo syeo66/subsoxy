@@ -10,7 +10,7 @@ All data is kept per user. Each user has their own songs, events and statistics 
 
 ## Play and skip detection
 
-Only `/rest/scrobble` affects tracking. `/rest/stream` is logged but ignored, so a client that preloads tracks doesn't produce fake skips.
+Only `/rest/scrobble` affects tracking. `/rest/stream` is forwarded untouched, so a client that preloads tracks doesn't produce fake skips.
 
 For each of a user's players, told apart by the client name in the `c` parameter, Subsoxy remembers the last scrobble it saw, so playing on two devices at once doesn't make each look like it skips the other's songs. When a new scrobble arrives:
 
@@ -129,7 +129,7 @@ Subsoxy doesn't need any upstream credentials of its own. It learns them from cl
 2. If the user is **new**, a sync of that user's library starts right away.
 3. After that, every known user is re-synced **hourly**, one after another with a 2s pause between users so the upstream server isn't overloaded. A user whose sync is still running is skipped. If upstream rejects a user's stored credentials during a sync (Subsonic error 40, e.g. after a password change), they're dropped and the user isn't synced again until a client sends credentials upstream accepts, which counts as new and starts a sync right away.
 
-A sync pages through all songs with `search3` and an empty query, 500 songs per request. For a library of about 4,000 songs on Navidrome that's 9 requests instead of about 600. If the server returns no songs that way, or ignores `songOffset`, the sync falls back to walking the library: `getMusicFolders` → `getIndexes` → `getMusicDirectory` (artist) → `getMusicDirectory` (album). An empty search result is never taken to mean an empty library. The result is then diffed against the local copy:
+A sync pages through all songs with `search3` and an empty query, 500 songs per request. For a library of about 4,000 songs on Navidrome that's 9 requests instead of about 600. If the server can't list its library that way, the sync falls back to walking it: `getMusicFolders` → `getIndexes` → `getMusicDirectory` for each artist and every folder below it, however deep (album, disc, ...). That happens when the server returns no songs, ignores `songOffset`, or answers the first page with an error or something that isn't Subsonic. An empty search result is never taken to mean an empty library. A request that gets no answer at all (timeout, connection error), or any failure after the first page, fails the sync instead, to be retried at the next cycle. Walking would cost a request per folder and likely meet the same trouble. The result is then diffed against the local copy:
 
 - New songs are inserted.
 - Existing songs are updated only when the title, artist, album, duration or cover art changed. Play and skip history is kept.

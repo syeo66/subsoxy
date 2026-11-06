@@ -52,6 +52,10 @@ const (
 	SimilarSongsTimeout = 5 * time.Second
 	// Songs requested per search3 page during library sync
 	LibraryPageSize = 500
+	// Folder levels the fallback library walk descends below a music folder's artists. Real
+	// libraries need three or four (artist, album, disc); the limit and the visited set only
+	// keep a server with a looping or absurdly deep tree from running the walk forever.
+	MaxLibraryWalkDepth = 12
 	// A sync that would remove more than this share of a user's stored songs is held back
 	// until a later sync, at least MassDeletionConfirmDelay after it, sees the same
 	MassDeletionFraction     = 0.5
@@ -61,8 +65,16 @@ const (
 	HealthEndpoint = "/healthz"
 	// How long the health check waits for the database
 	HealthCheckTimeout = 2 * time.Second
-	// Subsonic error code for a wrong username or password
-	SubsonicErrorWrongCredentials = 40
+)
+
+// Error codes that tell fetchLibrary whether to try the folder walk
+const (
+	// Upstream answered, but not with a usable Subsonic response: an HTTP error status, a body
+	// that isn't Subsonic JSON, or a failed status. Unlike a request that got no answer at all,
+	// this can mean the endpoint isn't supported.
+	upstreamBadAnswerCode = "UPSTREAM_BAD_ANSWER"
+	// search3 can't be used to list the whole library
+	searchUnsupportedCode = "SEARCH_UNSUPPORTED"
 )
 
 type ProxyServer struct {
@@ -731,27 +743,29 @@ func (ps *ProxyServer) confirmDeletion(username string, toDelete, stored int) bo
 
 // fetchLibrary returns every song in the user's library. It pages through search3 with an
 // empty query, which takes a few dozen requests even for a large library, and falls back to
-// walking the folder tree (a request per artist and album) when the server doesn't answer
-// that search. incomplete is set when part of the library could not be fetched: the list is
-// then partial, so songs missing from it must not be treated as removed upstream.
+// walking the folder tree (a request per folder) when the server can't list the library that
+// way. A search that fails for any other reason, such as a timeout partway through, fails the
+// fetch: the walk is far more expensive and would likely meet the same trouble. incomplete is
+// set when part of the library could not be fetched: the list is then partial, so songs
+// missing from it must not be treated as removed upstream.
 func (ps *ProxyServer) fetchLibrary(username string, cred credentials.Credential) (songs []models.Song, incomplete bool, err error) {
 	songs, err = ps.fetchLibraryBySearch(username, cred)
 	if err == nil && len(songs) > 0 {
 		return songs, false, nil
 	}
-	// Walking the folders with the same credentials would be rejected too
-	if isRejectedCredential(err) {
+	if err != nil && !errors.IsCode(err, searchUnsupportedCode) {
 		return nil, false, err
 	}
 
 	// No songs could also mean the server doesn't treat an empty query as "everything",
 	// so an empty library is only believed once the folder walk agrees
 	ps.logger.WithError(err).WithField("user", logsafe.Username(username)).
-		Info("Library search returned no songs, syncing by walking the music folders")
+		Info("Library search can't list the songs, syncing by walking the music folders")
 	return ps.fetchLibraryByDirectories(username, cred)
 }
 
-// fetchLibraryBySearch pages through all songs with search3 and an empty query
+// fetchLibraryBySearch pages through all songs with search3 and an empty query. An error
+// with searchUnsupportedCode means the server can't list its library this way.
 func (ps *ProxyServer) fetchLibraryBySearch(username string, cred credentials.Credential) ([]models.Song, error) {
 	var songs []models.Song
 	seen := make(map[string]bool)
@@ -766,6 +780,12 @@ func (ps *ProxyServer) fetchLibraryBySearch(username string, cred credentials.Cr
 
 		var response models.SearchResult3Response
 		if err := ps.getSubsonic("search3", params, &response); err != nil {
+			// A server without search3 answers the first page with an error or something that
+			// isn't Subsonic. A request that got no answer, or any failure after pages
+			// worked, is a hiccup, and the sync should try again later.
+			if offset == 0 && errors.IsCode(err, upstreamBadAnswerCode) {
+				return nil, errors.Wrap(err, errors.CategoryNetwork, searchUnsupportedCode, "search3 is not available")
+			}
 			return nil, err
 		}
 
@@ -785,26 +805,32 @@ func (ps *ProxyServer) fetchLibraryBySearch(username string, cred credentials.Cr
 		}
 		// A full page of songs already seen means the server ignores songOffset
 		if added == 0 {
-			return nil, errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "search3 paging returned no new songs")
+			return nil, errors.New(errors.CategoryNetwork, searchUnsupportedCode, "search3 paging returned no new songs")
 		}
 	}
 }
 
-// fetchLibraryByDirectories walks music folders, artists and albums to collect all songs
+// libraryWalk collects the songs below a music folder's artists
+type libraryWalk struct {
+	username   string
+	cred       credentials.Credential
+	visited    map[string]bool // Directories already listed, so a loop in the tree ends
+	songs      []models.Song
+	incomplete bool // A directory could not be listed
+}
+
+// fetchLibraryByDirectories walks the music folders, artists and everything below them to
+// collect all songs
 func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentials.Credential) ([]models.Song, bool, error) {
-	// First, get all music folders
 	musicFolders, err := ps.getMusicFolders(username, cred)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errors.CategoryNetwork, "MUSIC_FOLDERS_FAILED", "failed to get music folders").
 			WithContext("username", username)
 	}
 
-	var allSongs []models.Song
-	incomplete := false
+	walk := &libraryWalk{username: username, cred: cred, visited: make(map[string]bool)}
 
-	// Traverse each music folder
 	for _, folder := range musicFolders {
-		// Convert folder ID to string
 		folderID := fmt.Sprintf("%v", folder.ID)
 
 		ps.logger.WithFields(logrus.Fields{
@@ -813,70 +839,61 @@ func (ps *ProxyServer) fetchLibraryByDirectories(username string, cred credentia
 			"folder_name": folder.Name,
 		}).Debug("Processing music folder")
 
-		// Get indexes for this folder to get artists
 		indexes, err := ps.getIndexes(username, cred, folderID)
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
 				"user":      logsafe.Username(username),
 				"folder_id": folderID,
 			}).Warn("Failed to get indexes for folder, skipping")
-			incomplete = true
+			walk.incomplete = true
 			continue
 		}
 
-		// Process each artist
 		for _, index := range indexes {
 			for _, artist := range index.Artists {
-				ps.logger.WithFields(logrus.Fields{
-					"user":        logsafe.Username(username),
-					"artist_id":   artist.ID,
-					"artist_name": artist.Name,
-				}).Debug("Processing artist")
-
-				// Get albums for this artist
-				albums, err := ps.getMusicDirectory(username, cred, artist.ID)
-				if err != nil {
-					ps.logger.WithError(err).WithFields(logrus.Fields{
-						"user":      logsafe.Username(username),
-						"artist_id": artist.ID,
-					}).Warn("Failed to get albums for artist, skipping")
-					incomplete = true
-					continue
-				}
-
-				// Process each album
-				for _, album := range albums {
-					if album.IsDir {
-						ps.logger.WithFields(logrus.Fields{
-							"user":        logsafe.Username(username),
-							"album_id":    album.ID,
-							"album_title": album.Title,
-						}).Debug("Processing album")
-
-						// Get songs for this album
-						songs, err := ps.getMusicDirectory(username, cred, album.ID)
-						if err != nil {
-							ps.logger.WithError(err).WithFields(logrus.Fields{
-								"user":     logsafe.Username(username),
-								"album_id": album.ID,
-							}).Warn("Failed to get songs for album, skipping")
-							incomplete = true
-							continue
-						}
-
-						// Add songs (filter out directories)
-						for _, song := range songs {
-							if !song.IsDir {
-								allSongs = append(allSongs, song)
-							}
-						}
-					}
-				}
+				ps.walkDirectory(walk, artist.ID, 1)
 			}
 		}
 	}
 
-	return allSongs, incomplete, nil
+	return walk.songs, walk.incomplete, nil
+}
+
+// walkDirectory lists one directory and descends into the directories in it, collecting the
+// songs. Folders nest as deep as the library is organized (artist, album, disc), and songs
+// can sit at any level.
+func (ps *ProxyServer) walkDirectory(walk *libraryWalk, id string, depth int) {
+	if walk.visited[id] {
+		return
+	}
+	walk.visited[id] = true
+
+	fields := logrus.Fields{"user": logsafe.Username(walk.username), "directory_id": id}
+	if depth > MaxLibraryWalkDepth {
+		ps.logger.WithFields(fields).Warn("Music folder is nested too deeply, skipping")
+		walk.incomplete = true
+		return
+	}
+	// Shutting down: the rest of the requests would only fail
+	if ps.ctx.Err() != nil {
+		walk.incomplete = true
+		return
+	}
+
+	children, err := ps.getMusicDirectory(walk.username, walk.cred, id)
+	if err != nil {
+		ps.logger.WithError(err).WithFields(fields).Warn("Failed to list music directory, skipping")
+		walk.incomplete = true
+		return
+	}
+
+	for _, child := range children {
+		if child.IsDir {
+			ps.walkDirectory(walk, child.ID, depth+1)
+		} else {
+			walk.songs = append(walk.songs, child)
+		}
+	}
 }
 
 // subsonicResponse is a decoded Subsonic response that reports its status
@@ -915,7 +932,7 @@ func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
+		return errors.New(errors.CategoryNetwork, upstreamBadAnswerCode, fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -923,16 +940,16 @@ func (ps *ProxyServer) getSubsonic(endpoint string, params url.Values, response 
 		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to read response")
 	}
 	if err := json.Unmarshal(body, response); err != nil {
-		return errors.Wrap(err, errors.CategoryNetwork, "UPSTREAM_ERROR", "failed to decode response")
+		return errors.Wrap(err, errors.CategoryNetwork, upstreamBadAnswerCode, "failed to decode response")
 	}
 
 	if response.ResponseStatus() != "ok" {
 		var failed subsonicErrorEnvelope
-		if json.Unmarshal(body, &failed) == nil && failed.SubsonicResponse.Error.Code == SubsonicErrorWrongCredentials {
+		if json.Unmarshal(body, &failed) == nil && failed.SubsonicResponse.Error.Code == models.SubsonicErrorWrongCredentials {
 			return errors.ErrInvalidCredentials.WithContext("endpoint", endpoint).
 				WithContext("reason", "rejected by upstream")
 		}
-		return errors.New(errors.CategoryNetwork, "UPSTREAM_ERROR", "API returned error status")
+		return errors.New(errors.CategoryNetwork, upstreamBadAnswerCode, "API returned error status")
 	}
 
 	return nil
@@ -1082,10 +1099,6 @@ func readPostForm(r *http.Request) (url.Values, error) {
 	}
 
 	return url.ParseQuery(string(body))
-}
-
-func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string) {
-	ps.RecordPlayEventAt(userID, songID, eventType, time.Now())
 }
 
 // RecordPlayEventAt records a play or skip that happened at the given time

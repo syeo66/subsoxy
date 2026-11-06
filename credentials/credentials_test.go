@@ -1,8 +1,10 @@
 package credentials
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/syeo66/subsoxy/errors"
+	"github.com/syeo66/subsoxy/models"
 )
 
 func TestNew(t *testing.T) {
@@ -300,7 +303,7 @@ func TestEncryptionWithDifferentKeys(t *testing.T) {
 	manager2 := New(logger, "http://localhost:4533")
 
 	// Verify different managers have different keys
-	if manager1.GetEncryptionInfo() == manager2.GetEncryptionInfo() {
+	if bytes.Equal(manager1.encryptionKey, manager2.encryptionKey) {
 		t.Error("Different managers should have different encryption keys")
 	}
 
@@ -832,13 +835,12 @@ func newAuthUpstream(t *testing.T, serverError bool) (*httptest.Server, func() i
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		status := "failed"
+		body := map[string]interface{}{"status": "failed", "version": "1.15.0",
+			"error": map[string]interface{}{"code": models.SubsonicErrorWrongCredentials, "message": "Wrong username or password"}}
 		if r.URL.Query().Get("p") == "right" {
-			status = "ok"
+			body = map[string]interface{}{"status": "ok", "version": "1.15.0"}
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"subsonic-response": map[string]interface{}{"status": status, "version": "1.15.0"},
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"subsonic-response": body})
 	}))
 	t.Cleanup(server.Close)
 	return server, func() int {
@@ -989,5 +991,48 @@ func TestForget(t *testing.T) {
 	}
 	if cred, ok := manager.Get("alice"); !ok || cred != Password("new") {
 		t.Errorf("Expected the new credential to stay stored, got %+v (stored: %v)", cred, ok)
+	}
+}
+
+// A failed ping that isn't the wrong-credentials code says nothing about the secret: it must
+// not come back as a rejection, and must not be remembered as one.
+func TestValidateAndStoreOtherFailureIsNotARejection(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	for _, code := range []int{0, 41, 70} {
+		t.Run(fmt.Sprintf("code_%d", code), func(t *testing.T) {
+			var mu sync.Mutex
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"subsonic-response": map[string]interface{}{
+						"status": "failed", "version": "1.15.0",
+						"error": map[string]interface{}{"code": code, "message": "something else"},
+					},
+				})
+			}))
+			defer upstream.Close()
+			manager := New(logger, upstream.URL)
+
+			for i := 0; i < 3; i++ {
+				_, err := manager.ValidateAndStore(context.Background(), "alice", Password("secret"))
+				if err == nil {
+					t.Fatalf("Attempt %d: expected an error", i+1)
+				}
+				if errors.IsCode(err, errors.ErrInvalidCredentials.Code) {
+					t.Fatalf("Attempt %d: code %d must not be reported as rejected credentials, got %v", i+1, code, err)
+				}
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if calls != 3 {
+				t.Errorf("Expected upstream to be asked every time (3 pings), got %d", calls)
+			}
+		})
 	}
 }

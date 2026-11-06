@@ -202,43 +202,6 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	return true
 }
 
-func (h *Handler) HandlePing(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	h.logger.Debug("Ping endpoint accessed")
-	return false
-}
-
-func (h *Handler) HandleGetLicense(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	h.logger.Debug("License endpoint accessed")
-	return false
-}
-
-func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	userID := r.FormValue("u")
-	songID := r.FormValue("id")
-
-	if userID == "" {
-		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "u")).
-			Warn("Stream request missing user ID")
-		return false
-	}
-
-	if songID != "" {
-		if err := ValidateSongID(songID); err != nil {
-			h.logger.WithError(err).Warn("Invalid song ID in stream request")
-			return false
-		}
-
-		h.logger.WithFields(logrus.Fields{
-			"song_id": logsafe.String(songID),
-			"user_id": logsafe.String(userID),
-		}).Debug("Stream request logged (no tracking for skip detection)")
-	} else {
-		h.logger.WithError(errors.ErrMissingParameter.WithContext("parameter", "id")).
-			Warn("Stream request missing song ID")
-	}
-	return false
-}
-
 // scrobbleTime returns when a scrobbled song was played: the optional "time" parameter
 // (milliseconds since the epoch) at the same position as its id, or now. Times in the
 // future are clamped to now.

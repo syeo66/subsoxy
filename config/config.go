@@ -321,26 +321,6 @@ func (c *Config) validateRateLimit() error {
 	return nil
 }
 
-// GetDatabasePoolConfig returns database pool configuration
-func (c *Config) GetDatabasePoolConfig() *DatabasePoolConfig {
-	return &DatabasePoolConfig{
-		MaxOpenConns:    c.DBMaxOpenConns,
-		MaxIdleConns:    c.DBMaxIdleConns,
-		ConnMaxLifetime: c.DBConnMaxLifetime,
-		ConnMaxIdleTime: c.DBConnMaxIdleTime,
-		HealthCheck:     c.DBHealthCheck,
-	}
-}
-
-// DatabasePoolConfig represents database connection pool configuration
-type DatabasePoolConfig struct {
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime time.Duration
-	ConnMaxIdleTime time.Duration
-	HealthCheck     bool
-}
-
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

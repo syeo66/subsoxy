@@ -854,37 +854,6 @@ func (db *DB) GetRecentlyHeardSongs(userID string, cutoffTime time.Time) ([]mode
 	return songs, nil
 }
 
-// GetExistingSongIDs returns a map of all existing song IDs for a user
-func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
-	if userID == "" {
-		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
-	}
-
-	rows, err := db.conn.Query(`SELECT id FROM songs WHERE user_id = ?`, userID)
-	if err != nil {
-		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query existing song IDs").
-			WithContext("userID", userID)
-	}
-	defer rows.Close()
-
-	songIDs := make(map[string]bool)
-	for rows.Next() {
-		var songID string
-		if err := rows.Scan(&songID); err != nil {
-			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song ID")
-			continue
-		}
-		songIDs[songID] = true
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song ID iteration").
-			WithContext("userID", userID)
-	}
-
-	return songIDs, nil
-}
-
 // GetSongsByIDs returns songs by their IDs for a specific user
 func (db *DB) GetSongsByIDs(userID string, songIDs []string) (map[string]models.Song, error) {
 	if userID == "" {

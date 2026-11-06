@@ -510,34 +510,6 @@ func TestGetEnvDurationOrDefault(t *testing.T) {
 	}
 }
 
-func TestGetDatabasePoolConfig(t *testing.T) {
-	config := &Config{
-		DBMaxOpenConns:    15,
-		DBMaxIdleConns:    7,
-		DBConnMaxLifetime: 20 * time.Minute,
-		DBConnMaxIdleTime: 3 * time.Minute,
-		DBHealthCheck:     false,
-	}
-
-	poolConfig := config.GetDatabasePoolConfig()
-
-	if poolConfig.MaxOpenConns != 15 {
-		t.Errorf("Expected MaxOpenConns 15, got %d", poolConfig.MaxOpenConns)
-	}
-	if poolConfig.MaxIdleConns != 7 {
-		t.Errorf("Expected MaxIdleConns 7, got %d", poolConfig.MaxIdleConns)
-	}
-	if poolConfig.ConnMaxLifetime != 20*time.Minute {
-		t.Errorf("Expected ConnMaxLifetime 20m, got %v", poolConfig.ConnMaxLifetime)
-	}
-	if poolConfig.ConnMaxIdleTime != 3*time.Minute {
-		t.Errorf("Expected ConnMaxIdleTime 3m, got %v", poolConfig.ConnMaxIdleTime)
-	}
-	if poolConfig.HealthCheck != false {
-		t.Errorf("Expected HealthCheck false, got %v", poolConfig.HealthCheck)
-	}
-}
-
 func TestValidateSecurityHeaders(t *testing.T) {
 	tests := []struct {
 		name    string

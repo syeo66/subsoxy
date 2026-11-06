@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/syeo66/subsoxy/errors"
 	"github.com/syeo66/subsoxy/models"
 )
 
@@ -961,60 +962,6 @@ func TestHealthCheckDisabled(t *testing.T) {
 	}
 }
 
-func TestGetExistingSongIDs(t *testing.T) {
-	db, err := New(":memory:", logrus.New())
-	if err != nil {
-		t.Fatalf("Failed to create database: %v", err)
-	}
-	defer db.Close()
-
-	userID := "testuser"
-	songs := []models.Song{
-		{ID: "song1", Title: "Test Song 1", Artist: "Test Artist", Album: "Test Album", Duration: 180},
-		{ID: "song2", Title: "Test Song 2", Artist: "Test Artist", Album: "Test Album", Duration: 200},
-		{ID: "song3", Title: "Test Song 3", Artist: "Test Artist", Album: "Test Album", Duration: 220},
-	}
-
-	// Store initial songs
-	err = db.StoreSongs(userID, songs)
-	if err != nil {
-		t.Fatalf("Failed to store songs: %v", err)
-	}
-
-	// Test getting existing song IDs
-	existingIDs, err := db.GetExistingSongIDs(userID)
-	if err != nil {
-		t.Fatalf("Failed to get existing song IDs: %v", err)
-	}
-
-	// Verify all songs are present
-	if len(existingIDs) != 3 {
-		t.Errorf("Expected 3 existing song IDs, got %d", len(existingIDs))
-	}
-
-	expectedIDs := []string{"song1", "song2", "song3"}
-	for _, id := range expectedIDs {
-		if !existingIDs[id] {
-			t.Errorf("Expected song ID %s to exist", id)
-		}
-	}
-
-	// Test with empty user ID
-	_, err = db.GetExistingSongIDs("")
-	if err == nil {
-		t.Error("Expected error for empty user ID")
-	}
-
-	// Test with non-existent user
-	emptyIDs, err := db.GetExistingSongIDs("nonexistent")
-	if err != nil {
-		t.Fatalf("Failed to get existing song IDs for non-existent user: %v", err)
-	}
-	if len(emptyIDs) != 0 {
-		t.Errorf("Expected 0 song IDs for non-existent user, got %d", len(emptyIDs))
-	}
-}
-
 func TestDeleteSongs(t *testing.T) {
 	db, err := New(":memory:", logrus.New())
 	if err != nil {
@@ -1885,4 +1832,35 @@ func TestClientMetadataMigration(t *testing.T) {
 		got.BitRate != song.BitRate || got.Size != song.Size {
 		t.Errorf("Stored metadata = %+v, want %+v", got, song)
 	}
+}
+
+// GetExistingSongIDs returns the IDs of all songs stored for a user. Only the tests need it.
+func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
+	if userID == "" {
+		return nil, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	rows, err := db.conn.Query(`SELECT id FROM songs WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to query existing song IDs").
+			WithContext("userID", userID)
+	}
+	defer rows.Close()
+
+	songIDs := make(map[string]bool)
+	for rows.Next() {
+		var songID string
+		if err := rows.Scan(&songID); err != nil {
+			db.logger.WithError(err).WithField("userID", userID).Error("Failed to scan song ID")
+			continue
+		}
+		songIDs[songID] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "error occurred during song ID iteration").
+			WithContext("userID", userID)
+	}
+
+	return songIDs, nil
 }

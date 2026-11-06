@@ -2528,11 +2528,11 @@ func TestSyncSongsForUserUsesSearch3(t *testing.T) {
 		if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 			t.Fatalf("%s: sync failed: %v", name, err)
 		}
-		songIDs, err := server.db.GetExistingSongIDs("user1")
+		stored, err := server.db.GetAllSongs("user1")
 		if err != nil {
 			t.Fatalf("%s: failed to count songs: %v", name, err)
 		}
-		count := len(songIDs)
+		count := len(stored)
 		mu.Lock()
 		defer mu.Unlock()
 		return count, calls["/rest/search3"], calls["/rest/getMusicFolders"]
@@ -2612,11 +2612,11 @@ func TestSyncSongsForUserHoldsBackMassDeletion(t *testing.T) {
 		if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
 			t.Fatalf("%s: sync failed: %v", name, err)
 		}
-		ids, err := server.db.GetExistingSongIDs("user1")
+		stored, err := server.db.GetAllSongs("user1")
 		if err != nil {
 			t.Fatalf("%s: failed to count songs: %v", name, err)
 		}
-		return len(ids)
+		return len(stored)
 	}
 
 	if count := syncAndCount("initial"); count != 10 {
@@ -2925,4 +2925,175 @@ func TestClientAddrUsesForwardedClientBehindTrustedProxy(t *testing.T) {
 	if got := ps.clientAddr(r); got != "203.0.113.7" {
 		t.Errorf("Expected an untrusted peer's own address, got %s", got)
 	}
+}
+
+// subsonicOKBody writes a successful Subsonic JSON response carrying one payload
+func subsonicOKBody(w http.ResponseWriter, key string, value interface{}) {
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"subsonic-response": map[string]interface{}{"status": "ok", "version": "1.15.0", key: value},
+	})
+}
+
+// A search3 page that fails after earlier pages worked is a hiccup, not a server without
+// search3: the sync gives up for now instead of walking the whole folder tree.
+func TestSyncSongsForUserSearchFailureMidwayDoesNotWalkFolders(t *testing.T) {
+	var mu sync.Mutex
+	calls := map[string]int{}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls[r.URL.Path]++
+		mu.Unlock()
+		if r.URL.Path != "/rest/search3" {
+			http.NotFound(w, r)
+			return
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("songOffset"))
+		if offset > 0 {
+			http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
+			return
+		}
+		page := make([]models.Song, LibraryPageSize)
+		for i := range page {
+			page[i] = models.Song{ID: fmt.Sprintf("song%d", i), Title: "Song", Artist: "Artist", Album: "Album", Duration: 180}
+		}
+		subsonicOKBody(w, "searchResult3", map[string]interface{}{"song": page})
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_search_midway.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err == nil {
+		t.Fatal("Expected the sync to fail when a later search3 page fails")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls["/rest/getMusicFolders"] != 0 {
+		t.Errorf("Expected no folder walk after a mid-paging failure, got %d getMusicFolders calls", calls["/rest/getMusicFolders"])
+	}
+	if songs, _ := server.db.GetAllSongs("user1"); len(songs) != 0 {
+		t.Errorf("Expected nothing stored from a failed fetch, got %d songs", len(songs))
+	}
+}
+
+// The folder walk reaches songs at any depth, including ones directly in an artist folder,
+// and lists a directory that appears twice (a loop in the tree) only once.
+func TestSyncSongsForUserWalksNestedFolders(t *testing.T) {
+	var mu sync.Mutex
+	listed := map[string]int{}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch r.URL.Path {
+		case "/rest/search3":
+			// A server that can't list its library through search
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"subsonic-response": map[string]interface{}{
+					"status": "failed", "version": "1.15.0",
+					"error": map[string]interface{}{"code": 0, "message": "not supported"},
+				},
+			})
+		case "/rest/getMusicFolders":
+			subsonicOKBody(w, "musicFolders", map[string]interface{}{
+				"musicFolder": []models.MusicFolder{{ID: "1", Name: "Music"}},
+			})
+		case "/rest/getIndexes":
+			subsonicOKBody(w, "indexes", map[string]interface{}{
+				"index": []models.Index{{Name: "A", Artists: []models.Artist{{ID: "artist1", Name: "Artist"}}}},
+			})
+		case "/rest/getMusicDirectory":
+			id := q.Get("id")
+			mu.Lock()
+			listed[id]++
+			mu.Unlock()
+			var children []models.Song
+			switch id {
+			case "artist1":
+				children = []models.Song{
+					{ID: "single", Title: "Single", Artist: "Artist", Album: "Singles"},
+					{ID: "album1", IsDir: true},
+				}
+			case "album1":
+				children = []models.Song{
+					{ID: "disc1", IsDir: true},
+					{ID: "disc2", IsDir: true},
+					{ID: "bonus", Title: "Bonus", Artist: "Artist", Album: "Album"},
+				}
+			case "disc1":
+				children = []models.Song{
+					{ID: "d1t1", Title: "Disc 1 Track 1", Artist: "Artist", Album: "Album"},
+					{ID: "artist1", IsDir: true}, // loops back to the top
+				}
+			case "disc2":
+				children = []models.Song{{ID: "d2t1", Title: "Disc 2 Track 1", Artist: "Artist", Album: "Album"}}
+			}
+			subsonicOKBody(w, "directory", map[string]interface{}{"child": children})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       mockServer.URL,
+		LogLevel:          "error",
+		DatabasePath:      "test_sync_nested.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	os.Remove(cfg.DatabasePath)
+	defer os.Remove(cfg.DatabasePath)
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if err := server.syncSongsForUser("user1", credentials.Password("pass1")); err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	songs, err := server.db.GetAllSongs("user1")
+	if err != nil {
+		t.Fatalf("Failed to get songs: %v", err)
+	}
+	got := map[string]bool{}
+	for _, song := range songs {
+		got[song.ID] = true
+	}
+	for _, id := range []string{"single", "bonus", "d1t1", "d2t1"} {
+		if !got[id] {
+			t.Errorf("Expected song %q from the folder walk, got %v", id, got)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("Expected 4 songs, got %d: %v", len(got), got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if listed["artist1"] != 1 {
+		t.Errorf("Expected the looping directory to be listed once, got %d", listed["artist1"])
+	}
+}
+
+// RecordPlayEvent records a play or skip that happened now
+func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string) {
+	ps.RecordPlayEventAt(userID, songID, eventType, time.Now())
 }
