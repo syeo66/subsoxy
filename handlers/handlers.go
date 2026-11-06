@@ -297,6 +297,9 @@ func (h *Handler) HandleDebug(w http.ResponseWriter, r *http.Request, endpoint s
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The page relies on an inline <style> block and style attributes, which the
+	// global CSP (default-src 'self') blocks. Allow inline styles only; no scripts.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 
 	// Determine the song to use for similarity lookup:
 	// explicit reference ID > last played track
