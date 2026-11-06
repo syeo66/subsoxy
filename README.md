@@ -2,7 +2,7 @@
 
 A Go proxy that sits between your music client and a Subsonic-compatible server (Subsonic, Navidrome, …) and adds a personalized shuffle, play/skip tracking, and per-user listening history. Every other request is forwarded unchanged, so existing clients keep working.
 
-> **Note:** Subsoxy is meant to be used with [Voidweaver](https://github.com/syeo66/voidweaver), a Flutter music player for Android and iOS, in front of [Navidrome](https://www.navidrome.org/). Other Subsonic clients and servers can work, but that setup isn't the focus. In particular, skip detection depends on the client sending a "now playing" scrobble when each track starts (see [How it works](docs/how-it-works.md#play-and-skip-detection)).
+> **Note:** Subsoxy is meant to be used with [Voidweaver](https://github.com/syeo66/voidweaver), a Flutter music player for Android, in front of [Navidrome](https://www.navidrome.org/). Other Subsonic clients and servers can work, but that setup isn't the focus. In particular, skip detection depends on the client sending a "now playing" scrobble when each track starts (see [How it works](docs/how-it-works.md#play-and-skip-detection)).
 
 ## Features
 
