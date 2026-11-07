@@ -163,11 +163,11 @@ type SonicSimilarityResponse struct {
 
 // XML response structures for Subsonic API
 type XMLSubsonicResponse struct {
-	XMLName xml.Name  `xml:"subsonic-response"`
-	Status  string    `xml:"status,attr"`
-	Version string    `xml:"version,attr"`
-	Songs   *XMLSongs `xml:"songs,omitempty"`
-	Error   *XMLError `xml:"error,omitempty"`
+	XMLName     xml.Name        `xml:"subsonic-response"`
+	Status      string          `xml:"status,attr"`
+	Version     string          `xml:"version,attr"`
+	RandomSongs *XMLRandomSongs `xml:"randomSongs,omitempty"`
+	Error       *XMLError       `xml:"error,omitempty"`
 }
 
 // XMLError is the error element of a failed Subsonic response
@@ -176,7 +176,8 @@ type XMLError struct {
 	Message string `xml:"message,attr"`
 }
 
-type XMLSongs struct {
-	XMLName xml.Name `xml:"songs"`
+// XMLRandomSongs is the randomSongs element getRandomSongs answers with
+type XMLRandomSongs struct {
+	XMLName xml.Name `xml:"randomSongs"`
 	Song    []Child  `xml:"song"`
 }

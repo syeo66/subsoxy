@@ -108,7 +108,7 @@ func TestHandleShuffle(t *testing.T) {
 			t.Errorf("Expected version '1.15.0', got %v", subsonicResp["version"])
 		}
 
-		songs, ok := subsonicResp["songs"].(map[string]interface{})
+		songs, ok := subsonicResp["randomSongs"].(map[string]interface{})
 		if !ok {
 			t.Error("Response should contain songs")
 		}
@@ -140,7 +140,7 @@ func TestHandleShuffle(t *testing.T) {
 		}
 
 		subsonicResp := response["subsonic-response"].(map[string]interface{})
-		songs := subsonicResp["songs"].(map[string]interface{})
+		songs := subsonicResp["randomSongs"].(map[string]interface{})
 		songList := songs["song"].([]interface{})
 
 		if len(songList) != 2 {
@@ -185,7 +185,7 @@ func TestHandleShuffle(t *testing.T) {
 		}
 
 		subsonicResp := response["subsonic-response"].(map[string]interface{})
-		songs := subsonicResp["songs"].(map[string]interface{})
+		songs := subsonicResp["randomSongs"].(map[string]interface{})
 		songList := songs["song"].([]interface{})
 
 		if len(songList) != 3 {
@@ -211,7 +211,7 @@ func TestHandleShuffle(t *testing.T) {
 		}
 
 		subsonicResp := response["subsonic-response"].(map[string]interface{})
-		songs := subsonicResp["songs"].(map[string]interface{})
+		songs := subsonicResp["randomSongs"].(map[string]interface{})
 		songList := songs["song"].([]interface{})
 
 		if len(songList) != 3 {
@@ -302,7 +302,7 @@ func TestHandleShuffleEmpty(t *testing.T) {
 	}
 
 	subsonicResp := response["subsonic-response"].(map[string]interface{})
-	songs := subsonicResp["songs"].(map[string]interface{})
+	songs := subsonicResp["randomSongs"].(map[string]interface{})
 	songList := songs["song"].([]interface{})
 
 	if len(songList) != 0 {
@@ -914,8 +914,12 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 					t.Errorf("Expected version '1.15.0', got '%s'", xmlResponse.Version)
 				}
 
-				if xmlResponse.Songs == nil {
-					t.Error("Expected songs element to be present")
+				if xmlResponse.RandomSongs == nil {
+					t.Error("Expected randomSongs element to be present")
+				}
+				// Parsing uses the same struct tags, so check the element name clients see
+				if !strings.Contains(w.Body.String(), "<randomSongs>") {
+					t.Errorf("Expected a <randomSongs> element, got %s", w.Body.String())
 				}
 			} else {
 				// Test JSON response
@@ -932,6 +936,10 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 
 				if status, ok := subsonicResponse["status"].(string); !ok || status != "ok" {
 					t.Errorf("Expected status 'ok', got '%v'", subsonicResponse["status"])
+				}
+
+				if _, ok := subsonicResponse["randomSongs"].(map[string]interface{}); !ok {
+					t.Errorf("Expected randomSongs object, got %v", subsonicResponse)
 				}
 			}
 		})
@@ -1016,8 +1024,8 @@ func TestHandleShuffleXMLError(t *testing.T) {
 	if xmlResponse.Status != "failed" {
 		t.Errorf("Expected status 'failed', got '%s'", xmlResponse.Status)
 	}
-	if xmlResponse.Songs != nil {
-		t.Error("Expected no songs element in a failed response")
+	if xmlResponse.RandomSongs != nil {
+		t.Error("Expected no randomSongs element in a failed response")
 	}
 	if xmlResponse.Error == nil || xmlResponse.Error.Code != SubsonicErrorMissingParameter {
 		t.Errorf("Expected error code %d, got %+v", SubsonicErrorMissingParameter, xmlResponse.Error)
@@ -1059,7 +1067,7 @@ func TestHandleShuffleFilters(t *testing.T) {
 				Status string `json:"status"`
 				Songs  struct {
 					Song []models.Song `json:"song"`
-				} `json:"songs"`
+				} `json:"randomSongs"`
 				Error struct {
 					Message string `json:"message"`
 				} `json:"error"`
@@ -1148,7 +1156,7 @@ func TestHandleShuffleResponseFields(t *testing.T) {
 			SubsonicResponse struct {
 				Songs struct {
 					Song []map[string]any `json:"song"`
-				} `json:"songs"`
+				} `json:"randomSongs"`
 			} `json:"subsonic-response"`
 		}
 		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {

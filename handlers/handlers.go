@@ -77,7 +77,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 			Error:   subsonicErr,
 		}
 		if subsonicErr == nil {
-			xmlResponse.Songs = &models.XMLSongs{Song: children}
+			xmlResponse.RandomSongs = &models.XMLRandomSongs{Song: children}
 		}
 
 		w.Header().Set("Content-Type", "application/xml")
@@ -95,7 +95,7 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 			"message": subsonicErr.Message,
 		}
 	} else {
-		body["songs"] = map[string]interface{}{
+		body["randomSongs"] = map[string]interface{}{
 			"song": children,
 		}
 	}
