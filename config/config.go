@@ -369,6 +369,11 @@ func ParseTrustedProxies(input string) ([]netip.Prefix, error) {
 				return nil, errors.Wrap(err, errors.CategoryConfig, "INVALID_TRUSTED_PROXY", "trusted proxy must be an IP address or CIDR range").
 					WithContext("value", entry)
 			}
+			// Client addresses are compared unmapped, so an IPv4-mapped range becomes the
+			// IPv4 range it maps, as a single mapped address becomes its IPv4 address
+			if addr := prefix.Addr(); addr.Is4In6() && prefix.Bits() >= 96 {
+				prefix = netip.PrefixFrom(addr.Unmap(), prefix.Bits()-96)
+			}
 			prefixes = append(prefixes, prefix.Masked())
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -72,6 +73,37 @@ func (c Credential) AddTo(params url.Values) {
 	} else {
 		params.Set("p", c.Password)
 	}
+}
+
+// marshal encodes the credential's fields, each preceded by its length, keeping every byte
+// as it is. JSON can't be used here: it replaces bytes that aren't valid UTF-8, so different
+// passwords would encode the same.
+func (c Credential) marshal() []byte {
+	var b []byte
+	for _, field := range []string{c.Password, c.Token, c.Salt} {
+		b = binary.AppendUvarint(b, uint64(len(field)))
+		b = append(b, field...)
+	}
+	return b
+}
+
+// unmarshalCredential decodes a credential encoded by marshal
+func unmarshalCredential(b []byte) (Credential, error) {
+	var fields [3]string
+	for i := range fields {
+		n, size := binary.Uvarint(b)
+		// Only the shortest varint is accepted, so each credential has a single encoding
+		if size <= 0 || size != len(binary.AppendUvarint(nil, n)) || n > uint64(len(b)-size) {
+			return Credential{}, errors.New(errors.CategoryCredentials, "INVALID_CREDENTIAL_ENCODING", "malformed credential encoding")
+		}
+		b = b[size:]
+		fields[i] = string(b[:n])
+		b = b[n:]
+	}
+	if len(b) != 0 {
+		return Credential{}, errors.New(errors.CategoryCredentials, "INVALID_CREDENTIAL_ENCODING", "malformed credential encoding")
+	}
+	return Credential{Password: fields[0], Token: fields[1], Salt: fields[2]}, nil
 }
 
 // encryptedCredential holds an encrypted Credential
@@ -169,11 +201,10 @@ func (cm *Manager) ValidateAndStore(ctx context.Context, username string, cred C
 // secretKey identifies a username/secret pair without keeping the secret itself
 func (cm *Manager) secretKey(username string, cred Credential) string {
 	mac := hmac.New(sha256.New, cm.encryptionKey)
+	mac.Write(binary.AppendUvarint(nil, uint64(len(username))))
 	mac.Write([]byte(username))
-	mac.Write([]byte{0})
-	// The JSON encoding keeps a password and a token with the same text apart
-	encoded, _ := json.Marshal(cred)
-	mac.Write(encoded)
+	// The encoding keeps a password and a token with the same text apart
+	mac.Write(cred.marshal())
 	return string(mac.Sum(nil))
 }
 
@@ -400,10 +431,7 @@ func generateEncryptionKey() []byte {
 
 // encrypt encrypts a credential using AES-256-GCM
 func (cm *Manager) encrypt(cred Credential) (encryptedCredential, error) {
-	plaintext, err := json.Marshal(cred)
-	if err != nil {
-		return encryptedCredential{}, err
-	}
+	plaintext := cred.marshal()
 
 	block, err := aes.NewCipher(cm.encryptionKey)
 	if err != nil {
@@ -443,9 +471,5 @@ func (cm *Manager) decrypt(encrypted encryptedCredential) (Credential, error) {
 		return Credential{}, err
 	}
 
-	var cred Credential
-	if err := json.Unmarshal(plaintext, &cred); err != nil {
-		return Credential{}, err
-	}
-	return cred, nil
+	return unmarshalCredential(plaintext)
 }
