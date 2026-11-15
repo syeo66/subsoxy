@@ -37,8 +37,13 @@ const (
 	// A second submission for the same song within half its duration is a client retry rather
 	// than the song played again (e.g. on repeat). Used when the duration is unknown.
 	DuplicateSubmissionFallback = time.Minute
-	ArtistRatioMinWeight        = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
-	ArtistRatioMaxWeight        = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
+	// How far ahead of the server's clock a scrobble's "time" may be, and how old (a scrobble
+	// a client queued while offline), for it to be used for the time between scrobbles, see
+	// plausibleClientTime
+	ClientTimeMaxAhead   = time.Hour
+	ClientTimeMaxAge     = 30 * 24 * time.Hour
+	ArtistRatioMinWeight = 0.5 // Minimum weight multiplier for artists with poor play/skip ratio
+	ArtistRatioMaxWeight = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
 	// Bayesian prior parameters for Beta-Binomial model
 	// These represent "pseudo-observations" that regularize estimates when sample size is small
 	BayesianPriorAlpha = 2.0 // Prior "plays" - assumes slight tendency toward playing
@@ -71,7 +76,47 @@ type similarSongsEntry struct {
 type ScrobbleInfo struct {
 	Song         *models.Song
 	IsSubmission bool
-	Timestamp    time.Time
+	// When the scrobble arrived
+	Timestamp time.Time
+	// The scrobble's "time" parameter as the client sent it (by its clock, not clamped), or
+	// nil if it sent none or an implausible one, see plausibleClientTime
+	ClientTime *time.Time
+}
+
+// scrobbleGap is the time from a player's previous scrobble to one that arrived at
+// arrived with the client time clientTime (nil if none or implausible, see
+// plausibleClientTime), and whether it was measured by the client's clock. By the client's
+// clock if both scrobbles carry a time: a scrobble a client queued while offline and
+// delivered late then counts as when it happened, and a skewed client clock cancels out. By
+// arrival otherwise: for clients that send no time, or send it only with some scrobbles
+// (e.g. submissions), whose times may mean something else. Also by arrival if the client
+// times go backwards: the clocks aren't comparable then (e.g. two devices with the same
+// client name), or the client delivered them out of order.
+func scrobbleGap(previous *ScrobbleInfo, arrived time.Time, clientTime *time.Time) (time.Duration, bool) {
+	if previous.ClientTime != nil && clientTime != nil {
+		if gap := clientTime.Sub(*previous.ClientTime); gap >= 0 {
+			return gap, true
+		}
+	}
+	gap := arrived.Sub(previous.Timestamp)
+	if gap < 0 {
+		gap = 0
+	}
+	return gap, false
+}
+
+// duplicateGap is scrobbleGap without telling which clock it used
+func duplicateGap(previous *ScrobbleInfo, arrived time.Time, clientTime *time.Time) time.Duration {
+	gap, _ := scrobbleGap(previous, arrived, clientTime)
+	return gap
+}
+
+// plausibleClientTime reports whether t, the "time" of a scrobble that arrived at arrived,
+// reads like milliseconds by a clock close to the server's: at most ClientTimeMaxAhead ahead
+// of it, and at most ClientTimeMaxAge old. Others (a time in seconds or microseconds, a
+// clock far off) aren't used for the time between scrobbles.
+func plausibleClientTime(t, arrived time.Time) bool {
+	return !t.After(arrived.Add(ClientTimeMaxAhead)) && !t.Before(arrived.Add(-ClientTimeMaxAge))
 }
 
 // EmpiricalPriors holds the calculated Bayesian priors for a user
@@ -286,22 +331,34 @@ func duplicateSubmissionWindow(song *models.Song) time.Duration {
 	return time.Duration(song.Duration) * time.Second / 2
 }
 
-// ProcessScrobble processes a scrobble event with simplified skip detection
+// ProcessScrobble processes a scrobble event without a client time, see ProcessScrobbleAt.
+func (s *Service) ProcessScrobble(userID, client, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
+	return s.ProcessScrobbleAt(userID, client, songID, isSubmission, nil, func(userID string, song *models.Song, _ time.Time) {
+		recordSkipFunc(userID, song)
+	})
+}
+
+// ProcessScrobbleAt processes a scrobble event with simplified skip detection
 // Returns true if a play event should be recorded, false if it's a duplicate submission
 // client is the "c" parameter of the scrobble: skips are detected per player.
-func (s *Service) ProcessScrobble(userID, client, songID string, isSubmission bool, recordSkipFunc func(string, *models.Song)) bool {
+// clientTime is its "time" parameter as sent, or nil: the time between scrobbles is measured
+// with it when the player's previous scrobble had one too, see scrobbleGap. A skip is
+// recorded at the time the next song started by the client's clock if the gap was measured
+// with it (unless that's in the future), otherwise now.
+func (s *Service) ProcessScrobbleAt(userID, client, songID string, isSubmission bool, clientTime *time.Time, recordSkipFunc func(userID string, song *models.Song, at time.Time)) bool {
 	// recordSkipFunc runs after s.mu is released: it writes to the database and may call
 	// back into the service (e.g. InvalidateEmpiricalPriors), which takes s.mu itself.
-	skippedSong, shouldRecord := s.updateScrobbleState(userID, client, songID, isSubmission)
+	skippedSong, skippedAt, shouldRecord := s.updateScrobbleState(userID, client, songID, isSubmission, clientTime)
 	if skippedSong != nil {
-		recordSkipFunc(userID, skippedSong)
+		recordSkipFunc(userID, skippedSong, skippedAt)
 	}
 	return shouldRecord
 }
 
 // updateScrobbleState updates the user's last scrobble under s.mu. It returns the previous
-// song if it should be recorded as skipped, and whether a play event should be recorded.
-func (s *Service) updateScrobbleState(userID, client, songID string, isSubmission bool) (*models.Song, bool) {
+// song if it should be recorded as skipped, when it was skipped, and whether a play event
+// should be recorded.
+func (s *Service) updateScrobbleState(userID, client, songID string, isSubmission bool, clientTime *time.Time) (*models.Song, time.Time, bool) {
 	// Fetch current song details to get duration (before locking, as it queries the database)
 	currentSongs, err := s.db.GetSongsByIDs(userID, []string{songID})
 	var currentSong *models.Song
@@ -318,6 +375,10 @@ func (s *Service) updateScrobbleState(userID, client, songID string, isSubmissio
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	if clientTime != nil && !plausibleClientTime(*clientTime, now) {
+		clientTime = nil
+	}
 
 	// Check if there was a previous scrobble from this player
 	player := playerKey(userID, client)
@@ -326,22 +387,25 @@ func (s *Service) updateScrobbleState(userID, client, songID string, isSubmissio
 	// Check if this is a duplicate submission for the same song
 	// This prevents double-counting when clients retry or send multiple submission=true requests
 	if hadPreviousScrobble && lastScrobble.IsSubmission && isSubmission && lastScrobble.Song.ID == songID &&
-		time.Since(lastScrobble.Timestamp) < duplicateSubmissionWindow(currentSong) {
+		duplicateGap(lastScrobble, now, clientTime) < duplicateSubmissionWindow(currentSong) {
 		s.logger.WithFields(logrus.Fields{
 			"user_id": userID,
 			"song_id": songID,
 			"reason":  "duplicate_submission",
 		}).Debug("Ignoring duplicate submission for same song")
-		return nil, false // Don't record another play event
+		return nil, time.Time{}, false // Don't record another play event
 	}
 
 	var skippedSong *models.Song
+	// The previous song stopped playing when this one started: by the client's clock if the
+	// gap was measured with it (unless that's in the future), otherwise now
+	skippedAt := now
 
 	// If there was a previous scrobble that wasn't a definitive play, mark it as skipped
 	// BUT only if it's a different song (same song being scrobbled again should just update status)
 	// AND only if the time between scrobbles is less than 2x the song duration (when duration is available)
 	if hadPreviousScrobble && !lastScrobble.IsSubmission && lastScrobble.Song.ID != songID {
-		timeSinceLastScrobble := time.Since(lastScrobble.Timestamp)
+		timeSinceLastScrobble, byClientClock := scrobbleGap(lastScrobble, now, clientTime)
 		songDuration := time.Duration(lastScrobble.Song.Duration) * time.Second
 		maxSkipTime := songDuration * 2
 
@@ -363,6 +427,9 @@ func (s *Service) updateScrobbleState(userID, client, songID string, isSubmissio
 
 		if shouldMarkAsSkipped {
 			skippedSong = lastScrobble.Song
+			if byClientClock && clientTime.Before(now) {
+				skippedAt = *clientTime
+			}
 			s.logger.WithFields(logrus.Fields{
 				"user_id":              userID,
 				"song_id":              lastScrobble.Song.ID,
@@ -390,7 +457,8 @@ func (s *Service) updateScrobbleState(userID, client, songID string, isSubmissio
 	s.lastScrobble[player] = &ScrobbleInfo{
 		Song:         currentSong,
 		IsSubmission: isSubmission,
-		Timestamp:    time.Now(),
+		Timestamp:    now,
+		ClientTime:   clientTime,
 	}
 
 	s.logger.WithFields(logrus.Fields{
@@ -399,7 +467,7 @@ func (s *Service) updateScrobbleState(userID, client, songID string, isSubmissio
 		"submission": isSubmission,
 	}).Debug("Processed scrobble")
 
-	return skippedSong, true // OK to record play event
+	return skippedSong, skippedAt, true // OK to record play event
 }
 
 // racer is one song in the exponential race that orders the shuffle. Each song has a clock

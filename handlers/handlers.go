@@ -202,24 +202,32 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	return true
 }
 
+// clientTime returns the optional "time" parameter (milliseconds since the epoch) at the
+// same position as the scrobbled id, as the client sent it (by its own clock, possibly in
+// the future), or nil if there's none.
+func clientTime(times []string, i int) *time.Time {
+	if i >= len(times) {
+		return nil
+	}
+	ms, err := strconv.ParseInt(times[i], 10, 64)
+	if err != nil || ms <= 0 {
+		return nil
+	}
+	t := time.UnixMilli(ms)
+	return &t
+}
+
 // scrobbleTime returns when a scrobbled song was played: the optional "time" parameter
 // (milliseconds since the epoch) at the same position as its id, or now. Times in the
 // future are clamped to now.
 func scrobbleTime(times []string, i int, now time.Time) time.Time {
-	if i >= len(times) {
-		return now
-	}
-	ms, err := strconv.ParseInt(times[i], 10, 64)
-	if err != nil || ms <= 0 {
-		return now
-	}
-	if t := time.UnixMilli(ms); t.Before(now) {
-		return t
+	if t := clientTime(times, i); t != nil && t.Before(now) {
+		return *t
 	}
 	return now
 }
 
-func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(userID, songID, eventType string, at time.Time), setLastPlayed func(string, string), processScrobbleFunc func(userID, client, songID string, isSubmission bool) bool) bool {
+func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoint string, recordFunc func(userID, songID, eventType string, at time.Time), setLastPlayed func(string, string), processScrobbleFunc func(userID, client, songID string, isSubmission bool, clientTime *time.Time) bool) bool {
 	userID := r.FormValue("u") // Also parses the form if that hasn't happened yet
 	songIDs := r.Form["id"]
 	times := r.Form["time"]
@@ -252,7 +260,9 @@ func (h *Handler) HandleScrobble(w http.ResponseWriter, r *http.Request, endpoin
 
 		// Process pending songs first (may mark earlier songs as skipped)
 		// Returns true if this is a new play event, false if it's a duplicate
-		shouldRecord := processScrobbleFunc(userID, client, songID, isSubmission)
+		// With the client's time as sent: skip detection compares it with the time of the
+		// player's previous scrobble, by the same clock
+		shouldRecord := processScrobbleFunc(userID, client, songID, isSubmission, clientTime(times, i))
 
 		if isSubmission && shouldRecord {
 			recordFunc(userID, songID, "play", scrobbleTime(times, i, now))

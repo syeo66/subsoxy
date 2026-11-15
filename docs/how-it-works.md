@@ -23,9 +23,17 @@ For each of a user's players, told apart by the client name in the `c` parameter
 | Previous song's duration is unknown | The cut-off is 1 hour (`MaxSkipTimeoutHours`) instead of 2× duration |
 | Same song scrobbled again | Status updated, never counted as a skip |
 
+**Which clock.** The time between two scrobbles of a player (for skips and for duplicate submissions) is measured by the client's own clock when both carry a `time` parameter, and by when they arrived otherwise. A client that queues scrobbles while offline and delivers them later with their `time` (Voidweaver does) is then judged as if they had arrived on time: a song skipped while offline counts as a skip, a song paused overnight before the next one doesn't, and a submission retried hours later with the same `time` is still a duplicate. A skewed client clock cancels out. Arrival decides:
+
+- when either scrobble has no `time`, so a client that sends none, or sends it only with submissions, works as before;
+- when a `time` isn't plausible: more than an hour ahead of the server's clock (`ClientTimeMaxAhead`) or more than 30 days old (`ClientTimeMaxAge`), e.g. seconds or microseconds instead of milliseconds;
+- when the client times go backwards (two devices with the same client name, or scrobbles delivered out of order).
+
+A skip measured by the client's clock is recorded at the `time` of the scrobble that followed it, when the next song started (now if that's in the future); otherwise it's recorded now.
+
 **Client requirements:** this works because the client sends a "now playing" scrobble (`submission=false`) when a track starts, and a `submission=true` scrobble once its play threshold is reached. [Voidweaver](https://github.com/syeo66/voidweaver) does both for every track, and queues and retries scrobbles while offline. With a client that only sends `submission=true`, plays are still counted but skips are never detected. When a skip is detected also depends on the client's scrobble threshold. In Voidweaver that's configurable: a minimum play time or percentage, whichever comes first.
 
-A scrobble can name several songs (repeated `id`, each with an optional matching `time`), for example plays a client queued while offline. Each one is handled in turn. A `time` in the future is treated as now.
+A scrobble can name several songs (repeated `id`, each with an optional matching `time`), for example plays a client queued while offline. Each one is handled in turn. A play is recorded at its `time`, or now if that's in the future.
 
 Recording an event updates the song's `play_count`/`skip_count`, its `last_played`/`last_skipped` timestamp (which only moves forward, even for an event delivered late), and its decayed counters.
 

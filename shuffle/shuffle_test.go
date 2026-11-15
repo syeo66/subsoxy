@@ -1815,3 +1815,189 @@ func TestProcessScrobblePerPlayer(t *testing.T) {
 		}
 	})
 }
+
+func TestProcessScrobbleClientTime(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_client_time.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	userID := "testuser"
+	if err := db.StoreSongs(userID, []models.Song{
+		{ID: "song1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 60},
+		{ID: "song2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 300},
+		{ID: "song3", Title: "Song 3", Artist: "Artist", Album: "Album", Duration: 180},
+	}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	ptr := func(t time.Time) *time.Time { return &t }
+
+	type skip struct {
+		songID string
+		at     time.Time
+	}
+	newRecorder := func() (*[]skip, func(string, *models.Song, time.Time)) {
+		skips := &[]skip{}
+		return skips, func(_ string, song *models.Song, at time.Time) {
+			*skips = append(*skips, skip{song.ID, at})
+		}
+	}
+	// Moves the arrival of the player's last scrobble back by d, as if it had arrived d ago
+	arrivedAgo := func(service *Service, d time.Duration) {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		service.lastScrobble[playerKey(userID, "app")].Timestamp = time.Now().Add(-d)
+	}
+
+	t.Run("Late burst: a quick skip counts, at the time the next song started", func(t *testing.T) {
+		service := New(db, logger)
+		skips, record := newRecorder()
+		started := time.Now().Add(-2 * time.Hour)
+
+		// Queued while offline, delivered together now
+		service.ProcessScrobbleAt(userID, "app", "song1", false, ptr(started), record)
+		service.ProcessScrobbleAt(userID, "app", "song2", false, ptr(started.Add(30*time.Second)), record)
+
+		if len(*skips) != 1 || (*skips)[0].songID != "song1" {
+			t.Fatalf("Expected song1 skipped, got %v", *skips)
+		}
+		if want := started.Add(30 * time.Second); !(*skips)[0].at.Equal(want) {
+			t.Errorf("Expected the skip at %v, got %v", want, (*skips)[0].at)
+		}
+	})
+
+	t.Run("Late burst: a long pause before the next song isn't a skip", func(t *testing.T) {
+		service := New(db, logger)
+		skips, record := newRecorder()
+		started := time.Now().Add(-10 * time.Hour)
+
+		// Paused overnight (song1 is 60s, so 2x is 2 minutes), delivered together now
+		service.ProcessScrobbleAt(userID, "app", "song1", false, ptr(started), record)
+		service.ProcessScrobbleAt(userID, "app", "song2", false, ptr(started.Add(8*time.Hour)), record)
+
+		if len(*skips) != 0 {
+			t.Errorf("Expected no skip, got %v", *skips)
+		}
+	})
+
+	t.Run("Without a time on both, arrival decides", func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			first, second *time.Time
+		}{
+			{"first only", ptr(time.Now().Add(-10 * time.Minute)), nil},
+			{"second only", nil, ptr(time.Now().Add(-10 * time.Minute))},
+			{"neither", nil, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				service := New(db, logger)
+				skips, record := newRecorder()
+				before := time.Now()
+
+				// Arriving right after each other: a skip by arrival, whatever the times say
+				service.ProcessScrobbleAt(userID, "app", "song1", false, tc.first, record)
+				service.ProcessScrobbleAt(userID, "app", "song2", false, tc.second, record)
+
+				if len(*skips) != 1 {
+					t.Fatalf("Expected song1 skipped by arrival, got %v", *skips)
+				}
+				if (*skips)[0].at.Before(before) {
+					t.Errorf("Expected the skip recorded now, got %v", (*skips)[0].at)
+				}
+			})
+		}
+	})
+
+	t.Run("A skewed client clock cancels out", func(t *testing.T) {
+		for _, skew := range []time.Duration{-30 * time.Minute, 30 * time.Minute} {
+			service := New(db, logger)
+			skips, record := newRecorder()
+			clock := time.Now().Add(skew)
+
+			service.ProcessScrobbleAt(userID, "app", "song1", false, ptr(clock), record)
+			arrivedAgo(service, 30*time.Second)
+			service.ProcessScrobbleAt(userID, "app", "song2", false, ptr(clock.Add(30*time.Second)), record)
+			if len(*skips) != 1 {
+				t.Fatalf("Skew %v: expected song1 skipped, got %v", skew, *skips)
+			}
+			// Never recorded in the future
+			if (*skips)[0].at.After(time.Now()) {
+				t.Errorf("Skew %v: skip recorded in the future: %v", skew, (*skips)[0].at)
+			}
+
+			// A long pause by the same skewed clock, however soon it arrives
+			service.ProcessScrobbleAt(userID, "app", "song3", false, ptr(clock.Add(20*time.Minute)), record)
+			if len(*skips) != 1 {
+				t.Errorf("Skew %v: expected no skip of song2 after 20 minutes, got %v", skew, *skips)
+			}
+		}
+	})
+
+	t.Run("Implausible times are ignored", func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			first, second time.Time
+		}{
+			// Seconds sent as milliseconds: January 1970, 30 "ms" apart
+			{"seconds", time.UnixMilli(time.Now().Unix()), time.UnixMilli(time.Now().Unix() + 30)},
+			{"far future", time.Now().Add(3 * time.Hour), time.Now().Add(3*time.Hour + 30*time.Second)},
+			{"too old", time.Now().Add(-60 * 24 * time.Hour), time.Now().Add(-60*24*time.Hour + 30*time.Second)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				service := New(db, logger)
+				skips, record := newRecorder()
+
+				// 10 minutes apart by arrival (more than 2x the 60s song1): no skip, although
+				// the times would make it one
+				service.ProcessScrobbleAt(userID, "app", "song1", false, ptr(tc.first), record)
+				arrivedAgo(service, 10*time.Minute)
+				service.ProcessScrobbleAt(userID, "app", "song2", false, ptr(tc.second), record)
+
+				if len(*skips) != 0 {
+					t.Errorf("Expected arrival to decide (no skip), got %v", *skips)
+				}
+			})
+		}
+	})
+
+	t.Run("Client times going backwards fall back to arrival", func(t *testing.T) {
+		service := New(db, logger)
+		skips, record := newRecorder()
+		clock := time.Now().Add(-time.Hour)
+
+		service.ProcessScrobbleAt(userID, "app", "song1", false, ptr(clock), record)
+		arrivedAgo(service, 10*time.Minute)
+		service.ProcessScrobbleAt(userID, "app", "song2", false, ptr(clock.Add(-time.Minute)), record)
+
+		if len(*skips) != 0 {
+			t.Errorf("Expected arrival to decide (no skip after 10 minutes), got %v", *skips)
+		}
+	})
+
+	t.Run("A late retry of a submission is a duplicate, a later play isn't", func(t *testing.T) {
+		service := New(db, logger)
+		_, record := newRecorder()
+		played := time.Now().Add(-3 * time.Hour)
+
+		if !service.ProcessScrobbleAt(userID, "app", "song3", true, ptr(played), record) {
+			t.Fatal("First submission should be recorded")
+		}
+		// The same play sent again an hour later (the answer was lost)
+		arrivedAgo(service, time.Hour)
+		if service.ProcessScrobbleAt(userID, "app", "song3", true, ptr(played), record) {
+			t.Error("A retry with the same time should be ignored, however late")
+		}
+		// Played again 200s later (more than half the 180s song), delivered right after
+		if !service.ProcessScrobbleAt(userID, "app", "song3", true, ptr(played.Add(200*time.Second)), record) {
+			t.Error("A play 200s later by the client's clock should be recorded")
+		}
+	})
+}

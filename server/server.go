@@ -1140,11 +1140,18 @@ func songHasChanged(existing, new models.Song) bool {
 		existing.Size != new.Size
 }
 
-// ProcessScrobble processes a scrobble event and handles pending songs
-// Returns true if a play event should be recorded, false if it's a duplicate submission
+// ProcessScrobble processes a scrobble event without a client time, see ProcessScrobbleAt
 func (ps *ProxyServer) ProcessScrobble(userID, client, songID string, isSubmission bool) bool {
-	recordSkipFunc := func(userID string, song *models.Song) {
-		err := ps.db.RecordPlayEvent(userID, song.ID, "skip")
+	return ps.ProcessScrobbleAt(userID, client, songID, isSubmission, nil)
+}
+
+// ProcessScrobbleAt processes a scrobble event and handles pending songs. clientTime is the
+// scrobble's "time" parameter as the client sent it, or nil. A skip it detects is recorded at
+// the time the next song started (see shuffle.Service.ProcessScrobbleAt).
+// Returns true if a play event should be recorded, false if it's a duplicate submission
+func (ps *ProxyServer) ProcessScrobbleAt(userID, client, songID string, isSubmission bool, clientTime *time.Time) bool {
+	recordSkipFunc := func(userID string, song *models.Song, at time.Time) {
+		err := ps.db.RecordPlayEventAt(userID, song.ID, "skip", at)
 		if err != nil {
 			ps.logger.WithError(err).WithFields(logrus.Fields{
 				"user_id": userID,
@@ -1154,7 +1161,7 @@ func (ps *ProxyServer) ProcessScrobble(userID, client, songID string, isSubmissi
 		}
 		ps.shuffle.InvalidateEmpiricalPriors(userID)
 	}
-	return ps.shuffle.ProcessScrobble(userID, client, songID, isSubmission, recordSkipFunc)
+	return ps.shuffle.ProcessScrobbleAt(userID, client, songID, isSubmission, clientTime, recordSkipFunc)
 }
 
 // fetchSimilarSongs queries the upstream's getSonicSimilarTracks endpoint provided by the

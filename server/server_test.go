@@ -438,6 +438,53 @@ func TestProcessScrobbleRecordsSkipWithoutDeadlock(t *testing.T) {
 	}
 }
 
+// A skip a client delivers late (queued while offline) is stored at the time it happened
+func TestProcessScrobbleAtRecordsSkipAtClientTime(t *testing.T) {
+	cfg := &config.Config{
+		ProxyPort:         "8080",
+		UpstreamURL:       "http://localhost:4533",
+		LogLevel:          "warn",
+		DatabasePath:      "test_scrobble_skip_at.db",
+		CredentialWorkers: config.DefaultCredentialWorkers,
+	}
+	defer os.Remove("test_scrobble_skip_at.db")
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	defer server.Shutdown(context.Background())
+
+	if err := server.db.StoreSongs("testuser", []models.Song{
+		{ID: "1", Title: "Song 1", Artist: "Artist", Album: "Album", Duration: 300},
+		{ID: "2", Title: "Song 2", Artist: "Artist", Album: "Album", Duration: 250},
+	}); err != nil {
+		t.Fatalf("Failed to store test songs: %v", err)
+	}
+
+	started := time.Now().Add(-3 * time.Hour).Truncate(time.Second)
+	skipped := started.Add(40 * time.Second)
+	server.ProcessScrobbleAt("testuser", "app", "1", false, &started)
+	server.ProcessScrobbleAt("testuser", "app", "2", false, &skipped)
+
+	all, err := server.db.GetAllSongs("testuser")
+	if err != nil {
+		t.Fatalf("Failed to load songs: %v", err)
+	}
+	var song models.Song
+	for _, s := range all {
+		if s.ID == "1" {
+			song = s
+		}
+	}
+	if song.SkipCount != 1 {
+		t.Fatalf("Expected 1 skip, got %d", song.SkipCount)
+	}
+	if !song.LastSkipped.Equal(skipped) {
+		t.Errorf("Expected the skip at %v, got %v", skipped, song.LastSkipped)
+	}
+}
+
 func TestSetLastPlayed(t *testing.T) {
 	cfg := &config.Config{
 		ProxyPort:    "8080",
@@ -2049,7 +2096,7 @@ func TestPostScrobbleRecordsPlay(t *testing.T) {
 
 	handlers := server.GetHandlers()
 	server.AddAuthenticatedHook("/rest/scrobble", func(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-		return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEventAt, server.SetLastPlayed, server.ProcessScrobble)
+		return handlers.HandleScrobble(w, r, endpoint, server.RecordPlayEventAt, server.SetLastPlayed, server.ProcessScrobbleAt)
 	})
 
 	form := "u=alice&p=secret&id=song1&submission=true"

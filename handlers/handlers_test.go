@@ -345,7 +345,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedSongID = songID
 		}
 
-		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool, _ *time.Time) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -388,7 +388,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool, _ *time.Time) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -423,7 +423,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool, _ *time.Time) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -458,7 +458,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool, _ *time.Time) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -493,7 +493,7 @@ func TestHandleScrobble(t *testing.T) {
 			lastPlayedCalled = true
 		}
 
-		processScrobbleFunc := func(userID, client, songID string, isSubmission bool) bool {
+		processScrobbleFunc := func(userID, client, songID string, isSubmission bool, _ *time.Time) bool {
 			// Mock processing of pending songs
 			return true // Allow recording
 		}
@@ -530,7 +530,7 @@ func TestHandleScrobble(t *testing.T) {
 			recorded[songID] = at
 		}
 
-		handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, func(string, string) {}, func(string, string, string, bool) bool { return true })
+		handler.HandleScrobble(w, req, "/rest/scrobble", recordFunc, func(string, string) {}, func(string, string, string, bool, *time.Time) bool { return true })
 
 		if len(recorded) != 3 {
 			t.Fatalf("Expected 3 recorded plays, got %d", len(recorded))
@@ -1199,4 +1199,48 @@ func TestHandleShuffleResponseFields(t *testing.T) {
 			t.Errorf("Internal fields should not be in the XML response: %s", body)
 		}
 	})
+}
+
+func TestHandleScrobblePassesClientTime(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+	handler := New(logger, nil)
+
+	future := time.Now().Add(time.Hour).Truncate(time.Millisecond)
+	past := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	form := url.Values{
+		"u":          {"testuser"},
+		"c":          {"app"},
+		"submission": {"false"},
+		"id":         {"a", "b", "c", "d"},
+		"time": {
+			strconv.FormatInt(past.UnixMilli(), 10),
+			strconv.FormatInt(future.UnixMilli(), 10),
+			"not a number",
+		},
+	}
+	req := httptest.NewRequest("POST", "/rest/scrobble", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	got := map[string]*time.Time{}
+	handler.HandleScrobble(httptest.NewRecorder(), req, "/rest/scrobble",
+		func(string, string, string, time.Time) {}, func(string, string) {},
+		func(_, client, songID string, isSubmission bool, clientTime *time.Time) bool {
+			if client != "app" || isSubmission {
+				t.Errorf("Unexpected client %q or submission %v", client, isSubmission)
+			}
+			got[songID] = clientTime
+			return true
+		})
+
+	if got["a"] == nil || !got["a"].Equal(past) {
+		t.Errorf("Expected a's time %v, got %v", past, got["a"])
+	}
+	// As sent: the shuffle compares it with the player's previous time by the same clock
+	if got["b"] == nil || !got["b"].Equal(future) {
+		t.Errorf("Expected b's future time %v unclamped, got %v", future, got["b"])
+	}
+	if got["c"] != nil || got["d"] != nil {
+		t.Errorf("Expected no time for c (unparseable) and d (none), got %v and %v", got["c"], got["d"])
+	}
 }
