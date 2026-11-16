@@ -46,8 +46,10 @@ const (
 	ArtistRatioMaxWeight = 1.5 // Maximum weight multiplier for artists with good play/skip ratio
 	// Bayesian prior parameters for Beta-Binomial model
 	// These represent "pseudo-observations" that regularize estimates when sample size is small
-	BayesianPriorAlpha = 2.0 // Prior "plays" - assumes slight tendency toward playing
-	BayesianPriorBeta  = 2.0 // Prior "skips" - assumes slight tendency toward skipping
+	// Equal values make a neutral prior (mean 0.5) worth 4 pseudo-observations. Used as is for
+	// a user without history, and to smooth a user's overall play ratio in priorsFromTotals.
+	BayesianPriorAlpha = 2.0 // Prior "plays"
+	BayesianPriorBeta  = 2.0 // Prior "skips"
 	// Range of pseudo-observations (α + β) an empirical prior carries: enough that a song or
 	// artist with one or two events can't swing to an extreme weight, few enough that its own
 	// history soon outweighs the prior
