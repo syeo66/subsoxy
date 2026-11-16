@@ -14,6 +14,15 @@ Every option can be set with a command-line flag or an environment variable. Fla
 | `-debug-mode` | `DEBUG` | `false` | Enables the `/debug` weight inspector (see [Development](development.md#debug-ui)) |
 | `-credential-workers` | `CREDENTIAL_WORKERS` | `10` | ≥1. Max concurrent background credential validations |
 
+### AudioMuse-AI
+
+| Flag | Env | Default | Notes |
+|------|-----|---------|-------|
+| `-audiomuse-url` | `AUDIOMUSE_URL` | empty | URL of the AudioMuse-AI server itself (not Navidrome), e.g. `http://audiomuse:8000`. Empty turns the smooth order off. Must be an `http`/`https` URL with a host |
+| `-audiomuse-token` | `AUDIOMUSE_TOKEN` | empty | AudioMuse-AI API token, sent as a Bearer token. Prefer the environment variable, since flags show up in the process list |
+
+Needs AudioMuse-AI v3.7.2 or later with its neural fingerprint index turned on and the analysis run. See [How it works](how-it-works.md#smooth-order).
+
 ### Database
 
 | Flag | Env | Default | Notes |

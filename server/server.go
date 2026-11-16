@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
+	"github.com/syeo66/subsoxy/audiomuse"
 	"github.com/syeo66/subsoxy/config"
 	"github.com/syeo66/subsoxy/credentials"
 	"github.com/syeo66/subsoxy/database"
@@ -191,6 +192,12 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 	}
 
 	server.shuffle.SetSimilarSongsFetcher(server.fetchSimilarSongs)
+
+	if cfg.AudioMuseURL != "" {
+		audioMuseClient := audiomuse.New(cfg.AudioMuseURL, cfg.AudioMuseToken, logger)
+		server.handlers.SetSongOrderer(audioMuseClient.OrderSongs)
+		logger.Info("AudioMuse-AI smart fade ordering enabled for getRandomSongs")
+	}
 
 	server.syncWg.Go(server.syncSongs)
 

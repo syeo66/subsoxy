@@ -10,6 +10,7 @@ A Go proxy that sits between your music client and a Subsonic-compatible server 
 - **Two-week replay prevention**: Songs you played or skipped in the last 14 days are left out, unless there aren't enough other songs. Then the ones you heard longest ago fill the rest.
 - **Filters**: `genre`, `fromYear` and `toYear` work as in the Subsonic API.
 - **Acoustic flow**: If the upstream server provides AudioMuse-AI similarity (`getSonicSimilarTracks`), songs that sound like what you just played get a boost.
+- **Smooth order** (optional): With an [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI) server configured, the songs of a random list are re-ordered so each flows into the next (smart fade, AudioMuse-AI v3.7.2+).
 - **Play/skip tracking**: Plays and skips are worked out from scrobbles, with checks for duplicate submissions and long pauses.
 - **Multi-user**: Every user has their own library copy, history and preferences.
 - **Library sync**: The library syncs as soon as a new user's credentials are first seen, and again every hour after that.
@@ -37,13 +38,13 @@ Voidweaver ──HTTPS──▶ reverse proxy ──▶ subsoxy (:8080) ──�
 3. **Reverse proxy**: Subsoxy only speaks plain HTTP and Voidweaver only connects over HTTPS, so put Caddy, nginx, Traefik or similar with a valid certificate in front of Subsoxy. Set `TRUSTED_PROXIES` to the proxy's address (or its Docker network range), so rate limiting can tell clients apart.
 4. **Voidweaver**: log in with the reverse proxy's HTTPS URL and your Navidrome username and password.
 
-To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin in Navidrome.
+To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin in Navidrome. To get the smooth order, also set `AUDIOMUSE_URL` and `AUDIOMUSE_TOKEN` (see [Configuration](docs/configuration.md#audiomuse-ai)).
 
 ## Enhanced endpoints
 
 | Endpoint | Behavior |
 |----------|----------|
-| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`). Requests with `musicFolderId` are forwarded |
+| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`), in a smooth order when AudioMuse-AI is configured. Requests with `musicFolderId` are forwarded |
 | `/rest/scrobble` | Records plays and skips, then forwards to the upstream server |
 | `/debug` | HTML view of per-song weights (only with `-debug-mode`) |
 | `/healthz` | `200 ok` while the database answers, `503` otherwise. Not forwarded, rate limited or logged. Used by the Docker `HEALTHCHECK` |

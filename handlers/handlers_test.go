@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1243,4 +1245,97 @@ func TestHandleScrobblePassesClientTime(t *testing.T) {
 	if got["c"] != nil || got["d"] != nil {
 		t.Errorf("Expected no time for c (unparseable) and d (none), got %v and %v", got["c"], got["d"])
 	}
+}
+
+func TestHandleShuffleSongOrderer(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	dbPath := "test_orderer.db"
+	defer os.Remove(dbPath)
+
+	db, err := database.New(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	songs := []models.Song{
+		{ID: "1", Title: "Song 1"}, {ID: "2", Title: "Song 2"},
+		{ID: "3", Title: "Song 3"}, {ID: "4", Title: "Song 4"},
+	}
+	if err := db.StoreSongs("testuser", songs); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	serve := func(t *testing.T) []string {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=4&f=json", nil)
+		w := httptest.NewRecorder()
+		if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+			t.Fatal("HandleShuffle should handle the request")
+		}
+		var resp struct {
+			Response struct {
+				RandomSongs struct {
+					Song []struct {
+						ID string `json:"id"`
+					} `json:"song"`
+				} `json:"randomSongs"`
+			} `json:"subsonic-response"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("bad response: %v", err)
+		}
+		var ids []string
+		for _, s := range resp.Response.RandomSongs.Song {
+			ids = append(ids, s.ID)
+		}
+		return ids
+	}
+
+	t.Run("orders the songs", func(t *testing.T) {
+		handler.SetSongOrderer(func(ctx context.Context, ids []string) ([]string, error) {
+			if len(ids) != 4 {
+				t.Errorf("orderer got %d ids, want 4", len(ids))
+			}
+			sorted := slices.Clone(ids)
+			slices.Sort(sorted)
+			slices.Reverse(sorted)
+			return sorted, nil
+		})
+		if got, want := serve(t), []string{"4", "3", "2", "1"}; !slices.Equal(got, want) {
+			t.Errorf("order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("keeps the shuffle when ordering fails", func(t *testing.T) {
+		var asked []string
+		handler.SetSongOrderer(func(ctx context.Context, ids []string) ([]string, error) {
+			asked = ids
+			return nil, errors.New("down")
+		})
+		if got := serve(t); !slices.Equal(got, asked) {
+			t.Errorf("order = %v, want the shuffle order %v", got, asked)
+		}
+	})
+
+	t.Run("ignores an answer that changes the songs", func(t *testing.T) {
+		var asked []string
+		for name, answer := range map[string][]string{
+			"fewer":   {"1", "2"},
+			"unknown": {"1", "2", "3", "99"},
+			"repeats": {"1", "1", "2", "3"},
+		} {
+			handler.SetSongOrderer(func(ctx context.Context, ids []string) ([]string, error) {
+				asked = ids
+				return answer, nil
+			})
+			if got := serve(t); !slices.Equal(got, asked) {
+				t.Errorf("%s: order = %v, want the shuffle order %v", name, got, asked)
+			}
+		}
+	})
 }

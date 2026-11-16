@@ -113,6 +113,19 @@ Songs are drawn one at a time by weighted random selection, without replacement.
 
 The queue drifts gradually instead of jumping between moods. Similarity scores come from the upstream `/rest/getSonicSimilarTracks` endpoint, which is provided by the AudioMuse-AI-NV plugin (Navidrome v0.62+, OpenSubsonic `sonicSimilarity` extension). Results are cached for 5 minutes, and concurrent lookups for the same track are deduplicated. If the endpoint is missing or fails, the similarity factor is 1.0 and nothing else changes.
 
+### Smooth order
+
+With `-audiomuse-url` set, the songs picked for a `getRandomSongs` request are sent to AudioMuse-AI's `POST /api/recording_search/smart_fade`, which returns the same songs in an order where each one flows into the next. AudioMuse-AI documents that the first song stays first (subsoxy doesn't enforce it), and that songs without a neural fingerprint come last. Only the order changes: which songs are picked is still decided by the weights.
+
+The call has to be quick, because the client is waiting for it:
+
+- It gives up after 3 seconds. After any failure (HTTP error, timeout, unreadable answer) no request is made for 30 seconds, so an AudioMuse-AI that is down doesn't slow down every shuffle.
+- Lists with fewer than 3 or more than 200 songs are left in the weighted order.
+- The answer is only used if it can't lose songs: ids it leaves out are appended, ids it invents or repeats are dropped.
+- On any failure the weighted order is returned, as without AudioMuse-AI.
+
+This uses AudioMuse-AI's own API token and its song ids, which are the upstream server's ids. The fade points it also returns aren't used yet.
+
 ### Streaming the library
 
 Selection runs as an exponential race. Each eligible song gets a random clock that runs at the speed of its weight, and songs are picked in the order their clocks finish. That gives exactly the same odds as drawing one song at a time in proportion to weight, and it lets the library be read in 1,000-row batches while only the requested number of songs is kept in memory. All other songs finish later at their base weight, so they can only overtake when the similarity factor speeds them up. Those songs are loaded from the database when they become similar. Every song in the library is weighted, whatever its size.

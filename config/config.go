@@ -95,6 +95,9 @@ type Config struct {
 	DebugMode bool
 	// Credential validation worker pool
 	CredentialWorkers int
+	// AudioMuse-AI's own API, used to put random songs in a smoother order. Empty URL disables it.
+	AudioMuseURL   string
+	AudioMuseToken string
 }
 
 func New() (*Config, error) {
@@ -129,6 +132,8 @@ func New() (*Config, error) {
 		contentSecurityPolicy   = flag.String("content-security-policy", getEnvOrDefault("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy), "Content-Security-Policy header value")
 		referrerPolicy          = flag.String("referrer-policy", getEnvOrDefault("REFERRER_POLICY", DefaultReferrerPolicy), "Referrer-Policy header value")
 		debugMode               = flag.Bool("debug-mode", getEnvBoolOrDefault("DEBUG", DefaultDebugMode), "Enable debug endpoint")
+		audioMuseURL            = flag.String("audiomuse-url", getEnvOrDefault("AUDIOMUSE_URL", ""), "AudioMuse-AI server URL; when set, random songs are ordered with its smart fade API")
+		audioMuseToken          = flag.String("audiomuse-token", getEnvOrDefault("AUDIOMUSE_TOKEN", ""), "AudioMuse-AI API token (prefer the environment variable, flags show up in the process list)")
 		credentialWorkers       = flag.Int("credential-workers", getEnvIntOrDefault("CREDENTIAL_WORKERS", DefaultCredentialWorkers), "Maximum concurrent credential validation workers")
 	)
 	flag.Parse()
@@ -167,6 +172,8 @@ func New() (*Config, error) {
 		ReferrerPolicy:          *referrerPolicy,
 		DebugMode:               *debugMode,
 		CredentialWorkers:       *credentialWorkers,
+		AudioMuseURL:            *audioMuseURL,
+		AudioMuseToken:          *audioMuseToken,
 	}
 
 	if err := config.Validate(); err != nil {
@@ -214,6 +221,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateAudioMuse(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -256,6 +267,25 @@ func (c *Config) validateUpstreamURL() error {
 	if parsedURL.Host == "" {
 		return errors.ErrInvalidUpstreamURL.WithContext("url", c.UpstreamURL).
 			WithContext("reason", "missing host")
+	}
+
+	return nil
+}
+
+// validateAudioMuse checks the AudioMuse-AI URL, which is optional.
+func (c *Config) validateAudioMuse() error {
+	if c.AudioMuseURL == "" {
+		return nil
+	}
+
+	parsedURL, err := url.Parse(c.AudioMuseURL)
+	if err != nil {
+		return errors.Wrap(err, errors.CategoryConfig, "INVALID_AUDIOMUSE_URL", "invalid AudioMuse-AI URL format").
+			WithContext("url", c.AudioMuseURL)
+	}
+	if (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		return errors.New(errors.CategoryConfig, "INVALID_AUDIOMUSE_URL", "AudioMuse-AI URL must be an http or https URL with a host").
+			WithContext("url", c.AudioMuseURL)
 	}
 
 	return nil

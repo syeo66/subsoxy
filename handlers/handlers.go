@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"html"
@@ -32,9 +33,14 @@ const (
 	SubsonicErrorMissingParameter = 10
 )
 
+// SongOrderer returns song ids in a smoother order for playing one after the other, holding
+// exactly the ids it was given. An error means the order is unknown.
+type SongOrderer func(ctx context.Context, ids []string) ([]string, error)
+
 type Handler struct {
 	logger  *logrus.Logger
 	shuffle *shuffle.Service
+	orderer SongOrderer
 }
 
 func New(logger *logrus.Logger, shuffleService *shuffle.Service) *Handler {
@@ -42,6 +48,49 @@ func New(logger *logrus.Logger, shuffleService *shuffle.Service) *Handler {
 		logger:  logger,
 		shuffle: shuffleService,
 	}
+}
+
+// SetSongOrderer makes getRandomSongs return its songs in the order the orderer gives, so each
+// song flows into the next. Without one, or when it fails, the weighted shuffle order is kept.
+// It must be set before the handler serves requests.
+func (h *Handler) SetSongOrderer(orderer SongOrderer) {
+	h.orderer = orderer
+}
+
+// orderSongs re-orders songs with the song orderer, if there is one. The songs are returned
+// as they are when it fails or gives anything but the same songs.
+func (h *Handler) orderSongs(ctx context.Context, userID string, songs []models.Song) []models.Song {
+	if h.orderer == nil || len(songs) < 2 {
+		return songs
+	}
+
+	ids := make([]string, len(songs))
+	byID := make(map[string]models.Song, len(songs))
+	for i, song := range songs {
+		ids[i] = song.ID
+		byID[song.ID] = song
+	}
+
+	ordered, err := h.orderer(ctx, ids)
+	if err != nil {
+		h.logger.WithError(err).WithField("userID", logsafe.String(userID)).
+			Debug("Could not order shuffled songs, keeping the shuffle order")
+		return songs
+	}
+	if len(ordered) != len(songs) || len(byID) != len(songs) {
+		return songs
+	}
+
+	result := make([]models.Song, len(ordered))
+	for i, id := range ordered {
+		song, ok := byID[id]
+		if !ok {
+			return songs
+		}
+		result[i] = song
+		delete(byID, id)
+	}
+	return result
 }
 
 // ValidateSongID validates song ID format and length
@@ -181,6 +230,8 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		h.writeSubsonicError(w, format, SubsonicErrorGeneric, "Internal server error")
 		return true
 	}
+
+	songs = h.orderSongs(r.Context(), userID, songs)
 
 	// Once encoding has started part of the body may be written, so a failure can only be logged
 	if err := writeSubsonicResponse(w, format, songs, nil); err != nil {

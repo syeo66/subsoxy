@@ -853,3 +853,28 @@ func TestParseTrustedProxies(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAudioMuse(t *testing.T) {
+	tests := []struct {
+		url     string
+		wantErr bool
+	}{
+		{"", false},
+		{"http://audiomuse:8000", false},
+		{"https://audiomuse.example.com/", false},
+		{"audiomuse:8000", true},
+		{"ftp://audiomuse:8000", true},
+		{"http://", true},
+		{"http://bad host", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			c := &Config{AudioMuseURL: tt.url}
+			err := c.validateAudioMuse()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAudioMuse() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

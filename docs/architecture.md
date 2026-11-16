@@ -8,6 +8,7 @@
 | `config/` | Flag/env parsing and validation | `errors` |
 | `server/` | Reverse proxy, middleware chain, credential capture, library sync, shutdown | all |
 | `handlers/` | Hook implementations: shuffle, scrobble, stream, debug UI; input validation | `errors`, `logsafe`, `models`, `shuffle` |
+| `audiomuse/` | Client for AudioMuse-AI's smart fade API, with a time limit and a back-off after failures | — |
 | `shuffle/` | Weighting, selection, skip detection, similarity cache | `models`, `database` |
 | `database/` | SQLite schema, migrations, queries, connection pool | `errors`, `models` |
 | `credentials/` | Upstream validation and encrypted in-memory credential store | `errors`, `models` |
