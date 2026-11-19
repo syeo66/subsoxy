@@ -191,7 +191,11 @@ func New(cfg *config.Config) (*ProxyServer, error) {
 		credentialWorkers: credentialWorkers,
 	}
 
-	server.shuffle.SetSimilarSongsFetcher(server.fetchSimilarSongs)
+	if cfg.SimilarityEnabled {
+		server.shuffle.SetSimilarSongsFetcher(server.fetchSimilarSongs)
+	} else {
+		logger.Info("Similarity bias disabled")
+	}
 
 	if cfg.AudioMuseURL != "" {
 		audioMuseClient := audiomuse.New(cfg.AudioMuseURL, cfg.AudioMuseToken, logger)

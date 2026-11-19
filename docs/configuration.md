@@ -12,6 +12,7 @@ Every option can be set with a command-line flag or an environment variable. Fla
 | `-upstream` | `UPSTREAM_URL` | `http://localhost:4533` | Must be an `http`/`https` URL with a host |
 | `-log-level` | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` (case-insensitive) |
 | `-debug-mode` | `DEBUG` | `false` | Enables the `/debug` weight inspector (see [Development](development.md#debug-ui)) |
+| `-similarity-enabled` | `SIMILARITY_ENABLED` | `true` | Set to `false` to turn off the acoustic similarity bias in the random selection (no `getSonicSimilarTracks` requests are made) |
 | `-credential-workers` | `CREDENTIAL_WORKERS` | `10` | ≥1. Max concurrent background credential validations |
 
 ### AudioMuse-AI

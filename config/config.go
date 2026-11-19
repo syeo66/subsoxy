@@ -42,6 +42,7 @@ const (
 	DefaultContentSecurityPolicy   = "default-src 'self'; script-src 'self'; object-src 'none';"
 	DefaultReferrerPolicy          = "strict-origin-when-cross-origin"
 	DefaultDebugMode               = false
+	DefaultSimilarityEnabled       = true
 	// Maximum concurrent background credential validations. Validation is best effort and
 	// skipped when every worker is busy, so a few are enough for normal use.
 	DefaultCredentialWorkers = 10
@@ -95,6 +96,8 @@ type Config struct {
 	DebugMode bool
 	// Credential validation worker pool
 	CredentialWorkers int
+	// Whether acoustic similarity (getSonicSimilarTracks) biases the random selection
+	SimilarityEnabled bool
 	// AudioMuse-AI's own API, used to put random songs in a smoother order. Empty URL disables it.
 	AudioMuseURL   string
 	AudioMuseToken string
@@ -132,6 +135,7 @@ func New() (*Config, error) {
 		contentSecurityPolicy   = flag.String("content-security-policy", getEnvOrDefault("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy), "Content-Security-Policy header value")
 		referrerPolicy          = flag.String("referrer-policy", getEnvOrDefault("REFERRER_POLICY", DefaultReferrerPolicy), "Referrer-Policy header value")
 		debugMode               = flag.Bool("debug-mode", getEnvBoolOrDefault("DEBUG", DefaultDebugMode), "Enable debug endpoint")
+		similarityEnabled       = flag.Bool("similarity-enabled", getEnvBoolOrDefault("SIMILARITY_ENABLED", DefaultSimilarityEnabled), "Bias random selection towards songs acoustically similar to the last played one")
 		audioMuseURL            = flag.String("audiomuse-url", getEnvOrDefault("AUDIOMUSE_URL", ""), "AudioMuse-AI server URL; when set, random songs are ordered with its smart fade API")
 		audioMuseToken          = flag.String("audiomuse-token", getEnvOrDefault("AUDIOMUSE_TOKEN", ""), "AudioMuse-AI API token (prefer the environment variable, flags show up in the process list)")
 		credentialWorkers       = flag.Int("credential-workers", getEnvIntOrDefault("CREDENTIAL_WORKERS", DefaultCredentialWorkers), "Maximum concurrent credential validation workers")
@@ -172,6 +176,7 @@ func New() (*Config, error) {
 		ReferrerPolicy:          *referrerPolicy,
 		DebugMode:               *debugMode,
 		CredentialWorkers:       *credentialWorkers,
+		SimilarityEnabled:       *similarityEnabled,
 		AudioMuseURL:            *audioMuseURL,
 		AudioMuseToken:          *audioMuseToken,
 	}
