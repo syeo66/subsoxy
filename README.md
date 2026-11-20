@@ -44,7 +44,7 @@ To get acoustic similarity in the shuffle, also install the AudioMuse-AI plugin 
 
 | Endpoint | Behavior |
 |----------|----------|
-| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (JSON or XML, includes `coverArt`), in a smooth order when AudioMuse-AI is configured. Requests with `musicFolderId` are forwarded |
+| `/rest/getRandomSongs` | Answered by Subsoxy with a weighted shuffle (XML by default, JSON or JSONP, includes `coverArt`), in a smooth order when AudioMuse-AI is configured. Requests with `musicFolderId`, and requests from users whose library hasn't been synced yet, are forwarded |
 | `/rest/scrobble` | Records plays and skips, then forwards to the upstream server |
 | `/debug` | HTML view of per-song weights (only with `-debug-mode`) |
 | `/healthz` | `200 ok` while the database answers, `503` otherwise. Not forwarded, rate limited or logged. Used by the Docker `HEALTHCHECK` |

@@ -78,7 +78,7 @@ func TestHandleShuffle(t *testing.T) {
 	handler := New(logger, shuffleService)
 
 	t.Run("Default size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -126,7 +126,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 
 	t.Run("Custom size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=2", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=2&f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -151,7 +151,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 
 	t.Run("Invalid size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=invalid", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=invalid&f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -170,7 +170,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 
 	t.Run("Zero size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=0", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=0&f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -196,7 +196,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 
 	t.Run("Negative size", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=-5", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=-5&f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -222,7 +222,7 @@ func TestHandleShuffle(t *testing.T) {
 	})
 
 	t.Run("Missing user parameter", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs", nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?f=json", nil)
 		w := httptest.NewRecorder()
 
 		handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
@@ -272,44 +272,57 @@ func TestHandleShuffleEmpty(t *testing.T) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
 
-	dbPath := "test.db"
-	defer os.Remove(dbPath)
-
-	db, err := database.New(dbPath, logger)
+	db, err := database.New(t.TempDir()+"/test.db", logger)
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
 
-	shuffleService := shuffle.New(db, logger)
-	handler := New(logger, shuffleService)
-
-	req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
-	w := httptest.NewRecorder()
-
-	handled := handler.HandleShuffle(w, req, "/rest/getRandomSongs")
-
-	if !handled {
-		t.Error("HandleShuffle should return true (handled)")
+	// Another user's library doesn't count as this user's
+	if err := db.StoreSongs("otheruser", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y", Genre: "Rock"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
 	}
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
+	handler := New(logger, shuffle.New(db, logger))
 
-	var response map[string]interface{}
-	err = json.NewDecoder(w.Body).Decode(&response)
-	if err != nil {
-		t.Errorf("Failed to decode response: %v", err)
-	}
+	t.Run("User without synced songs is forwarded to upstream", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=json", nil)
+		w := httptest.NewRecorder()
 
-	subsonicResp := response["subsonic-response"].(map[string]interface{})
-	songs := subsonicResp["randomSongs"].(map[string]interface{})
-	songList := songs["song"].([]interface{})
+		if handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+			t.Error("HandleShuffle should leave the request to upstream while the user has no synced songs")
+		}
+		if w.Body.Len() != 0 {
+			t.Errorf("Nothing should be written for a forwarded request, got %q", w.Body.String())
+		}
+	})
 
-	if len(songList) != 0 {
-		t.Errorf("Expected 0 songs from empty database, got %d", len(songList))
-	}
+	t.Run("Synced library with no matching songs answers an empty list", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=otheruser&genre=Jazz&f=json", nil)
+		w := httptest.NewRecorder()
+
+		if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+			t.Fatal("HandleShuffle should answer for a user with synced songs")
+		}
+
+		var response struct {
+			SubsonicResponse struct {
+				Status      string `json:"status"`
+				RandomSongs struct {
+					Song []models.Song `json:"song"`
+				} `json:"randomSongs"`
+			} `json:"subsonic-response"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("Failed to decode response %q: %v", w.Body.String(), err)
+		}
+		if response.SubsonicResponse.Status != "ok" {
+			t.Errorf("Expected status ok, got %q", response.SubsonicResponse.Status)
+		}
+		if n := len(response.SubsonicResponse.RandomSongs.Song); n != 0 {
+			t.Errorf("Expected no songs, got %d", n)
+		}
+	})
 }
 
 func TestHandleScrobble(t *testing.T) {
@@ -562,17 +575,22 @@ func TestHandleShuffleContentType(t *testing.T) {
 	}
 	defer db.Close()
 
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
 	shuffleService := shuffle.New(db, logger)
 	handler := New(logger, shuffleService)
 
+	// Without "f" the Subsonic API answers in XML
 	req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser", nil)
 	w := httptest.NewRecorder()
 
 	handler.HandleShuffle(w, req, "/rest/getRandomSongs")
 
 	contentType := w.Header().Get("Content-Type")
-	if contentType != "application/json" {
-		t.Errorf("Expected Content-Type 'application/json', got '%s'", contentType)
+	if contentType != "application/xml" {
+		t.Errorf("Expected Content-Type 'application/xml', got '%s'", contentType)
 	}
 }
 
@@ -588,6 +606,10 @@ func TestHandleShuffleWithURLParams(t *testing.T) {
 		t.Fatalf("Failed to create database: %v", err)
 	}
 	defer db.Close()
+
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
 
 	shuffleService := shuffle.New(db, logger)
 	handler := New(logger, shuffleService)
@@ -681,6 +703,10 @@ func TestShuffleSizeBoundaryConditions(t *testing.T) {
 	}
 	defer db.Close()
 
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
 	shuffleService := shuffle.New(db, logger)
 	handler := New(logger, shuffleService)
 
@@ -736,7 +762,7 @@ func TestShuffleSizeBoundaryConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reqURL := "/rest/getRandomSongs?u=testuser&p=testpass"
+			reqURL := "/rest/getRandomSongs?u=testuser&p=testpass&f=json"
 			if tt.sizeParam != "" {
 				reqURL += "&size=" + tt.sizeParam
 			}
@@ -807,7 +833,13 @@ func TestHandlerUserParameterBoundaryConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reqURL := "/rest/getRandomSongs?p=testpass&size=10"
+			if tt.userParam != "" {
+				if err := db.StoreSongs(tt.userParam, []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+					t.Fatalf("Failed to store songs: %v", err)
+				}
+			}
+
+			reqURL := "/rest/getRandomSongs?p=testpass&size=10&f=json"
 			if tt.userParam != "" {
 				reqURL += "&u=" + url.QueryEscape(tt.userParam)
 			}
@@ -854,45 +886,29 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 	handler := New(logger, shuffleService)
 
 	tests := []struct {
-		name           string
-		formatParam    string
-		expectedType   string
-		expectedStatus int
+		name         string
+		query        string // Format parameters
+		expectedType string
+		bodyFormat   string // How the body is parsed: "xml", "json" or "jsonp"
 	}{
-		{
-			name:           "JSON format (default)",
-			formatParam:    "",
-			expectedType:   "application/json",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "JSON format (explicit)",
-			formatParam:    "json",
-			expectedType:   "application/json",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "XML format",
-			formatParam:    "xml",
-			expectedType:   "application/xml",
-			expectedStatus: http.StatusOK,
-		},
+		{"XML format (default)", "", "application/xml", "xml"},
+		{"XML format (unknown format)", "&f=yaml", "application/xml", "xml"},
+		{"XML format (explicit)", "&f=xml", "application/xml", "xml"},
+		{"JSON format", "&f=json", "application/json", "json"},
+		{"JSONP format", "&f=jsonp&callback=app.onSongs", "application/javascript", "jsonp"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reqURL := "/rest/getRandomSongs?u=testuser&size=2"
-			if tt.formatParam != "" {
-				reqURL += "&f=" + tt.formatParam
-			}
-
-			req := httptest.NewRequest("GET", reqURL, nil)
+			req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=2"+tt.query, nil)
 			w := httptest.NewRecorder()
 
-			handler.HandleShuffle(w, req, "/rest/getRandomSongs")
+			if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+				t.Fatal("HandleShuffle should answer the request")
+			}
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+			if w.Code != http.StatusOK {
+				t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 			}
 
 			contentType := w.Header().Get("Content-Type")
@@ -900,12 +916,12 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 				t.Errorf("Expected Content-Type %s, got %s", tt.expectedType, contentType)
 			}
 
-			// Verify response can be parsed correctly
-			if tt.formatParam == "xml" {
+			body := w.Body.String()
+			switch tt.bodyFormat {
+			case "xml":
 				var xmlResponse models.XMLSubsonicResponse
-				err := xml.Unmarshal(w.Body.Bytes(), &xmlResponse)
-				if err != nil {
-					t.Errorf("Failed to parse XML response: %v", err)
+				if err := xml.Unmarshal(w.Body.Bytes(), &xmlResponse); err != nil {
+					t.Fatalf("Failed to parse XML response: %v", err)
 				}
 
 				if xmlResponse.Status != "ok" {
@@ -916,36 +932,121 @@ func TestHandleShuffleXMLFormat(t *testing.T) {
 					t.Errorf("Expected version '1.15.0', got '%s'", xmlResponse.Version)
 				}
 
-				if xmlResponse.RandomSongs == nil {
-					t.Error("Expected randomSongs element to be present")
+				if xmlResponse.RandomSongs == nil || len(xmlResponse.RandomSongs.Song) != 2 {
+					t.Errorf("Expected randomSongs with 2 songs, got %+v", xmlResponse.RandomSongs)
 				}
-				// Parsing uses the same struct tags, so check the element name clients see
-				if !strings.Contains(w.Body.String(), "<randomSongs>") {
-					t.Errorf("Expected a <randomSongs> element, got %s", w.Body.String())
+				// Parsing uses the same struct tags, so check what clients see
+				if !strings.Contains(body, "<randomSongs>") {
+					t.Errorf("Expected a <randomSongs> element, got %s", body)
 				}
-			} else {
-				// Test JSON response
-				var jsonResponse map[string]interface{}
-				err := json.Unmarshal(w.Body.Bytes(), &jsonResponse)
-				if err != nil {
-					t.Errorf("Failed to parse JSON response: %v", err)
+				if !strings.Contains(body, `<subsonic-response xmlns="http://subsonic.org/restapi"`) {
+					t.Errorf("Expected the Subsonic XML namespace, got %s", body)
 				}
-
-				subsonicResponse, ok := jsonResponse["subsonic-response"].(map[string]interface{})
-				if !ok {
-					t.Error("Expected subsonic-response object")
+			case "json", "jsonp":
+				if tt.bodyFormat == "jsonp" {
+					if !strings.HasPrefix(body, "app.onSongs(") || !strings.HasSuffix(body, ");") {
+						t.Fatalf("Expected the JSON wrapped in a call to app.onSongs, got %s", body)
+					}
+					body = strings.TrimSuffix(strings.TrimPrefix(body, "app.onSongs("), ");")
 				}
 
-				if status, ok := subsonicResponse["status"].(string); !ok || status != "ok" {
-					t.Errorf("Expected status 'ok', got '%v'", subsonicResponse["status"])
+				var jsonResponse struct {
+					SubsonicResponse struct {
+						Status      string `json:"status"`
+						RandomSongs *struct {
+							Song []models.Song `json:"song"`
+						} `json:"randomSongs"`
+					} `json:"subsonic-response"`
+				}
+				if err := json.Unmarshal([]byte(body), &jsonResponse); err != nil {
+					t.Fatalf("Failed to parse JSON response %q: %v", body, err)
 				}
 
-				if _, ok := subsonicResponse["randomSongs"].(map[string]interface{}); !ok {
-					t.Errorf("Expected randomSongs object, got %v", subsonicResponse)
+				if jsonResponse.SubsonicResponse.Status != "ok" {
+					t.Errorf("Expected status 'ok', got '%s'", jsonResponse.SubsonicResponse.Status)
+				}
+
+				if jsonResponse.SubsonicResponse.RandomSongs == nil || len(jsonResponse.SubsonicResponse.RandomSongs.Song) != 2 {
+					t.Errorf("Expected randomSongs with 2 songs, got %s", body)
 				}
 			}
 		})
 	}
+}
+
+func TestHandleShuffleJSONP(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.StoreSongs("testuser", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+
+	handler := New(logger, shuffle.New(db, logger))
+
+	// A callback that isn't a plain function name is echoed nowhere: upstream answers instead
+	for _, callback := range []string{
+		"",
+		"alert(1)//",
+		"cb;evil",
+		"1cb",
+		"a..b",
+		"cb.",
+		"<script>",
+		strings.Repeat("a", MaxJSONPCallbackLength+1),
+	} {
+		t.Run("forwards callback "+callback, func(t *testing.T) {
+			query := url.Values{"u": {"testuser"}, "f": {"jsonp"}}
+			if callback != "" {
+				query.Set("callback", callback)
+			}
+			req := httptest.NewRequest("GET", "/rest/getRandomSongs?"+query.Encode(), nil)
+			w := httptest.NewRecorder()
+
+			if handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+				t.Errorf("Expected the request to be left to upstream, got %q", w.Body.String())
+			}
+			if w.Body.Len() != 0 {
+				t.Errorf("Nothing should be written for a forwarded request, got %q", w.Body.String())
+			}
+		})
+	}
+
+	for _, callback := range []string{"cb", "$jsonp_1", "app.handlers.onSongs", strings.Repeat("a", MaxJSONPCallbackLength)} {
+		t.Run("answers callback "+callback[:min(len(callback), 20)], func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=jsonp&callback="+url.QueryEscape(callback), nil)
+			w := httptest.NewRecorder()
+
+			if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+				t.Fatal("HandleShuffle should answer a JSONP request with a valid callback")
+			}
+			if !strings.HasPrefix(w.Body.String(), callback+"(") {
+				t.Errorf("Expected the response to call %s, got %q", callback, w.Body.String())
+			}
+			if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("Expected X-Content-Type-Options nosniff on a JSONP response, got %q", got)
+			}
+		})
+	}
+
+	t.Run("wraps failed responses too", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&size=abc&f=jsonp&callback=cb", nil)
+		w := httptest.NewRecorder()
+
+		if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
+			t.Fatal("HandleShuffle should answer an invalid size")
+		}
+		body := w.Body.String()
+		if !strings.HasPrefix(body, "cb(") || !strings.Contains(body, `"status":"failed"`) {
+			t.Errorf("Expected a failed response passed to cb, got %q", body)
+		}
+	})
 }
 
 func TestHandleDebugEscapesOutputAndOmitsPassword(t *testing.T) {
@@ -1058,7 +1159,7 @@ func TestHandleShuffleFilters(t *testing.T) {
 	// shuffle returns the song IDs of a successful response, or the error message of a failed one
 	shuffle := func(t *testing.T, query string) (bool, []string, string) {
 		t.Helper()
-		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&"+query, nil)
+		req := httptest.NewRequest("GET", "/rest/getRandomSongs?u=testuser&f=json&"+query, nil)
 		w := httptest.NewRecorder()
 		if !handler.HandleShuffle(w, req, "/rest/getRandomSongs") {
 			return false, nil, ""

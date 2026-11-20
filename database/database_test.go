@@ -1864,3 +1864,39 @@ func (db *DB) GetExistingSongIDs(userID string) (map[string]bool, error) {
 
 	return songIDs, nil
 }
+
+func TestHasSongs(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	db, err := New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	if has, err := db.HasSongs("alice"); err != nil || has {
+		t.Errorf("HasSongs on an empty database = %v, %v, want false, nil", has, err)
+	}
+
+	if err := db.StoreSongs("alice", []models.Song{{ID: "1", Title: "a", Artist: "x", Album: "y"}}); err != nil {
+		t.Fatalf("Failed to store songs: %v", err)
+	}
+	if has, err := db.HasSongs("alice"); err != nil || !has {
+		t.Errorf("HasSongs for a user with songs = %v, %v, want true, nil", has, err)
+	}
+	if has, err := db.HasSongs("bob"); err != nil || has {
+		t.Errorf("HasSongs for another user = %v, %v, want false, nil", has, err)
+	}
+
+	if err := db.DeleteSongs("alice", []string{"1"}); err != nil {
+		t.Fatalf("Failed to delete songs: %v", err)
+	}
+	if has, err := db.HasSongs("alice"); err != nil || has {
+		t.Errorf("HasSongs after deleting every song = %v, %v, want false, nil", has, err)
+	}
+
+	if _, err := db.HasSongs(""); err == nil {
+		t.Error("HasSongs with an empty user ID should fail")
+	}
+}

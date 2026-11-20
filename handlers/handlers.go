@@ -7,6 +7,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -104,11 +105,48 @@ func ValidateSongID(songID string) error {
 	return nil
 }
 
-// writeSubsonicResponse writes a Subsonic response envelope in the requested format ("xml",
-// otherwise JSON). Exactly one of songs and subsonicErr is used: a non-nil subsonicErr makes
-// it a failed response. Subsonic clients read failures from the envelope, so the HTTP status
-// is always 200.
-func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.Song, subsonicErr *models.XMLError) error {
+// Response formats, named as in the Subsonic "f" parameter
+const (
+	FormatXML   = "xml"
+	FormatJSON  = "json"
+	FormatJSONP = "jsonp"
+)
+
+// MaxJSONPCallbackLength bounds the JSONP callback name, which is echoed into the response
+const MaxJSONPCallbackLength = 100
+
+// jsonpCallbackPattern matches a JavaScript identifier, or several joined by dots
+// (e.g. "app.onSongs"), so the callback can't inject anything else into the response
+var jsonpCallbackPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$`)
+
+// responseFormat is how a response is encoded, as the request's "f" parameter asks
+type responseFormat struct {
+	name     string // FormatXML, FormatJSON or FormatJSONP
+	callback string // Function the JSONP response calls
+}
+
+// requestFormat returns the format the request asks for. As in the Subsonic API, a missing or
+// unknown "f" means XML. ok is false for JSONP without a usable "callback", which is left to
+// upstream to answer.
+func requestFormat(r *http.Request) (format responseFormat, ok bool) {
+	switch r.FormValue("f") {
+	case FormatJSON:
+		return responseFormat{name: FormatJSON}, true
+	case FormatJSONP:
+		callback := r.FormValue("callback")
+		if len(callback) > MaxJSONPCallbackLength || !jsonpCallbackPattern.MatchString(callback) {
+			return responseFormat{}, false
+		}
+		return responseFormat{name: FormatJSONP, callback: callback}, true
+	default:
+		return responseFormat{name: FormatXML}, true
+	}
+}
+
+// writeSubsonicResponse writes a Subsonic response envelope in the given format. Exactly one
+// of songs and subsonicErr is used: a non-nil subsonicErr makes it a failed response.
+// Subsonic clients read failures from the envelope, so the HTTP status is always 200.
+func writeSubsonicResponse(w http.ResponseWriter, format responseFormat, songs []models.Song, subsonicErr *models.XMLError) error {
 	status := "ok"
 	if subsonicErr != nil {
 		status = "failed"
@@ -119,8 +157,9 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 		children[i] = models.NewChild(song)
 	}
 
-	if format == "xml" {
+	if format.name == FormatXML {
 		xmlResponse := models.XMLSubsonicResponse{
+			Xmlns:   models.SubsonicXMLNamespace,
 			Status:  status,
 			Version: models.SubsonicAPIVersion,
 			Error:   subsonicErr,
@@ -149,19 +188,36 @@ func writeSubsonicResponse(w http.ResponseWriter, format string, songs []models.
 		}
 	}
 
+	if format.name == FormatJSONP {
+		encoded, err := json.Marshal(map[string]interface{}{"subsonic-response": body})
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Content-Type", "application/javascript")
+		// A script response, so it's never sniffed as anything else, whatever the security
+		// headers middleware is set to
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, err = w.Write([]byte(format.callback + "(" + string(encoded) + ");"))
+		return err
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(map[string]interface{}{"subsonic-response": body})
 }
 
 // writeSubsonicError writes a failed Subsonic response with the given error code and message
-func (h *Handler) writeSubsonicError(w http.ResponseWriter, format string, code int, message string) {
+func (h *Handler) writeSubsonicError(w http.ResponseWriter, format responseFormat, code int, message string) {
 	if err := writeSubsonicResponse(w, format, nil, &models.XMLError{Code: code, Message: message}); err != nil {
 		h.logger.WithError(err).Error("Failed to encode Subsonic error response")
 	}
 }
 
 func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint string) bool {
-	format := r.FormValue("f")
+	format, ok := requestFormat(r)
+	if !ok {
+		h.logger.Debug("Shuffle request asks for JSONP without a usable callback, forwarding to upstream")
+		return false
+	}
 
 	// Extract user ID from request
 	userID := r.FormValue("u")
@@ -219,6 +275,18 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 		filter.FromYear, filter.ToYear = filter.ToYear, filter.FromYear
 	}
 
+	// Until the user's library has been synced there's nothing to shuffle locally, e.g. right
+	// after their first request, so upstream answers with its own random songs
+	hasSongs, err := h.shuffle.HasSongs(userID)
+	if err != nil {
+		h.logger.WithError(err).WithField("userID", logsafe.String(userID)).Warn("Failed to check for synced songs, forwarding shuffle request to upstream")
+		return false
+	}
+	if !hasSongs {
+		h.logger.WithField("userID", logsafe.String(userID)).Info("No synced songs for user yet, forwarding shuffle request to upstream")
+		return false
+	}
+
 	songs, err := h.shuffle.GetWeightedShuffledSongs(r.Context(), userID, size, filter)
 	if err != nil {
 		// Nobody is left to answer when the client gave up
@@ -236,7 +304,7 @@ func (h *Handler) HandleShuffle(w http.ResponseWriter, r *http.Request, endpoint
 	// Once encoding has started part of the body may be written, so a failure can only be logged
 	if err := writeSubsonicResponse(w, format, songs, nil); err != nil {
 		encodeErr := errors.Wrap(err, errors.CategoryServer, "RESPONSE_ENCODING_FAILED", "failed to encode shuffle response").
-			WithContext("format", format).
+			WithContext("format", format.name).
 			WithContext("size", size).
 			WithContext("song_count", len(songs)).
 			WithContext("userID", userID)

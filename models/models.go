@@ -10,6 +10,8 @@ import (
 const (
 	SubsonicAPIVersion = "1.15.0"
 	ClientName         = "subsoxy"
+	// XML namespace of Subsonic responses
+	SubsonicXMLNamespace = "http://subsonic.org/restapi"
 )
 
 // SubsonicErrorWrongCredentials is the Subsonic error code for a wrong username or password.
@@ -164,6 +166,7 @@ type SonicSimilarityResponse struct {
 // XML response structures for Subsonic API
 type XMLSubsonicResponse struct {
 	XMLName     xml.Name        `xml:"subsonic-response"`
+	Xmlns       string          `xml:"xmlns,attr,omitempty"`
 	Status      string          `xml:"status,attr"`
 	Version     string          `xml:"version,attr"`
 	RandomSongs *XMLRandomSongs `xml:"randomSongs,omitempty"`

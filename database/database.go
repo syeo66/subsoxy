@@ -708,6 +708,20 @@ func (db *DB) GetAllSongs(userID string) ([]models.Song, error) {
 	return songs, nil
 }
 
+// HasSongs reports whether any songs are stored for the user
+func (db *DB) HasSongs(userID string) (bool, error) {
+	if userID == "" {
+		return false, errors.ErrValidationFailed.WithContext("field", "userID")
+	}
+
+	var exists bool
+	if err := db.conn.QueryRow(`SELECT EXISTS (SELECT 1 FROM songs WHERE user_id = ?)`, userID).Scan(&exists); err != nil {
+		return false, errors.Wrap(err, errors.CategoryDatabase, "QUERY_FAILED", "failed to check for songs").
+			WithContext("userID", userID)
+	}
+	return exists, nil
+}
+
 // GetSongsBatchFiltered returns up to limit songs with an id greater than afterID, in id
 // order, leaving out songs played or skipped after cutoffTime (2-week replay prevention).
 // Pass "" for the first batch and the last song's id for each following one. Paging by id

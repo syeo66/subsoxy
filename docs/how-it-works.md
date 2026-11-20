@@ -139,7 +139,8 @@ curl "http://localhost:8080/rest/getRandomSongs?u=alice&p=secret&size=50&f=json"
 ```
 
 - `size`: defaults to 50, and zero or negative values also get 50. Larger values than 10,000 are served as 10,000. A value that isn't an integer returns a Subsonic error (code 0).
-- `f`: `json` (default) or `xml`.
+- `f`: `xml` (the default, as in the Subsonic API, also used for unknown values), `json`, or `jsonp` with a `callback` function name. JSONP with a missing or invalid `callback` (anything but JavaScript identifiers joined by dots, up to 100 characters) is forwarded to upstream.
+- Until the user's library has been synced (no songs stored for them yet, e.g. right after their first request), the request is forwarded to upstream, which answers with its own random songs.
 - Each song is a Subsonic `Child` with `id`, `isDir`, `title`, `type` (`music`) and, when known, `artist`, `album`, `duration`, `track`, `discNumber`, `year`, `genre`, `coverArt`, `albumId`, `artistId`, `suffix`, `contentType`, `bitRate` and `size`. You can pass `coverArt` straight to the upstream `/rest/getCoverArt`. Songs synced before these fields existed get them on the next library sync. Subsoxy's own play statistics aren't included.
 
 ## Library sync

@@ -936,6 +936,12 @@ func (s *Service) GetWeightComponents(userID string, song models.Song, artistSta
 	return
 }
 
+// HasSongs reports whether the user's library has been synced: whether any songs are stored
+// for them
+func (s *Service) HasSongs(userID string) (bool, error) {
+	return s.db.HasSongs(userID)
+}
+
 // GetLastPlayedSong returns the last played song for a user (used by the debug view).
 func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 	s.mu.RLock()
