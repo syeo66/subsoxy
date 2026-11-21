@@ -200,6 +200,12 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) createTables() error {
+	// Move a single-tenant songs table out of the way first: the queries below would keep it
+	// (CREATE TABLE IF NOT EXISTS) and then fail indexing its missing user_id column
+	if err := db.migrateExistingData(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to migrate existing data")
+	}
+
 	// Create tables with user_id columns
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS songs (
@@ -227,11 +233,6 @@ func (db *DB) createTables() error {
 			return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to execute table creation query").
 				WithContext("query", query)
 		}
-	}
-
-	// Check if we need to migrate existing data
-	if err := db.migrateExistingData(); err != nil {
-		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_FAILED", "failed to migrate existing data")
 	}
 
 	// Add cover_art column if it doesn't exist
@@ -288,66 +289,54 @@ func (db *DB) createTables() error {
 	return nil
 }
 
-// migrateExistingData handles migration of existing data to the new schema
+// migrateExistingData replaces a songs table from before multi-tenancy, which has no user_id
+// column. A table with rows is renamed to songs_backup, an empty one is dropped, and
+// createTables then creates the current one. The old rows can't be assigned to a user, so their play history
+// isn't carried over; each user's library comes back with their next sync.
 func (db *DB) migrateExistingData() error {
-	// Check if the old songs table exists without user_id column
-	var count int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='user_id'`).Scan(&count)
-	if err != nil {
+	var tables int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='songs'`).Scan(&tables); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for songs table")
+	}
+	if tables == 0 {
+		return nil // New install
+	}
+
+	var userIDColumns int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='user_id'`).Scan(&userIDColumns); err != nil {
 		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to check for user_id column")
 	}
-
-	// If user_id column exists, no migration needed
-	if count > 0 {
-		return nil
+	if userIDColumns > 0 {
+		return nil // Already multi-tenant
 	}
 
-	// Check if there's existing data to migrate
-	err = db.conn.QueryRow(`SELECT COUNT(*) FROM songs`).Scan(&count)
+	db.logger.Info("Migrating songs table to multi-tenant schema")
+
+	tx, err := db.conn.Begin()
 	if err != nil {
-		// If the table doesn't exist yet, that's fine - new install
-		return nil
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to begin transaction")
 	}
+	defer tx.Rollback()
 
-	// If no existing data, no migration needed
-	if count == 0 {
-		return nil
+	var rows int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM songs`).Scan(&rows); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "MIGRATION_CHECK_FAILED", "failed to count songs")
 	}
-
-	db.logger.Info("Migrating existing data to multi-tenant schema")
-
-	// Create temporary tables for backup
-	backupQueries := []string{
-		`CREATE TABLE IF NOT EXISTS songs_backup AS SELECT * FROM songs`,
-	}
-
-	for _, query := range backupQueries {
-		if _, err := db.conn.Exec(query); err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "BACKUP_FAILED", "failed to create backup table").
-				WithContext("query", query)
+	if rows > 0 {
+		// Renaming fails if songs_backup already exists, so an older backup is never
+		// overwritten and these rows are never dropped without one
+		if _, err := tx.Exec(`ALTER TABLE songs RENAME TO songs_backup`); err != nil {
+			return errors.Wrap(err, errors.CategoryDatabase, "BACKUP_FAILED",
+				"failed to move single-tenant songs table to songs_backup (rename or remove an existing songs_backup table)")
 		}
+	} else if _, err := tx.Exec(`DROP TABLE songs`); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "DROP_FAILED", "failed to drop single-tenant songs table")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.Wrap(err, errors.CategoryDatabase, "TRANSACTION_FAILED", "failed to commit transaction")
 	}
 
-	// Drop existing tables
-	dropQueries := []string{
-		`DROP TABLE IF EXISTS songs`,
-	}
-
-	for _, query := range dropQueries {
-		if _, err := db.conn.Exec(query); err != nil {
-			return errors.Wrap(err, errors.CategoryDatabase, "DROP_FAILED", "failed to drop existing table").
-				WithContext("query", query)
-		}
-	}
-
-	// Recreate tables with new schema (this will be handled by the calling function)
-	// No need to recreate here as createTables will handle it
-
-	// Note: Since we're changing the schema significantly, existing data will be lost
-	// This is acceptable for this migration as we're fundamentally changing the data model
-	// Users will need to re-sync their data after the migration
-
-	db.logger.Info("Migration completed - existing data backed up, new schema created")
+	db.logger.WithField("backed_up_rows", rows).Info("Migrated songs table to multi-tenant schema, old rows kept in songs_backup")
 	return nil
 }
 

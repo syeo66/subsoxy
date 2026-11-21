@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"os"
@@ -1345,6 +1346,110 @@ func TestDatabaseCloseErrorHandling(t *testing.T) {
 	_, err = db.GetAllSongs("testuser")
 	if err == nil {
 		t.Error("Expected error when using database after close")
+	}
+}
+
+func TestSingleTenantMigration(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+
+	for _, tc := range []struct {
+		name       string
+		rows       int
+		wantBackup bool
+	}{
+		{"with songs", 2, true},
+		{"empty", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := t.TempDir() + "/legacy.db"
+
+			// A songs table as created before multi-tenancy: no user_id column
+			legacy, err := sql.Open("sqlite3", dbPath)
+			if err != nil {
+				t.Fatalf("Failed to open legacy database: %v", err)
+			}
+			if _, err := legacy.Exec(`CREATE TABLE songs (id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,
+				album TEXT NOT NULL, duration INTEGER NOT NULL, last_played DATETIME,
+				play_count INTEGER DEFAULT 0, skip_count INTEGER DEFAULT 0)`); err != nil {
+				t.Fatalf("Failed to create legacy table: %v", err)
+			}
+			for i := range tc.rows {
+				if _, err := legacy.Exec(`INSERT INTO songs (id, title, artist, album, duration, play_count) VALUES (?, 'T', 'A', 'B', 180, 3)`,
+					fmt.Sprint(i)); err != nil {
+					t.Fatalf("Failed to insert legacy song: %v", err)
+				}
+			}
+			legacy.Close()
+
+			db, err := New(dbPath, logger)
+			if err != nil {
+				t.Fatalf("Opening a single-tenant database failed: %v", err)
+			}
+			defer db.Close()
+
+			var userIDColumns int
+			if err := db.conn.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='user_id'`).Scan(&userIDColumns); err != nil {
+				t.Fatalf("Failed to read songs schema: %v", err)
+			}
+			if userIDColumns != 1 {
+				t.Errorf("songs table has no user_id column after migration")
+			}
+
+			var backupRows int
+			err = db.conn.QueryRow(`SELECT COUNT(*) FROM songs_backup`).Scan(&backupRows)
+			if tc.wantBackup && (err != nil || backupRows != tc.rows) {
+				t.Errorf("songs_backup rows = %d (err %v), want %d", backupRows, err, tc.rows)
+			}
+			if !tc.wantBackup && err == nil {
+				t.Errorf("songs_backup created for an empty legacy table")
+			}
+
+			// The new schema works
+			if err := db.StoreSongs("user1", []models.Song{{ID: "1", Title: "T", Artist: "A", Album: "B", Duration: 180}}); err != nil {
+				t.Fatalf("StoreSongs after migration failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestSingleTenantMigrationKeepsExistingBackup(t *testing.T) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	dbPath := t.TempDir() + "/legacy.db"
+
+	legacy, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open legacy database: %v", err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE songs (id TEXT PRIMARY KEY, title TEXT, artist TEXT, album TEXT, duration INTEGER)`,
+		`INSERT INTO songs VALUES ('1', 'T', 'A', 'B', 180)`,
+		`CREATE TABLE songs_backup (id TEXT, note TEXT)`,
+		`INSERT INTO songs_backup VALUES ('old', 'earlier backup')`,
+	} {
+		if _, err := legacy.Exec(q); err != nil {
+			t.Fatalf("Failed to set up legacy database: %v", err)
+		}
+	}
+	legacy.Close()
+
+	if db, err := New(dbPath, logger); err == nil {
+		db.Close()
+		t.Fatal("Expected migration to fail when songs_backup already exists")
+	}
+
+	// Neither the legacy rows nor the earlier backup were touched
+	check, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to reopen database: %v", err)
+	}
+	defer check.Close()
+	for table, want := range map[string]int{"songs": 1, "songs_backup": 1} {
+		var n int
+		if err := check.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != want {
+			t.Errorf("%s rows = %d (err %v), want %d", table, n, err, want)
+		}
 	}
 }
 
