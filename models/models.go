@@ -19,6 +19,13 @@ const (
 // say nothing about whether the credentials are right.
 const SubsonicErrorWrongCredentials = 40
 
+// SubsonicErrorTokenAuthNotSupported is the Subsonic error code for token authentication the
+// server can't verify
+const SubsonicErrorTokenAuthNotSupported = 41
+
+// SubsonicErrorNotFound is the Subsonic error code for requested data that doesn't exist
+const SubsonicErrorNotFound = 70
+
 type Song struct {
 	ID            string    `json:"id" xml:"id,attr"`
 	Title         string    `json:"title" xml:"title,attr"`
@@ -153,7 +160,10 @@ type Hook func(w http.ResponseWriter, r *http.Request, endpoint string) bool
 // Each sonicMatch entry contains a Child (entry) and a normalized similarity score (0.0–1.0).
 type SonicSimilarityResponse struct {
 	SubsonicResponse struct {
-		Status     string `json:"status"`
+		Status string `json:"status"`
+		Error  struct {
+			Code int `json:"code"`
+		} `json:"error"`
 		SonicMatch []struct {
 			Entry struct {
 				ID string `json:"id"`

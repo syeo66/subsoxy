@@ -41,7 +41,7 @@ curl -w "%{time_total}\n" -o /dev/null -s http://upstream:4533/rest/ping   # slo
 
 Credential validation times out after 10s. A failed sync for one user is logged and retried on the next hourly cycle. The exception is upstream rejecting the stored credentials (`Upstream rejected stored credentials, dropping them`): that user isn't synced again until a client logs in with the current password.
 
-If similarity never seems to have any effect, the upstream server probably doesn't provide `/rest/getSonicSimilarTracks`. That's fine: the shuffle carries on without that factor.
+If similarity never seems to have any effect, the upstream server probably doesn't provide `/rest/getSonicSimilarTracks`. That's fine: the shuffle carries on without that factor. The log then shows `Similar song lookups keep failing, pausing them`, and Subsoxy only tries again every 5 minutes. Set `SIMILARITY_ENABLED=false` to stop the lookups altogether.
 
 ## HTTP 429
 
@@ -62,7 +62,7 @@ The first start after upgrading from a version that still had `song_transitions`
 
 - Debug logs show the eligible song count for each shuffle request.
 - Time a request: `time curl -s "http://localhost:8080/rest/getRandomSongs?u=USER&p=PASS&size=500&f=json" > /dev/null`
-- If the first request after a play is slow, it's usually the similarity lookup to the upstream server. Results are cached for 5 minutes, and a lookup gives up after 5s.
+- If the first request after a play is slow, it's usually the similarity lookup to the upstream server. Results are cached for 5 minutes, a lookup gives up after 5s, and one shuffle waits for similarity lookups for at most 5s in all.
 
 ## Shutdown hangs
 

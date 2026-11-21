@@ -1177,8 +1177,9 @@ func (ps *ProxyServer) ProcessScrobbleAt(userID, client, songID string, isSubmis
 
 // fetchSimilarSongs queries the upstream's getSonicSimilarTracks endpoint provided by the
 // AudioMuse-AI-NV-plugin (Navidrome v0.62+ OpenSubsonic sonicSimilarity extension).
-// Returns nil without error when the plugin is not available so the caller gracefully
-// skips the similarity weight.
+// A song upstream doesn't know, or credentials upstream rejects, give no scores without an
+// error. Anything else upstream can't answer, e.g. because the plugin isn't installed, is an
+// error, so the shuffle backs off from asking again.
 func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]float64, error) {
 	cred, ok := ps.credentials.Get(userID)
 	if !ok {
@@ -1211,16 +1212,29 @@ func (ps *ProxyServer) fetchSimilarSongs(userID, songID string) (map[string]floa
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil
+		return nil, errors.New(errors.CategoryNetwork, upstreamBadAnswerCode,
+			fmt.Sprintf("getSonicSimilarTracks answered HTTP %d", resp.StatusCode))
 	}
 
 	var response models.SonicSimilarityResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, errors.CategoryNetwork, upstreamBadAnswerCode, "failed to decode getSonicSimilarTracks response")
 	}
 
 	if response.SubsonicResponse.Status != "ok" {
-		return nil, nil
+		switch response.SubsonicResponse.Error.Code {
+		case models.SubsonicErrorNotFound:
+			// The song isn't known upstream, e.g. added since the last sync: not a failure.
+			// Code 70 is taken from the Subsonic spec; what the AudioMuse plugin answers for
+			// a song it hasn't analyzed hasn't been checked against a real server.
+			return nil, nil
+		case models.SubsonicErrorWrongCredentials, models.SubsonicErrorTokenAuthNotSupported:
+			// This user's stored credentials don't work, which says nothing about the
+			// endpoint, so it mustn't pause lookups for every user
+			return nil, nil
+		}
+		return nil, errors.New(errors.CategoryNetwork, upstreamBadAnswerCode,
+			fmt.Sprintf("getSonicSimilarTracks failed with Subsonic error %d", response.SubsonicResponse.Error.Code))
 	}
 
 	matches := response.SubsonicResponse.SonicMatch

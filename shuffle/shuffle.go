@@ -62,11 +62,24 @@ const (
 	// Update the acoustic similarity reference every N picks instead of every pick.
 	// Reduces API calls by N× while preserving the chaining effect across the queue.
 	SimilarityChainStep = 5
+	// After this many similarity lookups fail in a row, e.g. because upstream has no
+	// getSonicSimilarTracks or doesn't answer in time, no lookups are made for
+	// SimilarSongsFailureBackoff. A single lookup after that which fails too starts the next
+	// backoff right away; one that works ends it.
+	SimilarSongsFailureThreshold = 3
+	SimilarSongsFailureBackoff   = 5 * time.Minute
+	// Bounds on the similarity lookups one shuffle makes and waits for, so neither a large
+	// size nor a slow upstream holds up getRandomSongs for long. Once either runs out, the
+	// remaining picks keep the reference they have.
+	MaxSimilarityLookups   = 20
+	SimilarityLookupBudget = 5 * time.Second
 )
 
 // SimilarSongsFetcher fetches acoustically similar songs for a user and song,
 // authenticating upstream with the user's stored credentials.
-// Returns a map of song ID → similarity score (0.0–1.0), or nil when unavailable.
+// Returns a map of song ID → similarity score (0.0–1.0), which is nil or empty when there are
+// no similar songs. An error means the lookup failed: it counts towards backing off from
+// further lookups, see SimilarSongsFailureThreshold.
 type SimilarSongsFetcher func(userID, songID string) (map[string]float64, error)
 
 type similarSongsEntry struct {
@@ -143,8 +156,11 @@ type Service struct {
 	similarSongsFetcher SimilarSongsFetcher
 	similarSongsCache   map[string]*similarSongsEntry
 	similarSongsSweep   time.Time          // When expired cache entries were last removed
+	similarFailures     int                // Similarity lookups that failed in a row
+	similarRetryAfter   time.Time          // No similarity lookups before this, see SimilarSongsFailureThreshold
+	similarityBudget    time.Duration      // SimilarityLookupBudget, shorter in tests
 	inflight            singleflight.Group // Deduplicates concurrent similarity fetches for the same key
-	mu                  sync.RWMutex       // Protects all maps
+	mu                  sync.RWMutex       // Protects all maps and the similarity backoff
 }
 
 func New(db *database.DB, logger *logrus.Logger) *Service {
@@ -155,6 +171,7 @@ func New(db *database.DB, logger *logrus.Logger) *Service {
 		lastScrobble:      make(map[string]*ScrobbleInfo),
 		priors:            make(map[string]*userPriors),
 		similarSongsCache: make(map[string]*similarSongsEntry),
+		similarityBudget:  SimilarityLookupBudget,
 	}
 }
 
@@ -167,56 +184,81 @@ func (s *Service) SetSimilarSongsFetcher(fn SimilarSongsFetcher) {
 }
 
 // getSimilarSongsForUser returns a map of song ID → similarity score (0.0–1.0) for songs
-// acoustically similar to songID, using a short-lived in-memory cache.
+// acoustically similar to songID, using a short-lived in-memory cache. Failed lookups are
+// cached too, and while lookups back off after repeated failures none are made (see
+// SimilarSongsFailureThreshold): both give nil scores, as for a song without similar songs.
 // Concurrent calls for the same key share a single in-flight HTTP request via singleflight.
 // The request outlives a caller that gives up, so its result is still cached, but once ctx
-// is done the caller stops waiting and gets nil.
-func (s *Service) getSimilarSongsForUser(ctx context.Context, userID, songID string) map[string]float64 {
+// is done the caller stops waiting. ok is false then: the scores are unknown, not empty.
+func (s *Service) getSimilarSongsForUser(ctx context.Context, userID, songID string) (scores map[string]float64, ok bool) {
 	cacheKey := userID + ":" + songID
 
 	s.mu.RLock()
 	fetcher := s.similarSongsFetcher
 	entry, cached := s.similarSongsCache[cacheKey]
+	backingOff := time.Now().Before(s.similarRetryAfter)
 	s.mu.RUnlock()
 
 	if fetcher == nil {
-		return nil
+		return nil, true
 	}
-
 	if cached && time.Since(entry.fetchedAt) < SimilarSongsCacheTTL {
-		return entry.scores
+		return entry.scores, true
+	}
+	if backingOff {
+		return nil, true
+	}
+	// Don't start a request nobody will wait for
+	if ctx.Err() != nil {
+		return nil, false
 	}
 
 	ch := s.inflight.DoChan(cacheKey, func() (interface{}, error) {
 		scores, err := fetcher(userID, songID)
 		if err != nil {
-			s.logger.WithError(err).WithFields(logrus.Fields{
-				"userID": userID,
-				"songID": songID,
-			}).Debug("Failed to fetch similar songs, continuing without similarity weights")
-			return nil, nil //nolint:nilerr
+			scores = nil
 		}
-		if scores != nil {
-			now := time.Now()
-			s.mu.Lock()
-			s.sweepSimilarSongsCache(now)
-			s.similarSongsCache[cacheKey] = &similarSongsEntry{
-				scores:    scores,
-				fetchedAt: now,
+
+		now := time.Now()
+		s.mu.Lock()
+		s.sweepSimilarSongsCache(now)
+		// A failure is cached as no similar songs, so a song upstream can't answer for isn't
+		// asked about again by every shuffle
+		s.similarSongsCache[cacheKey] = &similarSongsEntry{scores: scores, fetchedAt: now}
+		failures := 0
+		if err != nil {
+			s.similarFailures++
+			failures = s.similarFailures
+			if failures >= SimilarSongsFailureThreshold {
+				s.similarRetryAfter = now.Add(SimilarSongsFailureBackoff)
 			}
-			s.mu.Unlock()
+		} else {
+			s.similarFailures = 0
+		}
+		s.mu.Unlock()
+
+		if err != nil {
+			logEntry := s.logger.WithError(err).WithFields(logrus.Fields{
+				"userID":            userID,
+				"songID":            songID,
+				"failures_in_a_row": failures,
+			})
+			if failures == SimilarSongsFailureThreshold {
+				logEntry.WithField("backoff", SimilarSongsFailureBackoff).
+					Warn("Similar song lookups keep failing, pausing them (set SIMILARITY_ENABLED=false if upstream has no getSonicSimilarTracks)")
+			} else {
+				logEntry.Debug("Failed to fetch similar songs, continuing without similarity weights")
+			}
 		}
 		return scores, nil
 	})
 
 	select {
 	case res := <-ch:
-		if res.Val == nil {
-			return nil
-		}
-		return res.Val.(map[string]float64)
+		scores, _ := res.Val.(map[string]float64)
+		return scores, true
 	case <-ctx.Done():
-		return nil
+		return nil, false
 	}
 }
 
@@ -689,8 +731,24 @@ func (s *Service) GetWeightedShuffledSongs(ctx context.Context, userID string, c
 		similarSongs = next
 	}
 
+	// The client waits for every lookup, so the shuffle makes at most MaxSimilarityLookups
+	// and waits for them for SimilarityLookupBudget in all. After that the remaining picks
+	// keep the current reference; cached lookups are still used while lookups remain.
+	similarityCtx, cancelSimilarity := context.WithTimeout(ctx, s.similarityBudget)
+	defer cancelSimilarity()
+	lookups := 0
+	moveReference := func(songID string) {
+		if lookups >= MaxSimilarityLookups {
+			return
+		}
+		lookups++
+		if scores, ok := s.getSimilarSongsForUser(similarityCtx, userID, songID); ok {
+			setSimilarSongs(scores)
+		}
+	}
+
 	if referenceID != "" {
-		setSimilarSongs(s.getSimilarSongsForUser(ctx, userID, referenceID))
+		moveReference(referenceID)
 	}
 
 	result := make([]models.Song, 0, min(count, race.Len()))
@@ -703,7 +761,7 @@ func (s *Service) GetWeightedShuffledSongs(ctx context.Context, userID string, c
 		// Refresh the similarity reference every SimilarityChainStep picks instead of every
 		// pick. This reduces API calls by that factor while preserving acoustic flow.
 		if len(result)%SimilarityChainStep == 0 && len(result) < count {
-			setSimilarSongs(s.getSimilarSongsForUser(ctx, userID, r.song.ID))
+			moveReference(r.song.ID)
 		}
 	}
 
@@ -951,5 +1009,6 @@ func (s *Service) GetLastPlayedSong(userID string) *models.Song {
 
 // GetSimilarSongsForDebug fetches similar songs for the debug view (song ID → score).
 func (s *Service) GetSimilarSongsForDebug(ctx context.Context, userID, songID string) map[string]float64 {
-	return s.getSimilarSongsForUser(ctx, userID, songID)
+	scores, _ := s.getSimilarSongsForUser(ctx, userID, songID)
+	return scores
 }

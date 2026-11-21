@@ -3144,3 +3144,66 @@ func TestSyncSongsForUserWalksNestedFolders(t *testing.T) {
 func (ps *ProxyServer) RecordPlayEvent(userID, songID, eventType string) {
 	ps.RecordPlayEventAt(userID, songID, eventType, time.Now())
 }
+
+// fetchSimilarSongs must report an upstream that can't answer as an error, so the shuffle
+// backs off, while a song upstream doesn't know only has no similar songs
+func TestFetchSimilarSongsReportsFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantErr    bool
+		wantScores map[string]float64
+	}{
+		{"similar songs", http.StatusOK, `{"subsonic-response":{"status":"ok","sonicMatch":[{"entry":{"id":"a"},"similarity":0.8},{"entry":{"id":""},"similarity":0.5}]}}`, false, map[string]float64{"a": 0.8}},
+		{"no similar songs", http.StatusOK, `{"subsonic-response":{"status":"ok"}}`, false, map[string]float64{}},
+		{"unknown song", http.StatusOK, `{"subsonic-response":{"status":"failed","error":{"code":70}}}`, false, nil},
+		{"wrong credentials", http.StatusOK, `{"subsonic-response":{"status":"failed","error":{"code":40}}}`, false, nil},
+		{"token auth not supported", http.StatusOK, `{"subsonic-response":{"status":"failed","error":{"code":41}}}`, false, nil},
+		{"endpoint missing", http.StatusNotFound, `not found`, true, nil},
+		{"failed response", http.StatusOK, `{"subsonic-response":{"status":"failed","error":{"code":0}}}`, true, nil},
+		{"not Subsonic", http.StatusOK, `<html></html>`, true, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/rest/ping" {
+					w.Write([]byte(`{"subsonic-response":{"status":"ok"}}`))
+					return
+				}
+				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body))
+			}))
+			defer mockServer.Close()
+
+			server, err := New(&config.Config{
+				ProxyPort:         "8080",
+				UpstreamURL:       mockServer.URL,
+				LogLevel:          "error",
+				DatabasePath:      t.TempDir() + "/similar.db",
+				CredentialWorkers: 1,
+			})
+			if err != nil {
+				t.Fatalf("Failed to create server: %v", err)
+			}
+			defer server.Shutdown(context.Background())
+			if _, err := server.credentials.ValidateAndStore(context.Background(), "alice", credentials.Password("secret")); err != nil {
+				t.Fatalf("Failed to store credentials: %v", err)
+			}
+
+			scores, err := server.fetchSimilarSongs("alice", "song1")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if len(scores) != len(tt.wantScores) {
+				t.Fatalf("scores = %v, want %v", scores, tt.wantScores)
+			}
+			for id, score := range tt.wantScores {
+				if scores[id] != score {
+					t.Errorf("scores[%s] = %v, want %v", id, scores[id], score)
+				}
+			}
+		})
+	}
+}

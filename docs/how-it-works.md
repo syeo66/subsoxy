@@ -113,6 +113,11 @@ Songs are drawn one at a time by weighted random selection, without replacement.
 
 The queue drifts gradually instead of jumping between moods. Similarity scores come from the upstream `/rest/getSonicSimilarTracks` endpoint, which is provided by the AudioMuse-AI-NV plugin (Navidrome v0.62+, OpenSubsonic `sonicSimilarity` extension). Results are cached for 5 minutes, and concurrent lookups for the same track are deduplicated. If the endpoint is missing or fails, the similarity factor is 1.0 and nothing else changes.
 
+Since the client waits for these lookups, they are bounded:
+
+- One shuffle makes at most 20 lookups (`MaxSimilarityLookups`, cached ones included) and waits for them for 5s in all (`SimilarityLookupBudget`). After that the remaining picks keep the reference they have, so with the 5-pick step the reference stops moving after about 100 picks.
+- Failed lookups are cached like successful ones. After 3 failures in a row (`SimilarSongsFailureThreshold`), for example because the plugin isn't installed, no lookups are made for 5 minutes (`SimilarSongsFailureBackoff`). Then lookups are tried again: if the first one fails too, the next pause starts at once. The pause applies to all users. A track the upstream server doesn't know (Subsonic error 70) only means it has no similar songs and doesn't count as a failure; neither do rejected credentials (errors 40 and 41), which only concern one user. The error 70 mapping comes from the Subsonic spec and hasn't been checked against a Navidrome with and without the plugin.
+
 ### Smooth order
 
 With `-audiomuse-url` set, the songs picked for a `getRandomSongs` request are sent to AudioMuse-AI's `POST /api/recording_search/smart_fade`, which returns the same songs in an order where each one flows into the next. AudioMuse-AI documents that the first song stays first (subsoxy doesn't enforce it), and that songs without a neural fingerprint come last. Only the order changes: which songs are picked is still decided by the weights.

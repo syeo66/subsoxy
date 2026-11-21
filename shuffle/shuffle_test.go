@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2000,4 +2002,173 @@ func TestProcessScrobbleClientTime(t *testing.T) {
 			t.Error("A play 200s later by the client's clock should be recorded")
 		}
 	})
+}
+
+// newSimilarityTestService returns a service with songCount unplayed songs stored for user
+func newSimilarityTestService(t *testing.T, songCount int) *Service {
+	t.Helper()
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	db, err := database.New(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("Failed to create database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	songs := make([]models.Song, songCount)
+	for i := range songs {
+		id := fmt.Sprintf("song%04d", i)
+		songs[i] = models.Song{ID: id, Title: id, Artist: "artist", Album: "album", Duration: 180}
+	}
+	if songCount > 0 {
+		if err := db.StoreSongs("user", songs); err != nil {
+			t.Fatalf("Failed to store songs: %v", err)
+		}
+	}
+	return New(db, logger)
+}
+
+// An upstream without getSonicSimilarTracks fails every lookup. After a few failures in a
+// row the service must stop asking, and a failed song must not be asked about again.
+func TestSimilarSongsBackOffAfterRepeatedFailures(t *testing.T) {
+	service := newSimilarityTestService(t, 0)
+
+	var mu sync.Mutex
+	calls := 0
+	var fail atomic.Bool
+	fail.Store(true)
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		if fail.Load() {
+			return nil, fmt.Errorf("upstream has no getSonicSimilarTracks")
+		}
+		return map[string]float64{"other": 0.5}, nil
+	})
+	callCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	lookup := func(songID string) map[string]float64 {
+		scores, ok := service.getSimilarSongsForUser(context.Background(), "user", songID)
+		if !ok {
+			t.Fatalf("Lookup for %s reported unknown scores without a cancelled context", songID)
+		}
+		return scores
+	}
+	endBackoff := func() {
+		service.mu.Lock()
+		service.similarRetryAfter = time.Time{}
+		service.mu.Unlock()
+	}
+
+	for i := range SimilarSongsFailureThreshold + 3 {
+		if scores := lookup(fmt.Sprintf("s%d", i)); scores != nil {
+			t.Fatalf("Expected no scores from a failing lookup, got %v", scores)
+		}
+	}
+	if got := callCount(); got != SimilarSongsFailureThreshold {
+		t.Fatalf("Expected %d upstream calls before backing off, got %d", SimilarSongsFailureThreshold, got)
+	}
+
+	// Failures are cached: once the backoff is over, the failed song isn't asked about again
+	endBackoff()
+	lookup("s0")
+	if got := callCount(); got != SimilarSongsFailureThreshold {
+		t.Fatalf("Expected the cached failure for s0 to be used, got %d upstream calls", got)
+	}
+
+	// One more failure after the backoff starts the next backoff at once
+	lookup("probe1")
+	lookup("probe2")
+	if got := callCount(); got != SimilarSongsFailureThreshold+1 {
+		t.Fatalf("Expected a single probe after the backoff, got %d upstream calls", got)
+	}
+
+	// A lookup that works ends the run of failures
+	endBackoff()
+	fail.Store(false)
+	if scores := lookup("works"); scores["other"] != 0.5 {
+		t.Fatalf("Expected scores once upstream answers, got %v", scores)
+	}
+	fail.Store(true)
+	lookup("after1")
+	lookup("after2")
+	if got := callCount(); got != SimilarSongsFailureThreshold+4 {
+		t.Fatalf("Expected lookups to go on after a success reset the failures, got %d upstream calls", got)
+	}
+}
+
+// A large shuffle moves the similarity reference every few picks, but may only make
+// MaxSimilarityLookups lookups
+func TestGetWeightedShuffledSongsBoundsSimilarityLookups(t *testing.T) {
+	const size = 400
+	service := newSimilarityTestService(t, size)
+
+	var mu sync.Mutex
+	calls := 0
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return map[string]float64{}, nil
+	})
+	service.SetLastPlayed("user", &models.Song{ID: "reference"})
+
+	result, err := service.GetWeightedShuffledSongs(context.Background(), "user", size, Filter{})
+	if err != nil {
+		t.Fatalf("Failed to shuffle: %v", err)
+	}
+	if len(result) != size {
+		t.Fatalf("Expected %d songs, got %d", size, len(result))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls > MaxSimilarityLookups {
+		t.Errorf("Expected at most %d similarity lookups, got %d", MaxSimilarityLookups, calls)
+	}
+	if calls < 2 {
+		t.Errorf("Expected the reference to move during the shuffle, got %d lookups", calls)
+	}
+}
+
+// A similarity lookup that doesn't answer may only hold up the shuffle for the lookup
+// budget, and the shuffle still succeeds without the similarity weights
+func TestGetWeightedShuffledSongsStopsWaitingForSlowSimilarity(t *testing.T) {
+	service := newSimilarityTestService(t, 50)
+	service.similarityBudget = 100 * time.Millisecond
+
+	release := make(chan struct{})
+	defer close(release)
+	service.SetSimilarSongsFetcher(func(userID, songID string) (map[string]float64, error) {
+		<-release
+		return nil, nil
+	})
+	service.SetLastPlayed("user", &models.Song{ID: "reference"})
+
+	type outcome struct {
+		songs []models.Song
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		songs, err := service.GetWeightedShuffledSongs(context.Background(), "user", 50, Filter{})
+		done <- outcome{songs, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Expected the shuffle to succeed without similarity, got %v", got.err)
+		}
+		if len(got.songs) != 50 {
+			t.Fatalf("Expected 50 songs, got %d", len(got.songs))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shuffle kept waiting on the similarity lookup after the lookup budget")
+	}
 }
